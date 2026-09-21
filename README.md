@@ -93,13 +93,18 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 | List | `C` | Copy to mailbox… |
 | List | `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
 | Message | `s` | Save attachments… |
+| Message | `v` | Full-screen message (hides sidebar + list) |
+| Any | `/` | Search — server-side query bar, `Esc` returns with position kept |
+| Any | `ctrl+s` | Advanced search (fielded form; also `/` while the query bar is open) |
+| Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
-| List | `/` | Search *(M4)* |
 | Any | `c` | Compose *(M5)* |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
 | Any | `S` | Switch account *(M6)* |
 | Any | `?` | Help overlay |
 | Any | `q` | Quit |
+
+Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. The advanced modal composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments.
 
 Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
 

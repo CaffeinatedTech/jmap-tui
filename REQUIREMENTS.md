@@ -100,7 +100,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 - **[FR-F1] [M4]** `/` opens the query bar; typing issues debounced server-side `Email/query` filters (`text`, `from`, `to`, `subject`, `after`/`before`, `hasKeyword`, `inMailbox`, `hasAttachment`). Results reuse the list component; `Esc` returns to the mailbox view with position preserved.
 - **[FR-F2] [M4]** Advanced search modal (`/ /` or `ctrl-s`): fielded form generating filter operators.
-- **[FR-F3] [M4]** Search scope defaults to current mailbox; toggle to all mailboxes. Unified-account mode searches across selected accounts (parallel queries, merged).
+- **[FR-F3] [M4]** Search scope defaults to current mailbox; toggle to all mailboxes. Unified-account mode searches across selected accounts (parallel queries, merged). *(The unified-account sentence rides M6 — it needs the multi-account Hub (FR-A4/A5); deferred at the M4 gate 2026-09-22.)*
 
 ## FR-G — Actions & triage
 
