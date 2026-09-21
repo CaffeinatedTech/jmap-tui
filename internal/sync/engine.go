@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,11 +21,14 @@ type Engine struct {
 	p   mail.Provider
 	cfg Config
 
-	mu          sync.Mutex
-	mailboxes   []mail.Mailbox
-	mboxOrder   []MailboxNode
-	window      *Window
-	cursorRow   int // index into rendered rows (incl. thread members)
+	mu        sync.Mutex
+	mailboxes []mail.Mailbox
+	mboxOrder []MailboxNode
+	window    *Window
+	cursorRow int // index into rendered rows (incl. thread members)
+	// saved holds the mailbox view while a search view is open (FR-F1):
+	// Esc restores it with cursor position intact.
+	saved       *savedView
 	summaries   map[mail.ID]mail.EmailSummary
 	threads     map[mail.ID][]mail.ID // threadID → member ids, oldest first
 	threadOrder []mail.ID             // thread cache insertion order (bounded)
@@ -108,8 +112,19 @@ type Snapshot struct {
 	Start     int // absolute position of Rows' collapsed origin
 
 	// ActiveMailbox is the id of the open mailbox (empty before the first
-	// OpenMailbox).
+	// OpenMailbox). Search views report their scope mailbox; an
+	// all-mailbox search reports empty.
 	ActiveMailbox mail.ID
+
+	// ViewKey identifies the open view for app-side change detection:
+	// "m:<mailbox>" for mailbox views, "s:<scope>:<filters>" for search
+	// views (FR-F1). It changes on mailbox switches and on search
+	// re-issues (scope toggle, new terms).
+	ViewKey string
+
+	// SearchActive reports that a search view is open over the mailbox
+	// view (FR-F1).
+	SearchActive bool
 
 	// Edge hints: more results exist beyond the materialised window in that
 	// direction (the UI may show a loading hint while a fetch runs).
@@ -247,9 +262,11 @@ func (e *Engine) rebuildMailboxTreeLocked() {
 
 // OpenMailbox issues a fresh query for the mailbox and resets the list
 // window (FR-C2). The page's Email/get state bootstraps Email/changes
-// reconciliation (FR-B5).
+// reconciliation (FR-B5). Opening a mailbox while a search view is open
+// discards the search (choosing a mailbox is an explicit exit).
 func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
+	e.saved = nil
 	e.window = NewWindow(Query{Filter: FilterSpec{MailboxID: id}}, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
@@ -276,6 +293,102 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.absorbSummariesLocked(sums)
 	e.publishLocked()
 	return nil
+}
+
+// SearchSpec describes one search view (FR-F1..F3): content filters with
+// AND semantics plus a scope mailbox. Zero time values are ignored; an
+// empty ScopeMailbox means all mailboxes.
+type SearchSpec struct {
+	Text          string
+	From          string
+	To            string
+	Subject       string
+	After         time.Time
+	Before        time.Time
+	HasKeyword    string
+	HasAttachment *bool
+	ScopeMailbox  mail.ID
+}
+
+// savedView is the mailbox window parked while a search view is open.
+type savedView struct {
+	win       *Window
+	cursorRow int
+}
+
+// SearchOpen enters the search view (FR-F1): the mailbox window is parked
+// with its cursor row, and a fresh window pages a new query built from the
+// search spec. Re-issuing while already searching (new terms, scope
+// toggle) replaces the search window without re-parking. The caller
+// debounce-coalesces keystrokes; the engine coalesces anything that slips
+// through via superseded-request bookkeeping.
+func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
+	fs := FilterSpec{MailboxID: s.ScopeMailbox}
+	fs.Search = &mail.SearchFilter{
+		Text:          s.Text,
+		From:          s.From,
+		To:            s.To,
+		Subject:       s.Subject,
+		After:         s.After,
+		Before:        s.Before,
+		HasKeyword:    s.HasKeyword,
+		HasAttachment: s.HasAttachment,
+	}
+
+	e.mu.Lock()
+	if e.saved == nil {
+		e.saved = &savedView{win: e.window, cursorRow: e.cursorRow}
+	}
+	e.window = NewWindow(Query{Filter: fs}, e.cfg.Window)
+	e.expanded = map[mail.ID]bool{}
+	e.cursorRow = 0
+	e.bodyLoading = ""
+	e.body = nil
+	e.fresh = map[mail.ID]time.Time{}
+	r, pos, limit := e.window.Seed(0)
+	spec := e.querySpecLocked(pos, limit)
+	e.mu.Unlock()
+
+	handle, sums, err := e.p.OpenQuery(ctx, spec)
+	if err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
+		return err
+	}
+	if st := handle.EmailState(); st != "" {
+		e.emailState = st
+	}
+	e.absorbSummariesLocked(sums)
+	e.publishLocked()
+	return nil
+}
+
+// SearchClose leaves the search view and restores the parked mailbox
+// window with its cursor position intact (FR-F1). Purely local (NFR-1).
+// The restored window is marked dirty so the next prefetch re-anchors it
+// around the cursor id: live changes that landed while the search was open
+// fold in there instead of guessing positions (FR-B5).
+func (e *Engine) SearchClose() Snapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.saved == nil {
+		return e.snapshotLocked()
+	}
+	e.window = e.saved.win
+	e.cursorRow = e.saved.cursorRow
+	e.saved = nil
+	e.expanded = map[mail.ID]bool{}
+	e.body, e.bodyLoading = nil, ""
+	e.fresh = map[mail.ID]time.Time{}
+	if e.window != nil {
+		e.window.invalidate()
+	}
+	e.publishLocked()
+	return e.snapshotLocked()
 }
 
 // MoveCursor shifts the rendered-row cursor and returns the fresh snapshot.
@@ -405,6 +518,13 @@ func (e *Engine) querySpecLocked(position, limit int) mail.QuerySpec {
 		Limit:           limit,
 	}
 	switch {
+	case q.Filter.Search != nil:
+		// Search view: content filters ride along; MailboxID is the
+		// scope, empty meaning all mailboxes.
+		spec.Search = q.Filter.Search
+		if q.Filter.MailboxID != "" {
+			spec.MailboxID = q.Filter.MailboxID
+		}
 	case q.Filter.ThreadID != "":
 		spec.ThreadID = q.Filter.ThreadID
 	default:
@@ -632,11 +752,19 @@ func (e *Engine) absorbSummariesLocked(sums []mail.EmailSummary) {
 // evictSummariesLocked drops summaries outside the window and outside any
 // cached thread (so re-expanding a recently viewed thread needs no
 // refetch) and outside any pending overlay (an optimistic row must not
-// lose its patch mid-flight). Caller holds mu.
+// lose its patch mid-flight). While a search view is open, the parked
+// mailbox window's summaries stay resident too — Esc restores that view
+// instantly, so its rows must render without a refetch (FR-F1, NFR-1).
+// Caller holds mu.
 func (e *Engine) evictSummariesLocked() {
 	keep := map[mail.ID]bool{}
 	if e.window != nil {
 		for _, id := range e.window.IDs() {
+			keep[id] = true
+		}
+	}
+	if e.saved != nil && e.saved.win != nil {
+		for _, id := range e.saved.win.IDs() {
 			keep[id] = true
 		}
 	}
@@ -689,6 +817,25 @@ func (e *Engine) publishLocked() {
 	}
 }
 
+// viewKeyLocked identifies the open view for app-side change detection
+// (FR-F1): "m:<mailbox>" for mailbox views, "s:<scope>:<fields>" for
+// search views. Caller holds mu.
+func (e *Engine) viewKeyLocked() string {
+	if e.window == nil {
+		return ""
+	}
+	q := e.window.query
+	if q.Filter.Search != nil {
+		s := q.Filter.Search
+		attach := s.HasAttachment != nil && *s.HasAttachment
+		return fmt.Sprintf("s:%s:%s|%s|%s|%s|%s|%s|%s|%t",
+			q.Filter.MailboxID, s.Text, s.From, s.To, s.Subject,
+			s.After.UTC().Format(time.RFC3339), s.Before.UTC().Format(time.RFC3339),
+			s.HasKeyword, attach)
+	}
+	return "m:" + string(q.Filter.MailboxID)
+}
+
 // Snapshot returns the current immutable view.
 func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
@@ -703,6 +850,8 @@ func (e *Engine) snapshotLocked() Snapshot {
 		Mailboxes:     e.mboxOrder,
 		Total:         -1,
 		ActiveMailbox: e.activeMailboxLocked(),
+		ViewKey:       e.viewKeyLocked(),
+		SearchActive:  e.saved != nil,
 		Status:        e.status,
 	}
 	e.expireFreshLocked()

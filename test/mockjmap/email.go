@@ -198,10 +198,19 @@ type resultRef struct {
 	Path     string `json:"path"`
 }
 
-// queryFilter is the subset of Email/query FilterCondition the fake honours.
+// queryFilter is the subset of Email/query FilterCondition the fake
+// honours (FR-F1): mailbox/thread scoping plus the search fields.
 type queryFilter struct {
-	InMailbox string `json:"inMailbox"`
-	InThread  string `json:"inThread"`
+	InMailbox     string     `json:"inMailbox"`
+	InThread      string     `json:"inThread"`
+	Text          string     `json:"text"`
+	From          string     `json:"from"`
+	To            string     `json:"to"`
+	Subject       string     `json:"subject"`
+	After         *time.Time `json:"after"`
+	Before        *time.Time `json:"before"`
+	HasKeyword    string     `json:"hasKeyword"`
+	HasAttachment *bool      `json:"hasAttachment"`
 }
 
 type querySort struct {
@@ -228,35 +237,102 @@ type scopedEmail struct {
 	at       time.Time
 }
 
+// hasSearchFilter reports whether the filter carries content conditions
+// beyond mailbox/thread scoping — the signal to materialise and match
+// full emails instead of riding the cheap tuple fast-path.
+func (f queryFilter) hasSearchFilter() bool {
+	return f.Text != "" || f.From != "" || f.To != "" || f.Subject != "" ||
+		f.After != nil || f.Before != nil || f.HasKeyword != "" ||
+		f.HasAttachment != nil
+}
+
+// matchesSearch applies the RFC 8621 §4.4.1 conditions the fake honours,
+// case-insensitively, with AND semantics. "text" matches subject, the
+// from/to addresses, and the body content; before/after are exclusive
+// bounds on receivedAt.
+func matchesSearch(e Email, f queryFilter) bool {
+	sub := func(hay, needle string) bool {
+		return strings.Contains(strings.ToLower(hay), strings.ToLower(needle))
+	}
+	if f.Text != "" {
+		hay := e.Subject + " " + e.TextBody + " " + e.HTMLBody + " " + e.Preview
+		for _, a := range e.From {
+			hay += " " + a.Name + " " + a.Email
+		}
+		for _, a := range e.To {
+			hay += " " + a.Name + " " + a.Email
+		}
+		if !sub(hay, f.Text) {
+			return false
+		}
+	}
+	fromOK, toOK := f.From == "", f.To == ""
+	for _, a := range e.From {
+		if sub(a.Name, f.From) || sub(a.Email, f.From) {
+			fromOK = true
+		}
+	}
+	for _, a := range e.To {
+		if sub(a.Name, f.To) || sub(a.Email, f.To) {
+			toOK = true
+		}
+	}
+	if !fromOK || !toOK {
+		return false
+	}
+	if f.Subject != "" && !sub(e.Subject, f.Subject) {
+		return false
+	}
+	if f.After != nil && !e.ReceivedAt.After(*f.After) {
+		return false
+	}
+	if f.Before != nil && !e.ReceivedAt.Before(*f.Before) {
+		return false
+	}
+	if f.HasKeyword != "" && !e.Keywords[f.HasKeyword] {
+		return false
+	}
+	if f.HasAttachment != nil && *f.HasAttachment != e.HasAttachment {
+		return false
+	}
+	return true
+}
+
 // scoped resolves the candidate set for a query filter. Synthetic scopes
-// are generated lazily as tuples.
+// are generated lazily as tuples; search filters materialise candidates
+// and match full content (FR-F1).
 func (snap *emailSnapshot) scoped(f queryFilter) []scopedEmail {
+	search := f.hasSearchFilter()
 	var out []scopedEmail
+	add := func(e Email) {
+		if search && !matchesSearch(e, f) {
+			return
+		}
+		out = append(out, scopedEmail{id: e.ID, threadID: e.ThreadID, at: e.ReceivedAt})
+	}
 	switch {
 	case f.InThread != "":
 		// The client passes the threadId directly; match members by it.
 		for i := range snap.emails {
 			if snap.emails[i].ThreadID == f.InThread {
-				out = append(out, scopedEmail{
-					id:       snap.emails[i].ID,
-					threadID: snap.emails[i].ThreadID,
-					at:       snap.emails[i].ReceivedAt,
-				})
+				add(snap.emails[i])
 			}
 		}
-	case f.InMailbox != "" && snap.synthetic != nil && f.InMailbox == snap.synthetic.MailboxID:
+	case snap.synthetic != nil && f.InMailbox == snap.synthetic.MailboxID:
 		for i := 0; i < snap.synthetic.Count; i++ {
-			se := syntheticEmail(*snap.synthetic, i)
-			out = append(out, scopedEmail{id: se.ID, threadID: se.ThreadID, at: se.ReceivedAt})
+			add(syntheticEmail(*snap.synthetic, i))
 		}
 	default:
 		for i := range snap.emails {
 			if f.InMailbox == "" || contains(snap.emails[i].MailboxIDs, f.InMailbox) {
-				out = append(out, scopedEmail{
-					id:       snap.emails[i].ID,
-					threadID: snap.emails[i].ThreadID,
-					at:       snap.emails[i].ReceivedAt,
-				})
+				add(snap.emails[i])
+			}
+		}
+		// Synthetic content lives in exactly one mailbox; it joins the
+		// candidate set under the all-mailbox scope too.
+		if snap.synthetic != nil && f.InMailbox == "" && snap.synthetic.Count > 0 {
+			for i := 0; i < snap.synthetic.Count; i++ {
+				add(syntheticEmail(*snap.synthetic, i))
 			}
 		}
 	}

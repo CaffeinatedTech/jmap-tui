@@ -94,7 +94,7 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 	} else {
 		q := &email.Query{
 			Account:         jmap.ID(h.c.accountID),
-			Filter:          &email.FilterCondition{InMailbox: jmap.ID(h.spec.MailboxID)},
+			Filter:          filterFor(h.spec),
 			Sort:            sortFor(h.spec.Sort),
 			CollapseThreads: h.spec.CollapseThreads,
 			Position:        int64(position),
@@ -262,6 +262,35 @@ type threadQuery struct {
 
 func (tq *threadQuery) Name() string         { return "Email/query" }
 func (tq *threadQuery) Requires() []jmap.URI { return []jmap.URI{jmapmail.URI} }
+
+// filterFor maps a query spec onto the RFC 8621 §4.4.1 condition. Mailbox
+// browsing sends inMailbox alone; search queries (FR-F1) add the content
+// fields, with MailboxID acting as the scope — empty meaning all mailboxes.
+// hasAttachment=false stays local: go-jmap's bool omitempty cannot
+// transmit it (mail.SearchFilter documents the degradation).
+func filterFor(spec mail.QuerySpec) *email.FilterCondition {
+	cond := &email.FilterCondition{}
+	if spec.Search != nil {
+		s := spec.Search
+		cond.Text, cond.From, cond.To, cond.Subject = s.Text, s.From, s.To, s.Subject
+		if !s.After.IsZero() {
+			after := s.After
+			cond.After = &after
+		}
+		if !s.Before.IsZero() {
+			before := s.Before
+			cond.Before = &before
+		}
+		cond.HasKeyword = s.HasKeyword
+		if s.HasAttachment != nil && *s.HasAttachment {
+			cond.HasAttachment = true
+		}
+	}
+	if spec.MailboxID != "" {
+		cond.InMailbox = jmap.ID(spec.MailboxID)
+	}
+	return cond
+}
 
 func sortFor(crits []mail.SortCriterion) []*email.SortComparator {
 	if len(crits) == 0 {

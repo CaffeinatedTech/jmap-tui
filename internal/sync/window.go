@@ -14,11 +14,16 @@ import (
 // superseded. The engine discards it silently (PLAN §4.1).
 var ErrStaleRequest = errors.New("sync: stale window request result")
 
-// FilterSpec scopes a server-side query. Exactly one of MailboxID / ThreadID
-// is normally set; search filters arrive in M4.
+// FilterSpec scopes a server-side query. Mailbox browsing sets MailboxID
+// (or ThreadID for thread expansion); search views set Search (FR-F1),
+// with MailboxID acting as the scope — empty meaning all mailboxes.
 type FilterSpec struct {
 	MailboxID mail.ID
 	ThreadID  mail.ID
+
+	// Search carries the content filters of a search view; nil in
+	// mailbox-browsing views. ThreadID is unused while set.
+	Search *mail.SearchFilter
 }
 
 // Query is the server-side query a window pages through.

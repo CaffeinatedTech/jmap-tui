@@ -304,9 +304,16 @@ func (e *Engine) absorbUpdatedSummaryLocked(w *Window, s mail.EmailSummary) {
 		return
 	}
 
-	// Unknown id: candidate new mail. It belongs in the window when it is
-	// in the open mailbox and newer than the current head (date-desc views
-	// only — the only sort M2 opens; others get the hint path).
+	// Unknown id: candidate new mail. Search views never slide in —
+	// whether the message matches the open search is only knowable
+	// server-side, so unknown ids wait for the next re-anchor (PLAN §4.1
+	// case 3 is a mailbox-browsing behaviour).
+	if w.query.Filter.Search != nil {
+		return
+	}
+	// It belongs in the window when it is in the open mailbox and newer
+	// than the current head (date-desc views only — the only sort M2
+	// opens; others get the hint path).
 	if !inMailbox(s, w.query.Filter.MailboxID) {
 		return
 	}

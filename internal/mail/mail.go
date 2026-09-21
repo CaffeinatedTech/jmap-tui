@@ -104,16 +104,40 @@ type SortCriterion struct {
 	IsDescending bool
 }
 
+// SearchFilter is a server-side content filter (RFC 8621 §4.4.1
+// FilterCondition). Set fields combine with AND semantics; zero values are
+// omitted from the wire filter. It backs the M4 search views (FR-F1).
+type SearchFilter struct {
+	Text       string // free text across headers and body
+	From       string
+	To         string
+	Subject    string
+	After      time.Time // receivedAt after this instant (exclusive)
+	Before     time.Time // receivedAt before this instant (exclusive)
+	HasKeyword string    // exact keyword presence ($seen, $flagged, …)
+
+	// HasAttachment is tri-state: nil = any, true = has attachments,
+	// false = has none. go-jmap's typed condition cannot express false on
+	// the wire (bool omitempty), so providers honour true; false is
+	// accepted and may degrade to "any".
+	HasAttachment *bool
+}
+
 // QuerySpec describes one page of an open server-side query. OpenQuery
 // issues the first page (Position/Limit); the window manager (PLAN §4.1)
 // calls QueryHandle.Page for extensions at absolute positions.
 type QuerySpec struct {
-	// MailboxID scopes the query to a mailbox (inMailbox).
+	// MailboxID scopes the query to a mailbox (inMailbox). In search
+	// queries it is the search scope; empty means all mailboxes.
 	MailboxID ID
 
 	// ThreadID scopes the query to a thread (inThread); it overrides
 	// MailboxID when non-empty.
 	ThreadID ID
+
+	// Search applies content filters (FR-F1); nil for mailbox browsing
+	// and thread expansion.
+	Search *SearchFilter
 
 	// CollapseThreads asks the server to collapse thread members into
 	// their representative (collapseThreads=true, FR-D2).
