@@ -1558,4 +1558,32 @@ func TestLiveSearchVerification(t *testing.T) {
 		t.Fatalf("SearchClose produced view=%q active=%q", snap.ViewKey, snap.ActiveMailbox)
 	}
 	t.Log("engine-level search open/close verified")
+
+	// --- engine-level fuzzy path (FR-F1 auto fallback): a partial word
+	// matches nothing on the token-only server index, so the LIKE scan
+	// walks the scope and substring-matches headers client-side. Every
+	// fixture message contains "fixtu" in its subject → 3000 matches
+	// streamed in across scanChunk-sized batches. ---
+	if err := eng.SearchOpen(ctx, sync.SearchSpec{Text: "fixtu", ScopeMailbox: mail.ID(fixtureID)}); err != nil {
+		t.Fatalf("fuzzy SearchOpen: %v", err)
+	}
+	fuzzyDeadline := time.Now().Add(60 * time.Second)
+	for {
+		snap = eng.Snapshot()
+		if snap.Scan != nil && snap.Scan.Scanned >= total && len(snap.Rows) == total {
+			break
+		}
+		if time.Now().After(fuzzyDeadline) {
+			t.Fatalf("fuzzy scan did not complete: %+v rows=%d", snap.Scan, len(snap.Rows))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if snap.Scan.Scanned != total || snap.Scan.Total != total {
+		t.Fatalf("scan progress = %d/%d, want %d/%d", snap.Scan.Scanned, snap.Scan.Total, total, total)
+	}
+	t.Logf("FUZZY: partial-word scan matched %d/%d messages client-side", len(snap.Rows), total)
+	snap = eng.SearchClose()
+	if snap.SearchActive || snap.Scan != nil {
+		t.Fatal("fuzzy scan survived SearchClose")
+	}
 }
