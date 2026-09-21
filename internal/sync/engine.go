@@ -186,10 +186,10 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.absorbSummariesLocked(sums)
 	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
 		return err
 	}
+	e.absorbSummariesLocked(sums)
 	e.publishLocked()
 	return nil
 }
@@ -279,7 +279,6 @@ func (e *Engine) Prefetch(ctx context.Context) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.absorbSummariesLocked(sums)
 	// A swapped window (mailbox change mid-flight) never matches r, so the
 	// stale result is rejected here (PLAN §4.1).
 	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
@@ -288,6 +287,7 @@ func (e *Engine) Prefetch(ctx context.Context) error {
 		}
 		return err
 	}
+	e.absorbSummariesLocked(sums)
 	e.publishLocked()
 	return nil
 }
@@ -339,10 +339,10 @@ func (e *Engine) Jump(ctx context.Context, t JumpTarget) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.absorbSummariesLocked(sums)
 	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
 		return err
 	}
+	e.absorbSummariesLocked(sums)
 	e.window.SettleJump(t)
 	e.alignCursorWithWindowLocked()
 	e.publishLocked()
@@ -404,8 +404,8 @@ func (e *Engine) ToggleThread(ctx context.Context) error {
 			return err
 		}
 		e.mu.Lock()
-		e.absorbSummariesLocked(sums)
 		e.rememberThreadLocked(sum.ThreadID, append([]mail.ID(nil), handle.IDs()...))
+		e.absorbSummariesLocked(sums)
 	}
 	e.expanded[sum.ThreadID] = true
 	e.publishLocked()
