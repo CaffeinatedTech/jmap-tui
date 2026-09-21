@@ -182,6 +182,78 @@ func goldenFrames() []frame {
 			st.HelpSec = testKeyMap.Help(PaneList)
 			return st
 		}},
+		// M4 search (FR-F1..F3) and full-screen view (FR-E5).
+		{name: "search-query", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Search = &SearchView{Query: "invoice", Scope: "Inbox"}
+			return st
+		}},
+		{name: "search-query-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Search = &SearchView{Query: "invoice", Scope: "Inbox"}
+			return st
+		}},
+		{name: "search-all-scope", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Search = &SearchView{
+				Query:  "audit",
+				Tokens: []string{"from:ceo@example.test", "attachments"},
+				Scope:  "all mailboxes",
+			}
+			return st
+		}},
+		{name: "search-narrow", w: 59, h: 25, st: func() State {
+			st := mk(true)()
+			st.Search = &SearchView{
+				Query: "quarterly audit report attached",
+				Scope: "all mailboxes",
+			}
+			return st
+		}},
+		{name: "search-advanced", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.AdvSearch = &AdvSearchView{
+				Title: "Advanced search",
+				Fields: []AdvField{
+					{Name: "text", View: "audit", Focused: true},
+					{Name: "from", View: "ceo@example.test"},
+					{Name: "to", View: ""},
+					{Name: "subject", View: "quarterly"},
+					{Name: "after", View: "2026-01-01"},
+					{Name: "before", View: ""},
+					{Name: "keyword", View: ""},
+				},
+				Attach: true,
+			}
+			return st
+		}},
+		{name: "search-advanced-error", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.AdvSearch = &AdvSearchView{
+				Title: "Advanced search",
+				Fields: []AdvField{
+					{Name: "text", View: "audit", Focused: false},
+					{Name: "from", View: ""},
+					{Name: "to", View: ""},
+					{Name: "subject", View: ""},
+					{Name: "after", View: "31-12-2026"},
+					{Name: "before", View: ""},
+					{Name: "keyword", View: ""},
+				},
+				Err: "dates want 2006-01-02",
+			}
+			return st
+		}},
+		{name: "fullscreen", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Fullscreen = true
+			return st
+		}},
+		{name: "fullscreen-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Fullscreen = true
+			return st
+		}},
 	}
 }
 

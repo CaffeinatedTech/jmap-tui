@@ -4,21 +4,26 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 )
 
-// truncate cuts s to display width n with an ellipsis.
+// truncate cuts s to display width n with an ellipsis (n-1 content cells
+// + tail, so padded rows keep a gap before the next segment). ANSI-styled
+// input is handled: escape sequences survive intact and only visible
+// cells count against the budget — measuring with runewidth on styled
+// strings over-truncates (it counts escape bytes).
 func truncate(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
-	if runewidth.StringWidth(s) <= n {
+	if ansi.StringWidth(s) <= n {
 		return s
 	}
-	return runewidth.Truncate(s, max(n-1, 0), "…")
+	return ansi.Truncate(s, max(n-1, 1), "…")
 }
 
 // pad right-fills s with spaces to width n.

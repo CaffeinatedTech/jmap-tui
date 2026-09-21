@@ -47,14 +47,19 @@ type Model struct {
 	sidebarSel     int
 	showSize       bool
 	helpOpen       bool
+	fullscreen     bool   // full-screen message view (FR-E5)
+	viewKey        string // last seen snapshot view (mailbox/search switch)
 
 	vp       viewport.Model
 	vpBodyID mail.ID
 
-	lastCtrlC     time.Time
-	err           string
-	freshArmed    bool
-	activeMailbox mail.ID // last seen active mailbox (selection resets)
+	lastCtrlC  time.Time
+	err        string
+	freshArmed bool
+
+	// Search state (M4): query bar + advanced modal; nil when closed
+	// (FR-F1, FR-F2).
+	search *searchState
 
 	// Triage state (M3): multi-select set, modal overlays, toast, and the
 	// prepared (delayed) destroy (FR-G2..G5).
@@ -176,6 +181,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = truncateErr(msg.op, msg.err)
 		return m, nil
 
+	case searchDebounceMsg:
+		// Stale generations (newer keystrokes arrived) are dropped; a
+		// no-op equals the text already issued.
+		if m.search == nil || m.search.adv != nil || msg.seq != m.search.seq {
+			return m, nil
+		}
+		if m.search.spec.Text == m.search.issued {
+			return m, nil
+		}
+		return m, m.issueSearch()
+
 	case triageDoneMsg:
 		return m.handleTriageDone(msg)
 
@@ -225,12 +241,13 @@ func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 
 	var cmds []tea.Cmd
 
-	// A mailbox switch resets the multi-select (FR-G3): the selection is
-	// a view over the open mailbox's rows.
-	if m.sel != nil && snap.ActiveMailbox != "" && snap.ActiveMailbox != m.activeMailbox {
+	// View switches (mailbox open, search open/close/re-issue) reset the
+	// multi-select (FR-G3): the selection is a view over the open view's
+	// rows.
+	if snap.ViewKey != m.viewKey {
 		m.sel = map[mail.ID]bool{}
 	}
-	m.activeMailbox = snap.ActiveMailbox
+	m.viewKey = snap.ViewKey
 
 	// Fresh-row fade (PLAN §4.1 case 3): one timer per highlight batch.
 	if len(snap.Fresh) > 0 {
@@ -242,8 +259,9 @@ func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 		m.freshArmed = false
 	}
 
-	// First load: open the inbox (FR-B1 initial window).
-	if snap.ActiveMailbox == "" && len(snap.Mailboxes) > 0 {
+	// First load: open the inbox (FR-B1 initial window). ViewKey "" means
+	// no view is open yet — mailbox or search.
+	if m.viewKey == "" && len(snap.Mailboxes) > 0 {
 		for i, node := range snap.Mailboxes {
 			if node.Mailbox.Role == mail.RoleInbox {
 				m.sidebarSel = i
@@ -348,7 +366,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Modal overlays swallow keys while open (move/copy/archive picker,
-	// attachment save).
+	// attachment save, search bar + advanced modal).
 	if m.picker != nil {
 		cmd, _ := m.pickerKey(key)
 		return m, cmd
@@ -356,6 +374,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.fp != nil {
 		cmd, _ := m.filePickKey(msg)
 		return m, cmd
+	}
+	if m.search != nil {
+		return m, m.searchKey(msg)
 	}
 
 	focus := m.focus
@@ -448,6 +469,26 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActSaveAttach:
 		return m.openFilePicker()
 
+	// --- search (M4, FR-F1..F3) ---
+	case ui.ActSearch:
+		if m.search == nil {
+			return m, m.openSearch()
+		}
+		m.search.adv = nil
+		m.openAdvSearch()
+		return m, nil
+	case ui.ActSearchAdv:
+		if m.search == nil {
+			return m, m.openSearch()
+		}
+		m.openAdvSearch()
+		return m, nil
+
+	// --- full-screen message view (FR-E5) ---
+	case ui.ActFullscreen:
+		m.toggleFullscreen()
+		return m, nil
+
 	// --- sidebar pane ---
 	case ui.ActSidebarDown:
 		if m.sidebarSel < len(m.snap.Mailboxes)-1 {
@@ -504,8 +545,12 @@ func listPage(m *Model) int {
 }
 
 // nextPane cycles focus among panes that are actually visible at the
-// current width (FR-I1 responsive rules).
+// current width (FR-I1 responsive rules). Fullscreen pins focus to the
+// preview (FR-E5).
 func (m *Model) nextPane(dir int) ui.Pane {
+	if m.fullscreen {
+		return ui.PanePreview
+	}
 	visible := []ui.Pane{}
 	if m.sidebarVisible && m.width >= 60 {
 		visible = append(visible, ui.PaneSidebar)
@@ -586,6 +631,13 @@ func (m *Model) uiState() ui.State {
 			View:  m.fp.fp.View(),
 		}
 	}
+	if m.search != nil {
+		st.Search = m.searchView()
+		if m.search.adv != nil {
+			st.AdvSearch = m.advSearchView()
+		}
+	}
+	st.Fullscreen = m.fullscreen
 	if m.toast != nil {
 		st.Toast = m.toast.text
 		st.ToastHint = m.toast.hint

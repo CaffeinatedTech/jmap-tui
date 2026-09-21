@@ -48,6 +48,17 @@ type State struct {
 	// the bubbles filepicker and hands over the string.
 	FilePick *FilePickView
 
+	// Search is the query-bar line state (FR-F1); non-nil while a search
+	// view is open — the header becomes the search line.
+	Search *SearchView
+
+	// AdvSearch is the advanced-search modal (FR-F2); non-nil while open.
+	AdvSearch *AdvSearchView
+
+	// Fullscreen hides the sidebar and list so the preview takes the full
+	// frame (FR-E5).
+	Fullscreen bool
+
 	// Now anchors relative dates; injected for deterministic goldens.
 	Now time.Time
 }
@@ -71,8 +82,12 @@ type Layout struct {
 
 // shownPanes decides which panes render for the given width and focus
 // (FR-I1): three panes ≥ 100 cols, two panes 60–99 (preview swaps in for
-// the list when focused), single focused pane below 60.
+// the list when focused), single focused pane below 60. Fullscreen mode
+// (FR-E5) shows the preview alone at any width.
 func shownPanes(w int, st State) (sidebar, list, preview bool) {
+	if st.Fullscreen {
+		return false, false, true
+	}
 	if w < 60 {
 		return st.Focus == PaneSidebar && st.SidebarVisible,
 			st.Focus == PaneList,
@@ -142,6 +157,9 @@ func Render(w, h int, st State) string {
 	}
 	if st.FilePick != nil {
 		return renderFilePick(w, h, st)
+	}
+	if st.AdvSearch != nil {
+		return renderAdvSearch(w, h, st)
 	}
 	var b strings.Builder
 	b.WriteString(renderHeader(w, st))
@@ -296,12 +314,27 @@ func joinPanes(panes []string, th Theme) string {
 }
 
 // renderHeader draws the breadcrumb line: title, active mailbox, totals.
+// While a search view is open it becomes the query bar (FR-F1): the query
+// tokens, the scope, and the result count.
 func renderHeader(w int, st State) string {
 	th := st.Theme
 	var parts []string
-	parts = append(parts, th.Accent.Render("jmap-tui"))
-	if name := activeMailboxName(st); name != "" {
-		parts = append(parts, th.Header.Render(name))
+	if st.Search != nil {
+		parts = append(parts, th.Accent.Render("search"))
+		q := st.Search.Query
+		if q == "" && len(st.Search.Tokens) == 0 {
+			q = "…"
+		}
+		parts = append(parts, th.Header.Render(q))
+		for _, tok := range st.Search.Tokens {
+			parts = append(parts, th.Muted.Render(tok))
+		}
+		parts = append(parts, th.Muted.Render("in: "+st.Search.Scope))
+	} else {
+		parts = append(parts, th.Accent.Render("jmap-tui"))
+		if name := activeMailboxName(st); name != "" {
+			parts = append(parts, th.Header.Render(name))
+		}
 	}
 	if st.Snap.Total >= 0 {
 		parts = append(parts, th.Muted.Render(renderCount(st)))
@@ -311,7 +344,15 @@ func renderHeader(w int, st State) string {
 		pad := w - lipgloss.Width(line) - lipgloss.Width(st.Err) - 2
 		if pad > 0 {
 			line += strings.Repeat(" ", pad) + th.Danger.Render(st.Err)
+		} else {
+			line = th.Danger.Render(st.Err)
 		}
+	} else if st.Search != nil {
+		// The query bar is the one header that grows with user input —
+		// keep it on one line at any width. Overflow sheds the tail
+		// first (count, then scope, then tokens), ellipsizing the query
+		// last.
+		line = truncate(line, w)
 	}
 	return line
 }
