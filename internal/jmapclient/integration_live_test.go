@@ -1586,4 +1586,26 @@ func TestLiveSearchVerification(t *testing.T) {
 	if snap.SearchActive || snap.Scan != nil {
 		t.Fatal("fuzzy scan survived SearchClose")
 	}
+
+	// Fielded fuzzy (FR-F2): a partial subject through the advanced path
+	// falls back the same way, constrained to the subject field.
+	if err := eng.SearchOpen(ctx, sync.SearchSpec{Subject: "fixtu", ScopeMailbox: mail.ID(fixtureID)}); err != nil {
+		t.Fatalf("fielded fuzzy SearchOpen: %v", err)
+	}
+	fuzzyDeadline = time.Now().Add(60 * time.Second)
+	for {
+		snap = eng.Snapshot()
+		if snap.Scan != nil && snap.Scan.Scanned >= total && len(snap.Rows) == total {
+			break
+		}
+		if time.Now().After(fuzzyDeadline) {
+			t.Fatalf("fielded fuzzy scan did not complete: %+v rows=%d", snap.Scan, len(snap.Rows))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Logf("FUZZY: fielded subject scan matched %d/%d", len(snap.Rows), total)
+	snap = eng.SearchClose()
+	if snap.SearchActive || snap.Scan != nil {
+		t.Fatal("fielded fuzzy scan survived SearchClose")
+	}
 }

@@ -104,7 +104,7 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 | Any | `?` | Help overlay |
 | Any | `q` | Quit |
 
-Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. The advanced modal composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments. Servers index whole words only, so when a query matches nothing (e.g. a partial word like `fixtu`), the client automatically falls back to a fuzzy scan: it walks the scope newest-first and substring-matches subjects and senders in memory, streaming matches in with a `scanning n/N` indicator — `Esc` cancels.
+Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. The advanced modal (`ctrl+s`) composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments — and every field is contains-style. Servers index whole words only, so when a search matches nothing server-side (e.g. a partial word like `0008`), the client automatically falls back to a fuzzy scan: it walks the scope newest-first and matches the chosen fields in memory (keyword, attachment and date filters still apply), streaming matches in with a `scanning n/N` indicator — `Esc` cancels.
 
 Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
 

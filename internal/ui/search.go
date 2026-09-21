@@ -70,7 +70,7 @@ func renderAdvSearch(w, h int, st State) string {
 		body.WriteString(th.Danger.Render(truncate(av.Err, boxW-2)))
 		body.WriteString("\n")
 	}
-	body.WriteString(th.Muted.Render(truncate("up/down field · tab next · enter search · esc cancel", boxW-2)))
+	body.WriteString(th.Muted.Render(truncate("contains-style · dates 2006-01-02 · enter search · esc", boxW-2)))
 
 	block := lipgloss.NewStyle().Width(boxW).Height(boxH).Render(strings.TrimRight(body.String(), "\n"))
 	return centerBlock(w, h, block)

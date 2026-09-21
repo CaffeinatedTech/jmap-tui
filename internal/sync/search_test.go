@@ -489,3 +489,122 @@ func TestEngineSearchScanSupersededByNewSearch(t *testing.T) {
 		t.Fatal("scan resurrected after supersede")
 	}
 }
+
+// The advanced modal's fielded filters get the same fuzzy fallback as the
+// query bar: zero server results → client-side scan constrained to the
+// chosen fields (partial words match; Stalwart is token-only, PLAN §7).
+
+func TestEngineSearchAdvancedFieldScanFallback(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// Partial subject: server token search finds nothing, the scan
+	// substring-matches the subject field only.
+	if err := e.SearchOpen(ctx, SearchSpec{Subject: "invoi", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 1 || snap.Rows[0].ID != "s1" {
+		t.Fatalf("subject-scan rows = %v, want [s1]", snap.Rows)
+	}
+
+	// Fielded scans are field-scoped: "invoi" appears in s1's subject but
+	// the From field of nobody matches it.
+	if err := e.SearchOpen(ctx, SearchSpec{From: "invoi", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen(from): %v", err)
+	}
+	snap = waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active && s.ViewKey != "m:mb-inbox" && s.Scan.Scanned == 2
+	})
+	if len(snap.Rows) != 0 {
+		t.Fatalf("from-scan rows = %v, want none (field-scoped match)", snap.Rows)
+	}
+}
+
+func TestEngineSearchAdvancedExactFieldsScanCompose(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// Partial subject ANDed with an exact keyword and attachment flag —
+	// the scan honours the exact fields client-side too.
+	if err := e.SearchOpen(ctx, SearchSpec{
+		Subject:       "invoi",
+		HasKeyword:    "$flagged",
+		HasAttachment: boolPtr(true),
+		ScopeMailbox:  "mb-inbox",
+	}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 0 {
+		t.Fatalf("rows = %v, want none (s1 is $seen, not $flagged)", snap.Rows)
+	}
+
+	// The matching combination: subject-substring AND $seen AND attachment.
+	if err := e.SearchOpen(ctx, SearchSpec{
+		Subject:       "invoi",
+		HasKeyword:    "$seen",
+		HasAttachment: boolPtr(true),
+		ScopeMailbox:  "mb-inbox",
+	}); err != nil {
+		t.Fatalf("SearchOpen 2: %v", err)
+	}
+	snap = waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active && len(s.Rows) == 1
+	})
+	if snap.Rows[0].ID != "s1" {
+		t.Fatalf("rows = %v, want [s1]", snap.Rows)
+	}
+
+	// Date bounds compose as well: s1 is the newest fixture message.
+	if err := e.SearchOpen(ctx, SearchSpec{
+		Subject:      "invoi",
+		After:        time.Date(2026, 9, 10, 11, 30, 0, 0, time.UTC),
+		ScopeMailbox: "mb-inbox",
+	}); err != nil {
+		t.Fatalf("SearchOpen 3: %v", err)
+	}
+	snap = waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 1 || snap.Rows[0].ID != "s1" {
+		t.Fatalf("dated scan rows = %v, want [s1]", snap.Rows)
+	}
+	if err := e.SearchOpen(ctx, SearchSpec{
+		Subject:      "invoi",
+		After:        time.Date(2026, 9, 10, 13, 0, 0, 0, time.UTC),
+		ScopeMailbox: "mb-inbox",
+	}); err != nil {
+		t.Fatalf("SearchOpen 4: %v", err)
+	}
+	snap = waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active && len(s.Rows) == 0 && s.Scan.Scanned == 2
+	})
+}
+
+func TestEngineSearchExactOnlyNeverScans(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// A genuinely-empty exact-only search (keyword, no text-ish field)
+	// has nothing substring semantics could add: the server's zero is
+	// final and no scan runs (FR-K4 courtesy — no scope walk).
+	if err := e.SearchOpen(ctx, SearchSpec{HasKeyword: "$nonexistent"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	snap := e.Snapshot()
+	if snap.Scan != nil {
+		t.Fatal("exact-only zero-result search started a scan")
+	}
+	if snap.Total != 0 {
+		t.Fatalf("total = %d, want 0", snap.Total)
+	}
+}
