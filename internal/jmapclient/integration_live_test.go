@@ -1217,3 +1217,305 @@ func (c *Client) uploadBlob(ctx context.Context, data []byte, mediaType string) 
 	}
 	return out.BlobID, nil
 }
+
+// --- M4 search gate (FR-F1..F3) ---
+
+// searchFixtureTarget is the seeded message count for the persistent
+// search fixture mailbox. The fixture is intentionally left on the server
+// between runs (the test account is disposable; the user removes it when
+// development ends), so seeding is idempotent: runs top up to the target.
+const searchFixtureTarget = 3000
+
+// searchFixtureBatch bounds one Email/set create call (rate courtesy,
+// FR-K4).
+const searchFixtureBatch = 250
+
+// ensureSearchFixtureMailbox returns the agent-test/search-fixture mailbox
+// id, creating the agent-test root when absent. The mailbox is never
+// destroyed here: the fixture persists for future development runs.
+func ensureSearchFixtureMailbox(t *testing.T, c *Client, ctx context.Context) string {
+	t.Helper()
+	mbs, err := c.Mailboxes(ctx)
+	if err != nil {
+		t.Fatalf("Mailboxes: %v", err)
+	}
+	var agentRoot, fixture string
+	for _, mb := range mbs.Mailboxes {
+		switch {
+		case mb.Name == "agent-test" && mb.ParentID == "":
+			agentRoot = string(mb.ID)
+		case mb.Name == "search-fixture" && mb.ParentID != "":
+			fixture = string(mb.ID)
+		}
+	}
+	if fixture != "" {
+		return fixture
+	}
+	if agentRoot == "" {
+		req := &jmap.Request{Context: ctx}
+		callID := req.Invoke(&mailbox.Set{
+			Account: jmap.ID(c.accountID),
+			Create: map[jmap.ID]*mailbox.Mailbox{
+				"agent-root": {Name: "agent-test", SortOrder: 1000},
+			},
+		})
+		invs, err := c.runBatch(ctx, req)
+		if err != nil {
+			t.Fatalf("create agent-test root: %v", err)
+		}
+		resp, ok := invs[callID].Args.(*mailbox.SetResponse)
+		if !ok {
+			t.Fatal("no Mailbox/set response for agent-test root")
+		}
+		if len(resp.NotCreated) > 0 {
+			t.Fatalf("agent-test root not created: %+v", resp.NotCreated)
+		}
+		agentRoot = string(resp.Created["agent-root"].ID)
+	}
+	req := &jmap.Request{Context: ctx}
+	callID := req.Invoke(&mailbox.Set{
+		Account: jmap.ID(c.accountID),
+		Create: map[jmap.ID]*mailbox.Mailbox{
+			"fixture": {Name: "search-fixture", ParentID: jmap.ID(agentRoot), SortOrder: 1001},
+		},
+	})
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("create search-fixture: %v", err)
+	}
+	resp, ok := invs[callID].Args.(*mailbox.SetResponse)
+	if !ok {
+		t.Fatal("no Mailbox/set response for search-fixture")
+	}
+	if len(resp.NotCreated) > 0 {
+		t.Fatalf("search-fixture not created: %+v", resp.NotCreated)
+	}
+	return string(resp.Created["fixture"].ID)
+}
+
+// fixtureTotal reads the fixture mailbox's server-maintained total.
+func fixtureTotal(t *testing.T, c *Client, ctx context.Context, id string) int {
+	t.Helper()
+	mbs, err := c.Mailboxes(ctx)
+	if err != nil {
+		t.Fatalf("Mailboxes: %v", err)
+	}
+	for _, mb := range mbs.Mailboxes {
+		if string(mb.ID) == id {
+			return mb.TotalEmails
+		}
+	}
+	t.Fatalf("fixture mailbox %s vanished", id)
+	return 0
+}
+
+// seedSearchFixture tops the fixture mailbox up to the target with
+// deterministic content. It reports the seeding timestamp and whether any
+// messages were created this run (date-window assertions only run on
+// fresh seeds, since the spread anchors at the seed instant).
+func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, user string) (seedTime time.Time, fresh bool) {
+	t.Helper()
+	have := fixtureTotal(t, c, ctx, fixtureID)
+	if have >= searchFixtureTarget {
+		t.Logf("fixture already holds %d messages (target %d) — reusing", have, searchFixtureTarget)
+		return time.Time{}, false
+	}
+	seedTime = time.Now().UTC().Truncate(time.Second)
+	fresh = true
+
+	for start := have; start < searchFixtureTarget; start += searchFixtureBatch {
+		end := min(start+searchFixtureBatch, searchFixtureTarget)
+		create := map[jmap.ID]*email.Email{}
+		for i := start; i < end; i++ {
+			at := seedTime.Add(-time.Duration(i) * 24 * time.Hour)
+			from := "agent@fixtures.test"
+			if i%10 == 0 {
+				from = "widgets@fixtures.test"
+			}
+			kw := map[string]bool{"$seen": true}
+			if i%3 == 0 {
+				kw = map[string]bool{"$flagged": true}
+			}
+			create[jmap.ID(fmt.Sprintf("f%d", i))] = &email.Email{
+				MailboxIDs: map[jmap.ID]bool{jmap.ID(fixtureID): true},
+				From:       []*jmapmail.Address{mkAddr("Fixture Sender", from)},
+				To:         []*jmapmail.Address{mkAddr("Agent Test", user)},
+				Subject:    fmt.Sprintf("agent-search fixture %06d", i),
+				Keywords:   kw,
+				ReceivedAt: &at,
+				TextBody:   []*email.BodyPart{{PartID: "1", Type: "text/plain"}},
+				BodyValues: map[string]*email.BodyValue{
+					"1": {Value: fmt.Sprintf("Fixture body %06d with searchable terms: quota alpha beta.\n", i)},
+				},
+			}
+		}
+		req := &jmap.Request{Context: ctx}
+		callID := req.Invoke(&email.Set{Account: jmap.ID(c.accountID), Create: create})
+		invs, err := c.runBatch(ctx, req)
+		if err != nil {
+			t.Fatalf("create fixture batch [%d,%d): %v", start, end, err)
+		}
+		resp, ok := invs[callID].Args.(*email.SetResponse)
+		if !ok {
+			t.Fatalf("unexpected Email/set response %T", invs[callID].Args)
+		}
+		if len(resp.NotCreated) > 0 {
+			t.Fatalf("fixture batch [%d,%d) rejected: %+v", start, end, resp.NotCreated)
+		}
+		t.Logf("seeded fixture batch [%d,%d)", start, end)
+	}
+	return seedTime, fresh
+}
+
+// TestLiveSearchVerification is the M4 gate (FR-F1..F3): a persistent
+// agent-test/search-fixture mailbox is topped up to searchFixtureTarget
+// messages and left in place; search correctness is then verified
+// read-only with exact counts derived from the seeding parameters, plus
+// the acceptance-criterion latency measurement (first page < 1s,
+// server-bound).
+func TestLiveSearchVerification(t *testing.T) {
+	url, user, pass := liveCreds(t)
+
+	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	fixtureID := ensureSearchFixtureMailbox(t, c, ctx)
+	seedTime, fresh := seedSearchFixture(t, c, ctx, fixtureID, user)
+	total := fixtureTotal(t, c, ctx, fixtureID)
+	if total < searchFixtureTarget {
+		t.Fatalf("fixture total = %d, want ≥ %d", total, searchFixtureTarget)
+	}
+	// Counts derived from seeding parameters: every 10th from widgets@,
+	// every 3rd $flagged. These hold for reused fixtures too.
+	wantWidgets := (total + 9) / 10
+	wantFlagged := (total + 2) / 3
+
+	// --- first page latency across the full fixture (acceptance gate) ---
+	start := time.Now()
+	h, sums, err := c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID:       mail.ID(fixtureID),
+		Search:          &mail.SearchFilter{Text: "quota alpha beta"},
+		CollapseThreads: true,
+		Position:        0,
+		Limit:           50,
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("search OpenQuery: %v", err)
+	}
+	if h.Total() != total {
+		t.Fatalf("text search total = %d, want %d", h.Total(), total)
+	}
+	if len(sums) != 50 {
+		t.Fatalf("first page = %d rows, want 50", len(sums))
+	}
+	if elapsed > time.Second {
+		t.Fatalf("first page took %v, want < 1s (M4 acceptance)", elapsed)
+	}
+	t.Logf("ACCEPTANCE: %d-message search first page in %v", total, elapsed)
+
+	// --- from filter ---
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{From: "widgets@fixtures.test"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("from search: %v", err)
+	}
+	if h.Total() != wantWidgets {
+		t.Fatalf("from search total = %d, want %d", h.Total(), wantWidgets)
+	}
+
+	// --- keyword filter ---
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{HasKeyword: "$flagged"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("keyword search: %v", err)
+	}
+	if h.Total() != wantFlagged {
+		t.Fatalf("flagged search total = %d, want %d", h.Total(), wantFlagged)
+	}
+
+	// --- subject filter narrows to the fixture namespace ---
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{Subject: "agent-search fixture"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("subject search: %v", err)
+	}
+	if h.Total() != total {
+		t.Fatalf("subject search total = %d, want %d", h.Total(), total)
+	}
+
+	if fresh {
+		// Date-window filters (FR-F1 after/before, exclusive bounds) —
+		// only meaningful right after a fresh seed spread.
+		after := seedTime.AddDate(0, 0, -10).Add(12 * time.Hour)
+		h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+			MailboxID: mail.ID(fixtureID),
+			Search:    &mail.SearchFilter{After: after},
+			Limit:     1,
+		})
+		if err != nil {
+			t.Fatalf("after search: %v", err)
+		}
+		if h.Total() != 10 {
+			t.Fatalf("after-search total = %d, want 10", h.Total())
+		}
+		before := seedTime.AddDate(0, 0, -20).Add(12 * time.Hour)
+		h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+			MailboxID: mail.ID(fixtureID),
+			Search:    &mail.SearchFilter{Before: before},
+			Limit:     1,
+		})
+		if err != nil {
+			t.Fatalf("before search: %v", err)
+		}
+		if h.Total() != total-20 {
+			t.Fatalf("before-search total = %d, want %d", h.Total(), total-20)
+		}
+	} else {
+		t.Log("reused fixture: skipping date-window assertions")
+	}
+
+	// --- all-mailbox scope (FR-F3): no inMailbox on the wire ---
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		Search: &mail.SearchFilter{Subject: "agent-search fixture"},
+		Limit:  1,
+	})
+	if err != nil {
+		t.Fatalf("all-scope search: %v", err)
+	}
+	if h.Total() < total {
+		t.Fatalf("all-scope search total = %d, want ≥ %d", h.Total(), total)
+	}
+	t.Logf("all-mailbox scope: %d hits across the account", h.Total())
+
+	// --- engine-level path: SearchOpen + SearchClose over live push
+	// (nil channel → poll config is irrelevant; the loop is not started) ---
+	eng := sync.NewEngine(c, sync.Config{})
+	if err := eng.LoadMailboxes(ctx); err != nil {
+		t.Fatalf("LoadMailboxes: %v", err)
+	}
+	if err := eng.SearchOpen(ctx, sync.SearchSpec{Text: "quota alpha beta", ScopeMailbox: mail.ID(fixtureID)}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := eng.Snapshot()
+	if snap.Total != total || len(snap.Rows) == 0 {
+		t.Fatalf("engine search: total=%d rows=%d", snap.Total, len(snap.Rows))
+	}
+	snap = eng.SearchClose()
+	if snap.SearchActive || snap.ActiveMailbox != "" {
+		t.Fatalf("SearchClose produced view=%q active=%q", snap.ViewKey, snap.ActiveMailbox)
+	}
+	t.Log("engine-level search open/close verified")
+}
