@@ -117,11 +117,16 @@ func TestMailboxesBeforeConnect(t *testing.T) {
 func TestUnimplementedMethodsAreTyped(t *testing.T) {
 	c, _ := newTestClient(t, testPassword)
 	ctx := context.Background()
-	if err := c.Mutate(ctx, mail.Mutation{}); !errors.Is(err, ErrUnimplemented) {
-		t.Errorf("Mutate err = %v", err)
-	}
 	if _, err := c.Send(ctx, mail.Draft{}); !errors.Is(err, ErrUnimplemented) {
 		t.Errorf("Send err = %v", err)
+	}
+	// A no-op mutation does nothing and must not need the network.
+	res, err := c.Mutate(ctx, mail.Mutation{})
+	if err != nil {
+		t.Errorf("empty Mutate err = %v", err)
+	}
+	if res.NewState != "" || len(res.Updated) != 0 || len(res.Destroyed) != 0 {
+		t.Errorf("empty Mutate result = %+v, want zero", res)
 	}
 }
 

@@ -1,9 +1,14 @@
 package jmapclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -22,6 +27,74 @@ import (
 // mkAddr builds a go-jmap address for fixture creation.
 func mkAddr(name, email string) *jmapmail.Address {
 	return &jmapmail.Address{Name: name, Email: email}
+}
+
+// emailSetView is the provider-agnostic view of an Email/set response:
+// once Mutate runs in the process, the wrapper's flexible decoder replaces
+// go-jmap's typed registration, so live tests read both shapes.
+type emailSetView struct {
+	CreatedIDs   map[string]mail.ID // create-handle → server id
+	Updated      []mail.ID
+	Destroyed    []jmap.ID
+	NotCreated   map[jmap.ID]*jmap.SetError
+	NotUpdated   map[jmap.ID]*jmap.SetError
+	NotDestroyed map[jmap.ID]*jmap.SetError
+}
+
+func asEmailSetView(inv *jmap.Invocation) (emailSetView, bool) {
+	switch r := inv.Args.(type) {
+	case *email.SetResponse:
+		created := map[string]mail.ID{}
+		for handle, em := range r.Created {
+			if em != nil {
+				created[string(handle)] = mail.ID(em.ID)
+			}
+		}
+		updated := make([]mail.ID, 0, len(r.Updated))
+		for id := range r.Updated {
+			updated = append(updated, mail.ID(id))
+		}
+		return emailSetView{
+			CreatedIDs:   created,
+			Updated:      updated,
+			Destroyed:    r.Destroyed,
+			NotCreated:   r.NotCreated,
+			NotUpdated:   r.NotUpdated,
+			NotDestroyed: r.NotDestroyed,
+		}, true
+	case *flexibleSetResponse:
+		notCreated := map[jmap.ID]*jmap.SetError{}
+		for id, se := range r.NotCreated {
+			notCreated[jmap.ID(id)] = se
+		}
+		notUpdated := map[jmap.ID]*jmap.SetError{}
+		for id, se := range r.NotUpdated {
+			notUpdated[jmap.ID(id)] = se
+		}
+		notDestroyed := map[jmap.ID]*jmap.SetError{}
+		for id, se := range r.NotDestroyed {
+			notDestroyed[jmap.ID(id)] = se
+		}
+		updated := append([]mail.ID{}, r.Updated...)
+		created := map[string]mail.ID{}
+		for handle, raw := range r.Created {
+			var withID struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(raw, &withID) == nil {
+				created[handle] = mail.ID(withID.ID)
+			}
+		}
+		return emailSetView{
+			CreatedIDs:   created,
+			Updated:      updated,
+			Destroyed:    r.Destroyed,
+			NotCreated:   notCreated,
+			NotUpdated:   notUpdated,
+			NotDestroyed: notDestroyed,
+		}, true
+	}
+	return emailSetView{}, false
 }
 
 // liveCreds returns the env-gated Stalwart test credentials (AGENTS.md:
@@ -319,7 +392,7 @@ func seedReaderFixtures(t *testing.T, c *Client, ctx context.Context, readerID, 
 	if !ok {
 		t.Fatal("no Email/set response")
 	}
-	resp, ok := inv.Args.(*email.SetResponse)
+	resp, ok := asEmailSetView(inv)
 	if !ok {
 		t.Fatalf("unexpected Email/set response %T", inv.Args)
 	}
@@ -333,7 +406,7 @@ func seedReaderFixtures(t *testing.T, c *Client, ctx context.Context, readerID, 
 		}
 		t.Fatal("fixture creation failed")
 	}
-	t.Logf("seeded %d fixture emails", len(resp.Created))
+	t.Logf("seeded %d fixture emails", len(resp.CreatedIDs))
 }
 
 // destroyMailbox removes a mailbox and its contents (test cleanup only).
@@ -367,8 +440,8 @@ func destroyMailbox(t *testing.T, c *Client, ctx context.Context, id string) {
 			return
 		}
 		if inv, ok := dInvs[dID]; ok {
-			if resp, ok := inv.Args.(*email.SetResponse); ok && len(resp.NotDestroyed) > 0 {
-				t.Logf("cleanup: %d email(s) not destroyed", len(resp.NotDestroyed))
+			if view, ok := asEmailSetView(inv); ok && len(view.NotDestroyed) > 0 {
+				t.Logf("cleanup: %d email(s) not destroyed", len(view.NotDestroyed))
 			}
 		}
 	}
@@ -626,20 +699,19 @@ func sendToSelf(t *testing.T, c *Client, ctx context.Context, identityID mail.ID
 			}
 			return "", fmt.Errorf("batch error invocation with args %T", inv.Args)
 		case inv.Name == "Email/set" && inv.CallID == c1:
-			sresp, ok := inv.Args.(*email.SetResponse)
+			view, ok := asEmailSetView(inv)
 			if !ok {
 				return "", fmt.Errorf("unexpected Email/set response %T", inv.Args)
 			}
-			if len(sresp.NotCreated) > 0 {
-				for cid, se := range sresp.NotCreated {
+			if len(view.NotCreated) > 0 {
+				for cid, se := range view.NotCreated {
 					return "", fmt.Errorf("draft %s not created: %s %s", cid, se.Type, seDesc(se.Description))
 				}
 			}
-			cr, ok := sresp.Created["draft"]
+			createdID, ok = view.CreatedIDs["draft"]
 			if !ok {
 				return "", errors.New("draft creation missing from response")
 			}
-			createdID = mail.ID(cr.ID)
 		case inv.Name == "EmailSubmission/set" && inv.CallID == c2:
 			uresp, ok := inv.Args.(*emailsubmission.SetResponse)
 			if !ok {
@@ -676,12 +748,12 @@ func setSeen(t *testing.T, c *Client, ctx context.Context, id mail.ID, seen bool
 	if !ok {
 		return errors.New("no Email/set response")
 	}
-	resp, ok := inv.Args.(*email.SetResponse)
+	view, ok := asEmailSetView(inv)
 	if !ok {
 		return fmt.Errorf("unexpected Email/set response %T", inv.Args)
 	}
-	if len(resp.NotUpdated) > 0 {
-		for cid, se := range resp.NotUpdated {
+	if len(view.NotUpdated) > 0 {
+		for cid, se := range view.NotUpdated {
 			return fmt.Errorf("update %s failed: %s %s", cid, se.Type, seDesc(se.Description))
 		}
 	}
@@ -722,8 +794,426 @@ func purgeTestMessages(t *testing.T, c *Client, ctx context.Context, subject str
 		return
 	}
 	if inv, ok := dinvs[c2]; ok {
-		if resp, ok := inv.Args.(*email.SetResponse); ok {
-			t.Logf("cleanup: destroyed %d message(s), %d failed", len(qr.IDs)-len(resp.NotDestroyed), len(resp.NotDestroyed))
+		if view, ok := asEmailSetView(inv); ok {
+			t.Logf("cleanup: destroyed %d message(s), %d failed", len(qr.IDs)-len(view.NotDestroyed), len(view.NotDestroyed))
 		}
 	}
+}
+
+// --- M3 live gate: triage workflow + attachment download ---
+
+// ensureM3Mailboxes creates the M3 gate mailboxes under agent-test and
+// returns their ids (agent-test root created if absent). Cleanup destroys
+// both mailboxes with their contents, and the root itself when this run
+// created it (AGENTS.md: test mailboxes only, full cleanup after).
+func ensureM3Mailboxes(t *testing.T, c *Client, ctx context.Context) (gateID, destID string) {
+	t.Helper()
+	mbs, err := c.Mailboxes(ctx)
+	if err != nil {
+		t.Fatalf("Mailboxes: %v", err)
+	}
+	var agentID string
+	for _, mb := range mbs.Mailboxes {
+		if mb.Name == "agent-test" {
+			agentID = string(mb.ID)
+			break
+		}
+	}
+	if agentID == "" {
+		req := &jmap.Request{Context: ctx}
+		rootSet := &mailbox.Set{Account: jmap.ID(c.accountID), Create: map[jmap.ID]*mailbox.Mailbox{
+			"agent-root": {Name: "agent-test"},
+		}}
+		callID := req.Invoke(rootSet)
+		invs, rerr := c.runBatch(ctx, req)
+		if rerr != nil {
+			t.Fatalf("create agent-test root: %v", rerr)
+		}
+		resp, ok := invs[callID].Args.(*mailbox.SetResponse)
+		if !ok {
+			t.Fatalf("unexpected Mailbox/set response %T", invs[callID].Args)
+		}
+		cr, ok := resp.Created["agent-root"]
+		if !ok {
+			t.Fatalf("agent-test root not created: %+v", resp.NotCreated)
+		}
+		agentID = string(cr.ID)
+		t.Cleanup(func() {
+			// Destroying the root removes the whole created subtree.
+			destroyMailbox(t, c, context.Background(), agentID)
+		})
+	}
+
+	create := map[jmap.ID]*mailbox.Mailbox{
+		"gate": {Name: "m3-gate", ParentID: jmap.ID(agentID)},
+		"dest": {Name: "m3-gate-dest", ParentID: jmap.ID(agentID)},
+	}
+	req := &jmap.Request{Context: ctx}
+	set := &mailbox.Set{Account: jmap.ID(c.accountID), Create: create}
+	callID := req.Invoke(set)
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("create M3 mailboxes: %v", err)
+	}
+	inv, ok := invs[callID]
+	if !ok {
+		t.Fatal("no Mailbox/set response for M3 mailboxes")
+	}
+	resp, ok := inv.Args.(*mailbox.SetResponse)
+	if !ok {
+		t.Fatalf("unexpected Mailbox/set response %T", inv.Args)
+	}
+	gate, gateOK := resp.Created["gate"]
+	dest, destOK := resp.Created["dest"]
+	if !gateOK || !destOK {
+		// Leftovers from a previous run: purge and recreate once.
+		for _, mb := range mbs.Mailboxes {
+			if mb.Name == "m3-gate" && mb.ParentID == mail.ID(agentID) {
+				destroyMailbox(t, c, ctx, string(mb.ID))
+			}
+			if mb.Name == "m3-gate-dest" && mb.ParentID == mail.ID(agentID) {
+				destroyMailbox(t, c, ctx, string(mb.ID))
+			}
+		}
+		t.Fatal("M3 mailboxes not created fresh; rerun to purge leftovers")
+	}
+	return string(gate.ID), string(dest.ID)
+}
+
+// seedTriageFixtures creates two unread emails in the gate mailbox.
+func seedTriageFixtures(t *testing.T, c *Client, ctx context.Context, gateID, user string) []mail.ID {
+	t.Helper()
+	now := time.Now().UTC()
+	create := map[jmap.ID]*email.Email{
+		"tri-1": {
+			MailboxIDs: map[jmap.ID]bool{jmap.ID(gateID): true},
+			From:       []*jmapmail.Address{mkAddr("Agent Test", user)},
+			To:         []*jmapmail.Address{mkAddr("Agent Test", user)},
+			Subject:    "m3 triage one",
+			ReceivedAt: &now,
+			TextBody:   []*email.BodyPart{{PartID: "1", Type: "text/plain"}},
+			BodyValues: map[string]*email.BodyValue{"1": {Value: "Triage fixture one.\n"}},
+		},
+		"tri-2": {
+			MailboxIDs: map[jmap.ID]bool{jmap.ID(gateID): true},
+			From:       []*jmapmail.Address{mkAddr("Agent Test", user)},
+			To:         []*jmapmail.Address{mkAddr("Agent Test", user)},
+			Subject:    "m3 triage two",
+			ReceivedAt: &now,
+			TextBody:   []*email.BodyPart{{PartID: "1", Type: "text/plain"}},
+			BodyValues: map[string]*email.BodyValue{"1": {Value: "Triage fixture two.\n"}},
+		},
+	}
+	req := &jmap.Request{Context: ctx}
+	set := &email.Set{Account: jmap.ID(c.accountID), Create: create}
+	callID := req.Invoke(set)
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("seed triage fixtures: %v", err)
+	}
+	view, ok := asEmailSetView(invs[callID])
+	if !ok {
+		t.Fatalf("unexpected Email/set response %T", invs[callID].Args)
+	}
+	if len(view.NotCreated) > 0 {
+		t.Fatalf("seed failed: %+v", view.NotCreated)
+	}
+	t.Cleanup(func() {
+		purgeByIDs(t, c, context.Background(), view.CreatedIDs["tri-1"], view.CreatedIDs["tri-2"])
+	})
+	return []mail.ID{view.CreatedIDs["tri-1"], view.CreatedIDs["tri-2"]}
+}
+
+// purgeByIDs destroys fixture emails (cleanup).
+func purgeByIDs(t *testing.T, c *Client, ctx context.Context, ids ...mail.ID) {
+	t.Helper()
+	jids := make([]jmap.ID, 0, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			jids = append(jids, jmap.ID(id))
+		}
+	}
+	if len(jids) == 0 {
+		return
+	}
+	req := &jmap.Request{Context: ctx}
+	set := &email.Set{Account: jmap.ID(c.accountID), Destroy: jids}
+	callID := req.Invoke(set)
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Logf("cleanup: destroy fixtures: %v", err)
+		return
+	}
+	if view, ok := asEmailSetView(invs[callID]); ok && len(view.NotDestroyed) > 0 {
+		t.Logf("cleanup: %d fixture(s) not destroyed", len(view.NotDestroyed))
+	}
+}
+
+// serverEmailState is the independent verification: a raw Email/get reads
+// keywords and mailbox memberships straight from the server (REQUIREMENTS
+// §7 M3: server state verified to match via an independent client).
+func serverEmailState(t *testing.T, c *Client, ctx context.Context, id mail.ID) (mail.Keywords, []mail.ID, bool) {
+	t.Helper()
+	req := &jmap.Request{Context: ctx}
+	get := &email.Get{
+		Account:    jmap.ID(c.accountID),
+		IDs:        []jmap.ID{jmap.ID(id)},
+		Properties: []string{"keywords", "mailboxIds"},
+	}
+	callID := req.Invoke(get)
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("Email/get verify: %v", err)
+	}
+	gr, ok := invs[callID].Args.(*email.GetResponse)
+	if !ok {
+		t.Fatalf("unexpected Email/get response %T", invs[callID].Args)
+	}
+	if len(gr.List) == 0 {
+		return nil, nil, false // destroyed / not found
+	}
+	out := mail.Keywords{}
+	for k, v := range gr.List[0].Keywords {
+		if v {
+			out[k] = struct{}{}
+		}
+	}
+	var mbs []mail.ID
+	for mb := range gr.List[0].MailboxIDs {
+		mbs = append(mbs, mail.ID(mb))
+	}
+	return out, mbs, true
+}
+
+func assertKeyword(t *testing.T, kw mail.Keywords, name string, want bool, step string) {
+	t.Helper()
+	if kw.Has(name) != want {
+		t.Fatalf("%s: keyword %s presence = %v, want %v", step, name, kw.Has(name), want)
+	}
+}
+
+func assertMembership(t *testing.T, mbs []mail.ID, id mail.ID, want bool, step string) {
+	t.Helper()
+	found := false
+	for _, mb := range mbs {
+		if mb == id {
+			found = true
+			break
+		}
+	}
+	if found != want {
+		t.Fatalf("%s: membership in %s = %v (memberships %v)", step, id, found, mbs)
+	}
+}
+
+// TestLiveTriageVerification is the M3 gate: the full triage workflow —
+// read, star, undo, move, copy, delete, permanent destroy — runs through
+// the sync engine against the live server, with every step verified
+// independently via raw Email/get. Attachment upload → DownloadBlob is
+// verified as the FR-E4 round-trip.
+func TestLiveTriageVerification(t *testing.T) {
+	url, user, pass := liveCreds(t)
+	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	gateID, destID := ensureM3Mailboxes(t, c, ctx)
+	t.Cleanup(func() {
+		destroyMailbox(t, c, context.Background(), destID)
+		destroyMailbox(t, c, context.Background(), gateID)
+	})
+
+	ids := seedTriageFixtures(t, c, ctx, gateID, user)
+	e1, e2 := ids[0], ids[1]
+
+	// The engine drives the workflow exactly as the app would.
+	e := sync.NewEngine(c, sync.Config{})
+	if err := e.LoadMailboxes(ctx); err != nil {
+		t.Fatalf("LoadMailboxes: %v", err)
+	}
+	if err := e.OpenMailbox(ctx, mail.ID(gateID)); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+	rows := e.Snapshot().Rows
+	if len(rows) != 2 {
+		t.Fatalf("gate rows = %d, want 2", len(rows))
+	}
+
+	// --- read: both in one batched /set (FR-G3) ---
+	start := time.Now()
+	rcpt, err := e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageRead, IDs: ids})
+	if err != nil {
+		t.Fatalf("Triage(read): %v", err)
+	}
+	t.Logf("read batch: %d ids confirmed in %s", len(rcpt.Applied), time.Since(start).Round(time.Millisecond))
+	kw1, _, found := serverEmailState(t, c, ctx, e1)
+	if !found {
+		t.Fatal("e1 missing after read")
+	}
+	assertKeyword(t, kw1, "$seen", true, "read")
+	kw2, _, _ := serverEmailState(t, c, ctx, e2)
+	assertKeyword(t, kw2, "$seen", true, "read")
+
+	// --- star, then undo via the receipt (FR-G5) ---
+	rcpt, err = e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageStar, IDs: ids})
+	if err != nil {
+		t.Fatalf("Triage(star): %v", err)
+	}
+	kw1, _, _ = serverEmailState(t, c, ctx, e1)
+	assertKeyword(t, kw1, "$flagged", true, "star")
+	if rcpt.Undo == nil {
+		t.Fatal("star produced no undo spec")
+	}
+	if _, err := e.Triage(ctx, *rcpt.Undo); err != nil {
+		t.Fatalf("Triage(unstar-undo): %v", err)
+	}
+	kw1, _, _ = serverEmailState(t, c, ctx, e1)
+	assertKeyword(t, kw1, "$flagged", false, "star undo")
+	kw1, _, _ = serverEmailState(t, c, ctx, e1)
+	assertKeyword(t, kw1, "$seen", true, "star undo keeps read state")
+
+	// --- move to dest, verify, undo, verify (FR-G2) ---
+	rcpt, err = e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: mail.ID(destID)})
+	if err != nil {
+		t.Fatalf("Triage(move): %v", err)
+	}
+	_, mbs1, _ := serverEmailState(t, c, ctx, e1)
+	assertMembership(t, mbs1, mail.ID(destID), true, "move")
+	assertMembership(t, mbs1, mail.ID(gateID), false, "move")
+	if rcpt.Undo == nil {
+		t.Fatal("move produced no undo spec")
+	}
+	if _, err := e.Triage(ctx, *rcpt.Undo); err != nil {
+		t.Fatalf("Triage(move-undo): %v", err)
+	}
+	_, mbs1, _ = serverEmailState(t, c, ctx, e1)
+	assertMembership(t, mbs1, mail.ID(gateID), true, "move undo")
+	assertMembership(t, mbs1, mail.ID(destID), false, "move undo")
+
+	// --- copy + undo (membership additive) ---
+	rcpt, err = e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageCopy, IDs: ids, Mailbox: mail.ID(destID)})
+	if err != nil {
+		t.Fatalf("Triage(copy): %v", err)
+	}
+	_, mbs1, _ = serverEmailState(t, c, ctx, e1)
+	assertMembership(t, mbs1, mail.ID(destID), true, "copy")
+	assertMembership(t, mbs1, mail.ID(gateID), true, "copy")
+	if _, err := e.Triage(ctx, *rcpt.Undo); err != nil {
+		t.Fatalf("Triage(copy-undo): %v", err)
+	}
+	_, mbs1, _ = serverEmailState(t, c, ctx, e1)
+	assertMembership(t, mbs1, mail.ID(destID), false, "copy undo")
+
+	// --- delete = move to role-trash; destroy is permanent there (FR-G2) ---
+	_, trashMB := func() (mail.ID, mail.Mailbox) {
+		mbs, err := c.Mailboxes(ctx)
+		if err != nil {
+			t.Fatalf("Mailboxes: %v", err)
+		}
+		for _, mb := range mbs.Mailboxes {
+			if mb.Role == mail.RoleTrash {
+				return mb.ID, mb
+			}
+		}
+		return "", mail.Mailbox{}
+	}()
+	if trashMB.ID == "" {
+		t.Fatal("server has no role-trash mailbox")
+	}
+	if _, err := e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageMove, IDs: []mail.ID{e1}, Mailbox: trashMB.ID}); err != nil {
+		t.Fatalf("Triage(delete): %v", err)
+	}
+	_, mbs1, _ = serverEmailState(t, c, ctx, e1)
+	assertMembership(t, mbs1, trashMB.ID, true, "delete")
+	if _, err := e.Triage(ctx, sync.TriageSpec{Kind: sync.TriageDestroy, IDs: []mail.ID{e1}}); err != nil {
+		t.Fatalf("Triage(destroy): %v", err)
+	}
+	if _, _, found := serverEmailState(t, c, ctx, e1); found {
+		t.Fatal("destroyed message still on the server")
+	}
+	t.Log("delete → trash → permanent destroy verified")
+
+	// --- FR-E4: upload blob → create email with attachment → DownloadBlob ---
+	payload := []byte("attachment round-trip \xf0\x9f\x93\x8e payload")
+	blobID, err := c.uploadBlob(ctx, payload, "application/octet-stream")
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	now := time.Now().UTC()
+	req := &jmap.Request{Context: ctx}
+	attSet := &email.Set{Account: jmap.ID(c.accountID), Create: map[jmap.ID]*email.Email{
+		"att": {
+			MailboxIDs: map[jmap.ID]bool{jmap.ID(gateID): true},
+			From:       []*jmapmail.Address{mkAddr("Agent Test", user)},
+			Subject:    "m3 attachment carrier",
+			ReceivedAt: &now,
+			Attachments: []*email.BodyPart{{
+				BlobID: jmap.ID(blobID), Type: "application/octet-stream",
+				Name: "m3-payload.bin", Disposition: "attachment",
+			}},
+		},
+	}}
+	setID := req.Invoke(attSet)
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		t.Fatalf("create attachment email: %v", err)
+	}
+	attView, ok := asEmailSetView(invs[setID])
+	if !ok || len(attView.NotCreated) > 0 {
+		t.Fatalf("attachment email not created: %+v", attView.NotCreated)
+	}
+	attEmail := attView.CreatedIDs["att"]
+	t.Cleanup(func() { purgeByIDs(t, c, context.Background(), attEmail) })
+
+	body, err := c.FetchBody(ctx, attEmail)
+	if err != nil {
+		t.Fatalf("FetchBody: %v", err)
+	}
+	if len(body.Attachments) != 1 {
+		t.Fatalf("attachments = %d, want 1", len(body.Attachments))
+	}
+	rc, err := c.DownloadBlob(ctx, body.Attachments[0].BlobID, body.Attachments[0].Name, body.Attachments[0].Type)
+	if err != nil {
+		t.Fatalf("DownloadBlob: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		t.Fatalf("download read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("downloaded %d bytes, want %d (content mismatch)", len(got), len(payload))
+	}
+	t.Logf("attachment round-trip verified: %d bytes via %s", len(got), body.Attachments[0].Name)
+}
+
+// uploadBlob POSTs raw bytes to the session uploadUrl (RFC 8620 §6.1) and
+// returns the server-assigned blob id (fixture creation for FR-E4).
+func (c *Client) uploadBlob(ctx context.Context, data []byte, mediaType string) (string, error) {
+	if c.session == nil || c.session.UploadURL == "" {
+		return "", errors.New("no uploadUrl")
+	}
+	u := strings.NewReplacer("{accountId}", url.PathEscape(c.accountID)).Replace(c.session.UploadURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", mediaType)
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("upload: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		BlobID string `json:"blobId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.BlobID, nil
 }

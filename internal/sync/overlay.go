@@ -38,26 +38,39 @@ type pendingOp struct {
 const maxOverlay = 512
 
 // ApplyOverlay records a pending mutation and reflects it in the in-memory
-// summary immediately (optimistic write, FR-B7 plumbing). Destroy also
-// hides the row via the window's live-destroy path; the server
-// confirmation in M3 finalises it.
+// summary immediately (optimistic write, FR-B7 plumbing). Destroy hides the
+// row via the window's live-destroy path, as does any overlay that removes
+// the open mailbox's membership (moves, copy-undo).
 func (e *Engine) ApplyOverlay(id mail.ID, ov Overlay) Snapshot {
 	if id == "" || ov.empty() {
 		return e.Snapshot()
 	}
 
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.applyOverlayLocked(id, ov)
+	e.publishLocked()
+	return e.snapshotLocked()
+}
+
+// applyOverlayLocked records and applies one overlay. Caller holds mu.
+func (e *Engine) applyOverlayLocked(id mail.ID, ov Overlay) {
 	e.rememberOverlayLocked(id, pendingOp{ov: ov, appliedAt: time.Now()})
 	if s, ok := e.summaries[id]; ok {
-		e.summaries[id] = ov.apply(s)
-		if ov.Destroy && e.window != nil {
-			e.window.RemoveIDs([]mail.ID{id})
+		applied := ov.apply(s)
+		e.summaries[id] = applied
+		if e.window != nil {
+			active := e.window.query.Filter.MailboxID
+			switch {
+			case ov.Destroy:
+				e.window.RemoveIDs([]mail.ID{id})
+			case active != "" && !inMailbox(applied, active) && inMailbox(s, active):
+				// The optimistic patch removed the open mailbox's
+				// membership: the row leaves the view now (FR-B7).
+				e.window.RemoveIDs([]mail.ID{id})
+			}
 		}
 	}
-	e.publishLocked()
-	snap := e.snapshotLocked()
-	e.mu.Unlock()
-	return snap
 }
 
 // apply patches a summary copy with the overlay deltas.

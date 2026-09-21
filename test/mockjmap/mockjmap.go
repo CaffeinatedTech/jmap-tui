@@ -68,6 +68,7 @@ type Server struct {
 	mailboxes      []Mailbox
 	emails         []Email
 	synthetic      *SyntheticMailbox
+	blobs          map[string][]byte
 	mailboxVersion int
 	emailVersion   int
 	journal        []journalEntry
@@ -78,6 +79,15 @@ type Server struct {
 	streams           map[*streamConn]struct{}
 	lastMailboxNotify int
 	lastEmailNotify   int
+	setCalls          int // total Email/set requests served (M3 rate tests)
+}
+
+// SetCalls reports how many Email/set requests the server has served
+// (batching assertions, FR-K4).
+func (s *Server) SetCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setCalls
 }
 
 // New starts the server and returns it. Close must be called when done.
@@ -198,6 +208,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.handleAPI(w, r)
 	case strings.HasPrefix(r.URL.Path, "/jmap/event/") && r.Method == http.MethodGet:
 		s.handleEvent(w, r)
+	case strings.HasPrefix(r.URL.Path, "/jmap/download/") && r.Method == http.MethodGet:
+		s.handleDownload(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -383,6 +395,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 			args = emailGetResponse(snap, call.Args, results)
 		case "Email/changes":
 			args = s.changesResponse("Email", call.Args)
+		case "Email/set":
+			args = s.emailSetResponse(call.Args)
 		default:
 			args = map[string]any{"type": "unknownMethod"}
 			resp.add("error", call.CallID, args)

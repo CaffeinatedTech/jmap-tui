@@ -7,6 +7,7 @@ package mail
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -151,9 +152,47 @@ type QueryHandle interface {
 	Page(ctx context.Context, position, limit int) ([]ID, []EmailSummary, error)
 }
 
-// Mutation describes a pending change to server objects. Its shape is
-// finalised in M3 (triage actions); the zero value performs no mutation.
-type Mutation struct{}
+// EmailPatch is the per-email change set inside a Mutation: keyword
+// presence flips and mailbox membership deltas (FR-G1, FR-G2). Nil fields
+// are untouched; deltas compose, so a patch may add and remove mailboxes in
+// one update (move semantics).
+type EmailPatch struct {
+	// SetKeywords flips keyword presence: true adds, false removes
+	// ($seen, $flagged, …). Keywords not named here are untouched.
+	SetKeywords map[string]bool
+
+	// AddMailboxes adds the email to these mailboxes.
+	AddMailboxes []ID
+
+	// RemoveMailboxes removes the email from these mailboxes.
+	RemoveMailboxes []ID
+}
+
+// Mutation is one batched set of server mutations (RFC 8620 §5.3 Email/set),
+// finalised in M3: triage actions build one Mutation per user action so
+// multi-select costs a single round-trip (FR-G3, FR-K4).
+type Mutation struct {
+	// Emails maps email id to its change set.
+	Emails map[ID]EmailPatch
+
+	// Destroy lists email ids to permanently delete (FR-G2: only inside
+	// Trash; delete elsewhere is a move).
+	Destroy []ID
+}
+
+// MutationResult reports what a Mutate actually did. Rejected ids carry
+// the server's per-id error so callers can revert exactly the failed part.
+type MutationResult struct {
+	OldState string
+	NewState string
+
+	Updated   []ID
+	Destroyed []ID
+
+	// NotUpdated and NotDestroyed map rejected ids to their server errors.
+	NotUpdated   map[ID]error
+	NotDestroyed map[ID]error
+}
 
 // Draft describes a message to send. Its shape is finalised in M5 (compose).
 type Draft struct{}
@@ -234,8 +273,15 @@ type Provider interface {
 	// the submission capability yield an empty list, never an error (FR-A6).
 	Identities(ctx context.Context) ([]Identity, error)
 
-	// Mutate applies flags/move/copy/destroy operations (M3).
-	Mutate(ctx context.Context, mutation Mutation) error
+	// Mutate applies one batched set of flag/move/copy/destroy operations
+	// (FR-G1..G3) as a single round-trip. Per-id rejections are reported in
+	// the result, not as the error: a transport-level failure is the error.
+	Mutate(ctx context.Context, mutation Mutation) (MutationResult, error)
+
+	// DownloadBlob fetches an attachment blob by id over the session
+	// download URL (FR-E4). name and mediaType fill the URL template;
+	// the caller closes the reader.
+	DownloadBlob(ctx context.Context, blobID ID, name, mediaType string) (io.ReadCloser, error)
 
 	// Send submits a message for delivery (M5).
 	Send(ctx context.Context, draft Draft) (SendReceipt, error)

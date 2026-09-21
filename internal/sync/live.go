@@ -513,9 +513,11 @@ func (e *Engine) reconcileMailbox(ctx context.Context) {
 	}
 }
 
-// fullResync answers cannotCalculateChanges with a cursor-anchored re-query
-// (PLAN §4.1 case 2): the cursor id is the only honest position, so the
-// fresh chunk starts there and position survives by id (FR-B5, FR-D5).
+// fullResync answers cannotCalculateChanges (and triage membership
+// changes) with a cursor-anchored re-query (PLAN §4.1 case 2): the cursor id
+// is the only honest position, so the fresh chunk starts there and position
+// survives by id (FR-B5, FR-D5). An empty window re-seeds from the top —
+// there is no cursor to anchor.
 func (e *Engine) fullResync(ctx context.Context) {
 	e.mu.Lock()
 	w := e.window
@@ -523,11 +525,18 @@ func (e *Engine) fullResync(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
-	id := w.CursorID()
-	r := w.AnchorNeed(id)
-	spec := e.querySpecLocked(0, e.cfg.Window.withDefaults().Chunk)
-	spec.AnchorID = id
-	spec.AnchorOffset = 0
+	var r Request
+	var spec mail.QuerySpec
+	if id := w.CursorID(); id != "" {
+		r = w.AnchorNeed(id)
+		spec = e.querySpecLocked(0, e.cfg.Window.withDefaults().Chunk)
+		spec.AnchorID = id
+		spec.AnchorOffset = 0
+	} else {
+		var pos, limit int
+		r, pos, limit = w.Seed(0)
+		spec = e.querySpecLocked(pos, limit)
+	}
 	e.mu.Unlock()
 
 	handle, sums, err := e.p.OpenQuery(ctx, spec)

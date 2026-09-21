@@ -23,18 +23,21 @@ type bodyEntry struct {
 	id   mail.ID
 	text string
 	html string
+	atts []mail.Attachment
 }
 
 // put inserts/refreshes an entry, evicting the least recently used beyond
-// capacity.
-func (c *bodyCache) put(id mail.ID, text, html string) {
+// capacity. Attachments travel with the entry so a cache-hit reinstall
+// keeps the attachment strip (FR-E4).
+func (c *bodyCache) put(id mail.ID, text, html string, atts []mail.Attachment) {
 	if el, ok := c.ents[id]; ok {
 		c.ll.MoveToFront(el)
 		el.Value.(*bodyEntry).text = text
 		el.Value.(*bodyEntry).html = html
+		el.Value.(*bodyEntry).atts = atts
 		return
 	}
-	el := c.ll.PushFront(&bodyEntry{id: id, text: text, html: html})
+	el := c.ll.PushFront(&bodyEntry{id: id, text: text, html: html, atts: atts})
 	c.ents[id] = el
 	for c.ll.Len() > c.cap {
 		back := c.ll.Back()
@@ -47,12 +50,12 @@ func (c *bodyCache) put(id mail.ID, text, html string) {
 }
 
 // get returns the cached body and marks it recently used.
-func (c *bodyCache) get(id mail.ID) (text, html string, ok bool) {
+func (c *bodyCache) get(id mail.ID) (text, html string, atts []mail.Attachment, ok bool) {
 	el, ok := c.ents[id]
 	if !ok {
-		return "", "", false
+		return "", "", nil, false
 	}
 	c.ll.MoveToFront(el)
 	e := el.Value.(*bodyEntry)
-	return e.text, e.html, true
+	return e.text, e.html, e.atts, true
 }

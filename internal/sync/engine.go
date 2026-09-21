@@ -340,13 +340,25 @@ func (e *Engine) CursorID() mail.ID {
 }
 
 // Prefetch satisfies any pending edge extension the window wants (FR-D3).
-// It is a no-op when nothing is needed. The window's outstanding
-// bookkeeping coalesces concurrent callers; stale results are discarded.
+// A dirty window (live changes, triage mutations) re-anchors around the
+// cursor id first (FR-B5): absolute positions are stale, so extending
+// before re-anchoring would merge into the wrong shape. The window's
+// outstanding bookkeeping coalesces concurrent callers; stale results are
+// discarded.
 func (e *Engine) Prefetch(ctx context.Context) error {
 	e.mu.Lock()
 	if e.window == nil {
 		e.mu.Unlock()
 		return nil
+	}
+	if e.window.Dirty() {
+		if r, anchor, offset, limit, ok := e.window.ReanchorNeed(); ok {
+			spec := e.querySpecLocked(0, limit)
+			spec.AnchorID = anchor
+			spec.AnchorOffset = offset
+			e.mu.Unlock()
+			return e.completeWindowFetch(ctx, r, spec)
+		}
 	}
 	r, pos, limit, _, ok := e.window.NextNeed()
 	if !ok {
@@ -355,7 +367,12 @@ func (e *Engine) Prefetch(ctx context.Context) error {
 	}
 	spec := e.querySpecLocked(pos, limit)
 	e.mu.Unlock()
+	return e.completeWindowFetch(ctx, r, spec)
+}
 
+// completeWindowFetch runs one window query and installs the result,
+// dropping stale responses silently (mailbox switch mid-flight).
+func (e *Engine) completeWindowFetch(ctx context.Context, r Request, spec mail.QuerySpec) error {
 	handle, sums, err := e.p.OpenQuery(ctx, spec)
 	if err != nil {
 		return err
@@ -363,8 +380,6 @@ func (e *Engine) Prefetch(ctx context.Context) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// A swapped window (mailbox change mid-flight) never matches r, so the
-	// stale result is rejected here (PLAN §4.1).
 	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
 		if err == ErrStaleRequest {
 			return nil // silently drop
@@ -504,10 +519,10 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if id == "" {
 		return nil
 	}
-	if text, _, ok := e.bodies.get(id); ok {
+	if text, _, atts, ok := e.bodies.get(id); ok {
 		e.mu.Lock()
 		e.bodyLoading = ""
-		e.setBodyLocked(id, text, nil)
+		e.setBodyLocked(id, text, atts)
 		e.mu.Unlock()
 		return nil
 	}
@@ -530,7 +545,7 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if text == "" && body.HTML != "" {
 		text = mailtext.HTMLToText(body.HTML)
 	}
-	e.bodies.put(id, text, body.HTML)
+	e.bodies.put(id, text, body.HTML, body.Attachments)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -571,6 +586,9 @@ func (e *Engine) renderedRowsLocked() []Row {
 		sum, ok := e.summaries[id]
 		if !ok {
 			continue // summary not yet arrived; row appears when it does
+		}
+		if op, pending := e.overlay[id]; pending && op.ov.Destroy {
+			continue // pending delayed destroy: hidden until commit/cancel
 		}
 		r := Row{ID: id, Summary: sum}
 		if _, fresh := e.fresh[id]; fresh {
