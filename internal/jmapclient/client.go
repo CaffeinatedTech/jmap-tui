@@ -40,7 +40,10 @@ type Options struct {
 	Username string
 	Password string
 
-	// Timeout is the per-request HTTP timeout; 30s when zero.
+	// Timeout is the per-request HTTP timeout; 30s when zero. EventSource
+	// streams are exempt: http.Client.Timeout bounds the entire body read,
+	// which would kill healthy streams — liveness there is the SSE
+	// watchdog's job (sse.go).
 	Timeout time.Duration
 
 	// Logger receives redacted request logs (method, URL, status,
@@ -51,8 +54,15 @@ type Options struct {
 
 // Client is the JMAP implementation of mail.Provider.
 type Client struct {
-	opts      Options
+	opts Options
+
+	// hc serves request/response calls and carries the per-request Timeout.
+	// streamHC is the EventSource client: no Timeout — http.Client.Timeout
+	// bounds the whole body read, which would kill a healthy SSE stream
+	// mid-flight; liveness there is the watchdog's job (sse.go). Both share
+	// the auth+logging transport.
 	hc        *http.Client
+	streamHC  *http.Client
 	session   *jmap.Session
 	sessionAt string
 	accountID string
@@ -75,6 +85,9 @@ func New(opts Options) *Client {
 		opts: opts,
 		hc: &http.Client{
 			Timeout:   timeout,
+			Transport: transport,
+		},
+		streamHC: &http.Client{
 			Transport: transport,
 		},
 	}

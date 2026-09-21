@@ -158,6 +158,14 @@ func TestLiveStreamDropReconnects(t *testing.T) {
 	srv.DropStreams()
 	waitFor(t, 2*time.Second, func() bool { return srv.StreamCount() == 1 })
 
+	// The drop must surface in the status (FR-I5), then clear the moment
+	// the new stream is pumped — a lingering "push stream lost" on a
+	// healthy stream is exactly the bug users notice.
+	st := e.Snapshot().Status
+	if st.LastError == "" && st.Mode == ModeConnecting && st.Attempts == 0 {
+		t.Fatal("stream drop never surfaced in the status")
+	}
+
 	// The reconnected stream still delivers (FR-B3 recovery).
 	srv.CreateEmails([]mockjmap.Email{freshArrival("e9")})
 	srv.Notify()
@@ -165,9 +173,10 @@ func TestLiveStreamDropReconnects(t *testing.T) {
 		snap := e.Snapshot()
 		return len(snap.Rows) > 0 && snap.Rows[0].Summary.ID == "e9"
 	})
-	if mode := e.Snapshot().Status.Mode; mode != ModePush {
-		t.Fatalf("mode = %q, want push after reconnect", mode)
-	}
+	waitFor(t, 2*time.Second, func() bool {
+		st := e.Snapshot().Status
+		return st.Mode == ModePush && st.LastError == "" && st.Attempts == 0
+	})
 }
 
 func TestLivePollFallbackAndPushUpgrade(t *testing.T) {

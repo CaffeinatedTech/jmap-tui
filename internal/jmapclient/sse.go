@@ -46,7 +46,7 @@ func (c *Client) Subscribe(ctx context.Context) (<-chan mail.Change, func() erro
 	ch := make(chan mail.Change, changeBuffer)
 	es := &eventStream{
 		url:    expandEventSourceURL(c.session.EventSourceURL, defaultPingSeconds),
-		client: c.hc,
+		client: c.streamHC,
 		logger: c.opts.Logger,
 	}
 	go es.listen(streamCtx, ch)

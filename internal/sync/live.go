@@ -88,7 +88,10 @@ func (e *Engine) run(ctx context.Context) {
 				e.mu.Lock()
 				e.status.Attempts = fails
 				e.status.LastError = "push stream lost, reconnecting"
+				e.publishLocked()
 				e.mu.Unlock()
+				// Between streams the footer must not claim "live" (FR-I5).
+				e.setMode(ModeConnecting)
 				if !sleepCtx(ctx, e.backoff(fails)) {
 					return
 				}
@@ -126,6 +129,7 @@ func (e *Engine) backoff(fails int) time.Duration {
 // round-trip, not one per event (FR-K4).
 func (e *Engine) pumpPush(ctx context.Context, ch <-chan mail.Change, stop func() error) (ctxDone bool) {
 	defer func() { _ = stop() }()
+	e.streamUp()
 	for {
 		var change mail.Change
 		select {
@@ -548,6 +552,18 @@ func (e *Engine) fullResync(ctx context.Context) {
 	e.publishLocked()
 }
 
+// streamUp marks a (re)established stream healthy: the previous drop's
+// error is stale the moment a new stream is pumped — without this the
+// footer shows "push stream lost" forever on an idle mailbox that never
+// triggers a reconcile.
+func (e *Engine) streamUp() {
+	e.mu.Lock()
+	e.status.LastError = ""
+	e.status.Attempts = 0
+	e.publishLocked()
+	e.mu.Unlock()
+}
+
 // setMode records a sync-mode transition when it actually changes.
 func (e *Engine) setMode(mode Mode) {
 	e.mu.Lock()
@@ -559,19 +575,23 @@ func (e *Engine) setMode(mode Mode) {
 	e.publishLocked()
 }
 
-// setLastError records a sync failure for the status line (FR-I5).
+// setLastError records a sync failure for the status line (FR-I5) and
+// repaints immediately.
 func (e *Engine) setLastError(err error) {
 	e.mu.Lock()
 	e.status.LastError = truncateStatusErr(err)
+	e.publishLocked()
 	e.mu.Unlock()
 }
 
-// markSynced clears the error state and stamps the last successful pass.
+// markSynced clears the error state, stamps the last successful pass, and
+// repaints so "synced <time>" tracks real reconciles.
 func (e *Engine) markSynced() {
 	e.mu.Lock()
 	e.status.LastSync = time.Now()
 	e.status.LastError = ""
 	e.status.Attempts = 0
+	e.publishLocked()
 	e.mu.Unlock()
 }
 

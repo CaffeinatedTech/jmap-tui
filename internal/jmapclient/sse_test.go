@@ -53,6 +53,46 @@ func newStreamClient(t *testing.T) (*Client, *mockjmap.Server) {
 	return c, srv
 }
 
+// TestSubscribeOutlivesAPITimeout is the regression test for the reported
+// "push stream lost, reconnecting" bug: http.Client.Timeout bounds the
+// entire body read, so sharing the API client killed every healthy stream
+// ~30s after connect. The stream client must ignore that timeout —
+// liveness is the watchdog's job.
+func TestSubscribeOutlivesAPITimeout(t *testing.T) {
+	srv := mockjmap.New("tester@example.com", "correct-horse", []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0},
+	})
+	t.Cleanup(srv.Close)
+	c := New(Options{
+		ServerURL: srv.URL(),
+		Username:  "tester@example.com",
+		Password:  "correct-horse",
+		Timeout:   150 * time.Millisecond, // kills API calls, not streams
+	})
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	ch, stop := c.Subscribe(ctx)
+	if ch == nil {
+		t.Fatal("no stream")
+	}
+	defer func() { _ = stop() }()
+
+	// Far past the API timeout: the stream must still deliver.
+	time.Sleep(700 * time.Millisecond)
+	srv.Notify()
+	select {
+	case _, ok := <-ch:
+		if !ok {
+			t.Fatal("stream died before its time — API Timeout leaked into SSE")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("healthy stream received nothing after the API timeout window")
+	}
+}
+
 func TestSubscribeReceivesStateChange(t *testing.T) {
 	c, srv := newStreamClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
