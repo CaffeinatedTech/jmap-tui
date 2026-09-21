@@ -1,0 +1,10 @@
+root = true
+
+[*.go]
+indent_style = tab
+insert_final_newline = true
+
+[*.{md,yml,yaml,toml}]
+indent_style = space
+indent_size = 2
+insert_final_newline = true

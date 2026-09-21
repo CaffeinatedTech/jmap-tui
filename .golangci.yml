@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: error-strings
+        - name: error-return
+        - name: indent-error-flow
+        - name: var-naming
+
+formatters:
+  enable:
+    - gofumpt

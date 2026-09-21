@@ -47,7 +47,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **UI stack:** Bubble Tea v2, Lipgloss v2, Bubbles v2 (`charm.land/*`).
 - **JMAP stack:** `git.sr.ht/~rockorager/go-jmap` as the protocol base (core + mail + push packages); a thin in-repo `jmapclient` layer wraps it. If go-jmap proves inadequate, replace the wrapper, not the app — UI and sync layers must not import go-jmap types directly.
 - **Specs to honour:** RFC 8620 (core, incl. §7.3 EventSource push), RFC 8621 (Mail), RFC 8887 (WebSocket, optional transport), RFC 9291 (Sieve, display-later), RFC 9425 (quota, display-later), RFC 9007 (MDN), vacation-response capability (`urn:ietf:params:jmap:vacationresponse`).
-- **Primary test server:** the user's live **Stalwart** instance (test credentials supplied per-environment; see AGENTS.md). Secondary: **Fastmail**. CI uses a local Stalwart in Docker.
+- **Primary test server:** the user's live **Stalwart** instance (test credentials supplied per-environment; see AGENTS.md). Secondary: **Fastmail**. No local/docker test server.
 - **Platform targets:** Linux, macOS, BSD; Windows best-effort.
 
 ---
@@ -133,7 +133,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 ## FR-J — Configuration & credentials
 
 - **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app.
-- **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless/CI. Plaintext-in-config is a config-error, not a fallback.
+- **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless use. Plaintext-in-config is a config-error, not a fallback.
 - **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors.
 
 ## FR-K — Reliability, safety, observability
@@ -160,7 +160,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## 7. Acceptance criteria (per milestone gate)
 
-- **M0** — connects to the live Stalwart account, dumps session + mailbox tree in a CLI smoke command; CI green.
+- **M0** — connects to the live Stalwart account, dumps session + mailbox tree in a CLI smoke command; local gate green (build, vet, lint, test).
 - **M1** — daily-drivable *reader*: browse mailboxes, endless scroll a 10k+ message folder smoothly (bounded RSS verified), read messages incl. HTML→text, threads expand. Golden tests pass.
 - **M2** — with the client open, mail sent to the account appears/flags change/counts update within ~1 s, without any manual refresh; kill the push stream and it recovers.
 - **M3** — full triage workflow (select → read → star → archive → delete → undo) is smooth; server state verified to match via independent JMAP client.

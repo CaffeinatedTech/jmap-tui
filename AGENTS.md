@@ -37,10 +37,9 @@ go test ./internal/sync/ -run TestWindow -v   # window manager tests (the import
 golangci-lint run                 # lint
 gofumpt -l -w .                   # format
 go run ./cmd/jmap-tui --version   # smoke
-docker compose -f deploy/docker-compose.yml up -d   # local Stalwart for integration
 ```
 
-CI must pass: build, vet, lint, test (unit+golden), and integration against the dockerized Stalwart.
+There is no CI and no local/docker Stalwart. Gates run locally before every commit: build, vet, lint, gofumpt, test (unit+mockjmap+golden). Live-server integration runs against the user's live Stalwart via `JMAP_TUI_TEST_*` env creds, locally or agent-run only; tests skip when the env is unset.
 
 ## Testing rules
 
@@ -48,7 +47,7 @@ CI must pass: build, vet, lint, test (unit+golden), and integration against the 
 - UI changes ship with golden files at the three standard sizes × dark/light (PLAN §8). Regenerate deliberately (`-update` flag) and review the diff like code.
 - The window manager (PLAN §4.1) is the most-tested code in the repo. Table-driven: extend, trim, re-anchor, destroyed-cursor, `cannotCalculateChanges`, live rearrangement preserving position.
 - Live-server integration tests read creds from env: `JMAP_TUI_TEST_URL`, `JMAP_TUI_TEST_USER`, `JMAP_TUI_TEST_PASSWORD`. **Unset env ⇒ tests skip. Never hardcode, never commit, never echo.**
-- Soak test (RSS bound) runs in CI on PRs touching `sync/`.
+- Soak test (RSS bound) runs on PRs touching `sync/` (agent-run, pre-commit).
 
 ## Live Stalwart test account — rules of engagement
 

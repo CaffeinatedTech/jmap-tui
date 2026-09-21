@@ -45,9 +45,8 @@ jmap-tui/
 ├── test/
 │   ├── mockjmap/            # in-process fake JMAP server (httptest)
 │   └── golden/              # bubbletea golden files
-├── deploy/docker-compose.yml  # Stalwart for CI/local integration
 ├── README.md · REQUIREMENTS.md · PLAN.md · AGENTS.md · LICENSE
-└── .github/workflows/ci.yml
+└── (no CI — gates run locally before commit)
 ```
 
 **Dependency rule:** `ui` and `app` may import `sync` and `mail` only. `sync` may import `jmapclient` and `mail`. Nothing above `jmapclient` imports `go-jmap` — that is the swap point if the library disappoints.
@@ -142,7 +141,7 @@ Each milestone is a gate (acceptance criteria in REQUIREMENTS §7). Rough effort
 
 | # | Scope | Key deliverables |
 |---|---|---|
-| **M0** | Scaffold & spike | Repo, CI, module layout, config+keyring, `jmapclient` wrapper, smoke CLI: connect to Stalwart test account, dump session/mailboxes. `mail.Provider` interface defined. mockjmap server v0. |
+| **M0** | Scaffold & spike | Repo, module layout, config+keyring, `jmapclient` wrapper, smoke CLI: connect to Stalwart test account, dump session/mailboxes. `mail.Provider` interface defined. mockjmap server v0. **Landed 2026-09-21: smoke verified against live Stalwart (session, 16 capabilities, mailbox tree with roles); config/keyring/jmapclient tested via mockjmap; live integration is env-gated; no CI, no docker — gates run locally pre-commit.** |
 | **M1** | Reader | Sidebar tree, rolling-window list (4.1), preview + HTML→text, threads expand, single-pane/two-pane responsive, help overlay. **This is the make-or-break milestone.** |
 | **M2** | Live sync | EventSource + `/changes` engine, optimistic-overlay plumbing, status line, reconnect/poll fallback, mailbox counts live. |
 | **M3** | Triage | Flags/read/star/move/copy/delete, multi-select batched `/set`, archive, undo toasts, crash-safe terminal restore. |
@@ -167,6 +166,8 @@ Sequencing rule: M1 lands before M2 (window math must exist to be sync'd), M3 ma
 | Quota (RFC 9425) | ✔ | ✔ | hide feature |
 | `collapseThreads` in query | ✔ | ✔ | client-side group |
 
+M0 live-Stalwart observations: `eventSourceUrl` and the `websocket` capability are both advertised — push (M2) and WS fallback paths look available. `blob`, `sieve`, `quota`, `submission`, `vacationresponse` capabilities also present. Not yet exercised: `collapseThreads`, EmailSubmission undo window.
+
 Fill `?` cells during M2/M7 verification; new servers get a row here + integration config.
 
 ## 8. Testing strategy
@@ -174,8 +175,8 @@ Fill `?` cells during M2/M7 verification; new servers get a row here + integrati
 - **Unit:** window manager (extension, trim, re-anchor, position preservation — table-driven, the most-tested code in the repo), change reconciliation, config, keyring fallbacks.
 - **mockjmap:** deterministic in-process JMAP server (httptest) with scriptable event injection — drives sync engine tests without network.
 - **Golden tests:** bubbletea v2 golden files for list/preview/compose/modals at 3 terminal sizes (120×40, 100×35, 60×25) × dark/light.
-- **Integration:** docker-compose Stalwart (CI); live Stalwart test account via env creds only (AGENTS.md rules), tests skip when unset.
-- **Soak:** script that runs 10 minutes of synthetic push events while scrolling — asserts RSS bound (NFR-2).
+- **Integration:** live Stalwart test account via env creds only (AGENTS.md rules), run locally or agent-side; tests skip when unset. No local/docker Stalwart — the user's live server is the only integration target.
+- **Soak:** script that runs 10 minutes of synthetic push events while scrolling — asserts RSS bound (NFR-2). Runs agent-side before commits touching `sync/`.
 
 ## 9. Risks & mitigations
 
@@ -191,4 +192,4 @@ Fill `?` cells during M2/M7 verification; new servers get a row here + integrati
 
 ## 10. Definition of done (v0.1)
 
-REQUIREMENTS §7 gates all pass on both Stalwart (live + docker) and Fastmail; NFR-1/2 verified with numbers in the PR; docs (README, degradation matrix, keymap) updated; goreleaser artifacts; tag v0.1.0.
+REQUIREMENTS §7 gates all pass on both Stalwart (live) and Fastmail; NFR-1/2 verified with numbers in the PR; docs (README, degradation matrix, keymap) updated; goreleaser artifacts; tag v0.1.0.
