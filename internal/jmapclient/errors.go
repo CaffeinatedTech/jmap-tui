@@ -17,6 +17,9 @@ var ErrNoServerURL = errors.New("no server URL configured")
 // ErrUnimplemented marks provider methods whose milestone has not landed.
 var ErrUnimplemented = errors.New("jmapclient: method not implemented in this milestone")
 
+// ErrNotFound wraps a server notFound response for a requested object id.
+var ErrNotFound = errors.New("object not found on server")
+
 // ServerError is a non-2xx HTTP response from the server that is not an auth
 // failure. Detail holds the (possibly empty) response body; it never
 // contains credentials.

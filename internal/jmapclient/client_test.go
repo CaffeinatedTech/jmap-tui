@@ -113,20 +113,14 @@ func TestMailboxesBeforeConnect(t *testing.T) {
 func TestUnimplementedMethodsAreTyped(t *testing.T) {
 	c, _ := newTestClient(t, testPassword)
 	ctx := context.Background()
-	if _, err := c.OpenQuery(ctx, mail.QuerySpec{}); !errors.Is(err, ErrUnimplemented) {
-		t.Errorf("OpenQuery err = %v", err)
-	}
-	if _, err := c.FetchSummaries(ctx, nil); !errors.Is(err, ErrUnimplemented) {
-		t.Errorf("FetchSummaries err = %v", err)
-	}
-	if _, err := c.FetchBody(ctx, "x"); !errors.Is(err, ErrUnimplemented) {
-		t.Errorf("FetchBody err = %v", err)
-	}
 	if err := c.Mutate(ctx, mail.Mutation{}); !errors.Is(err, ErrUnimplemented) {
 		t.Errorf("Mutate err = %v", err)
 	}
 	if _, err := c.Send(ctx, mail.Draft{}); !errors.Is(err, ErrUnimplemented) {
 		t.Errorf("Send err = %v", err)
+	}
+	if _, stop := c.Subscribe(ctx); stop == nil {
+		t.Error("Subscribe stop func = nil")
 	}
 }
 

@@ -195,30 +195,42 @@ func (c *Client) Mailboxes(ctx context.Context) ([]mail.Mailbox, error) {
 }
 
 // do performs one batched request carrying the single method m and returns
-// its response invocation. Batched multi-call requests arrive with the sync
-// engine (FR-K4); callers here need one call each.
+// its response invocation.
 func (c *Client) do(ctx context.Context, m jmap.Method) (*jmap.Invocation, error) {
 	req := &jmap.Request{Context: ctx}
 	callID := req.Invoke(m)
 
+	invs, err := c.runBatch(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	inv, ok := invs[callID]
+	if !ok {
+		return nil, fmt.Errorf("jmapclient: no response for %s call %q", m.Name(), callID)
+	}
+	return inv, nil
+}
+
+// runBatch posts one JMAP request and indexes its response invocations by
+// call id. An "error" invocation fails the whole batch with a
+// MethodCallError naming the offending call (FR-K4: batched round-trips).
+func (c *Client) runBatch(ctx context.Context, req *jmap.Request) (map[string]*jmap.Invocation, error) {
 	resp, err := c.post(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	out := make(map[string]*jmap.Invocation, len(resp.Responses))
 	for _, inv := range resp.Responses {
-		if inv.CallID != callID {
-			continue
-		}
 		if inv.Name == "error" {
 			me, ok := inv.Args.(*jmap.MethodError)
 			if !ok {
 				return nil, fmt.Errorf("jmapclient: server returned error invocation with args %T", inv.Args)
 			}
-			return nil, &MethodCallError{Type: me.Type, Description: deref(me.Description)}
+			return nil, fmt.Errorf("jmapclient: call %s: %w", inv.CallID, &MethodCallError{Type: me.Type, Description: deref(me.Description)})
 		}
-		return inv, nil
+		out[inv.CallID] = inv
 	}
-	return nil, fmt.Errorf("jmapclient: no response for %s call %q", m.Name(), callID)
+	return out, nil
 }
 
 // post is the JMAP API transport: one HTTP round-trip carrying the request,

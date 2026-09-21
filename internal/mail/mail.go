@@ -49,6 +49,12 @@ type Address struct {
 // Keywords is a presence set of IMAP-style flags ($seen, $flagged, …).
 type Keywords map[string]struct{}
 
+// Has reports whether the named keyword is present.
+func (k Keywords) Has(name string) bool {
+	_, ok := k[name]
+	return ok
+}
+
 // EmailSummary is the small property set held for every message in a rolling
 // window. Bodies are fetched lazily and never stored here.
 type EmailSummary struct {
@@ -90,23 +96,39 @@ type SortCriterion struct {
 	IsDescending bool
 }
 
-// QuerySpec describes an open server-side query. The window manager (PLAN
-// §4.1) pages through the resulting handle; the provider owns all offsets.
+// QuerySpec describes one page of an open server-side query. OpenQuery
+// issues the first page (Position/Limit); the window manager (PLAN §4.1)
+// calls QueryHandle.Page for extensions at absolute positions.
 type QuerySpec struct {
+	// MailboxID scopes the query to a mailbox (inMailbox).
 	MailboxID ID
-	Sort      []SortCriterion
-	Position  int
-	Limit     int
+
+	// ThreadID scopes the query to a thread (inThread); it overrides
+	// MailboxID when non-empty.
+	ThreadID ID
+
+	// CollapseThreads asks the server to collapse thread members into
+	// their representative (collapseThreads=true, FR-D2).
+	CollapseThreads bool
+
+	// Sort orders the result server-side. Empty means receivedAt
+	// descending.
+	Sort []SortCriterion
+
+	// Position and Limit define the first page: absolute offset into the
+	// (collapsed) result set and page size.
+	Position int
+	Limit    int
 }
 
-// QueryHandle is a paged stream of ids from an open query. IDs returns the
-// currently materialised slice (a prefix of the full result); Page fetches
-// another chunk at an absolute position for window extension.
+// QueryHandle is a paged stream of ids from an open query. Page fetches
+// another chunk at an absolute position for window extension; summaries
+// travel with every page so each extension costs one round-trip (FR-K4).
 type QueryHandle interface {
 	IDs() []ID
 	Total() int
 	State() string // queryState for mismatch detection (FR-B5)
-	Page(ctx context.Context, position, limit int) ([]ID, error)
+	Page(ctx context.Context, position, limit int) ([]ID, []EmailSummary, error)
 }
 
 // Mutation describes a pending change to server objects. Its shape is
@@ -133,8 +155,9 @@ type Provider interface {
 	// Mailboxes returns the full mailbox tree, flat, in server sort order.
 	Mailboxes(ctx context.Context) ([]Mailbox, error)
 
-	// OpenQuery opens a server-side query and returns a paged id stream.
-	OpenQuery(ctx context.Context, spec QuerySpec) (QueryHandle, error)
+	// OpenQuery opens a server-side query and returns a paged id stream
+	// plus the summaries for the first page (batched by the provider).
+	OpenQuery(ctx context.Context, spec QuerySpec) (QueryHandle, []EmailSummary, error)
 
 	// FetchSummaries fetches list-window summaries for the given ids.
 	FetchSummaries(ctx context.Context, ids []ID) ([]EmailSummary, error)

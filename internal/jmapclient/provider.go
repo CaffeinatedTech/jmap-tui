@@ -12,21 +12,6 @@ import (
 // documented error keeps the interface assertion honest without inventing
 // half-protocols early.
 
-// OpenQuery implements mail.Provider; the rolling window (M1) drives it.
-func (c *Client) OpenQuery(ctx context.Context, spec mail.QuerySpec) (mail.QueryHandle, error) {
-	return nil, fmt.Errorf("jmapclient: OpenQuery: %w (lands in M1)", ErrUnimplemented)
-}
-
-// FetchSummaries implements mail.Provider; the list window (M1) drives it.
-func (c *Client) FetchSummaries(ctx context.Context, ids []mail.ID) ([]mail.EmailSummary, error) {
-	return nil, fmt.Errorf("jmapclient: FetchSummaries: %w (lands in M1)", ErrUnimplemented)
-}
-
-// FetchBody implements mail.Provider; the preview pane (M1) drives it.
-func (c *Client) FetchBody(ctx context.Context, id mail.ID) (mail.EmailBody, error) {
-	return mail.EmailBody{}, fmt.Errorf("jmapclient: FetchBody: %w (lands in M1)", ErrUnimplemented)
-}
-
 // Mutate implements mail.Provider; triage actions (M3) drive it.
 func (c *Client) Mutate(ctx context.Context, mutation mail.Mutation) error {
 	return fmt.Errorf("jmapclient: Mutate: %w (lands in M3)", ErrUnimplemented)

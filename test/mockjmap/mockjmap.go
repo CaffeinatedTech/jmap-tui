@@ -32,8 +32,11 @@ type Server struct {
 	username string
 	password string
 
-	mu        sync.Mutex
-	mailboxes []Mailbox
+	mu           sync.Mutex
+	mailboxes    []Mailbox
+	emails       []Email
+	synthetic    *SyntheticMailbox
+	emailVersion int
 }
 
 // New starts the server and returns it. Close must be called when done.
@@ -167,19 +170,36 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	mbs := append([]Mailbox(nil), s.mailboxes...)
+	snap := &emailSnapshot{
+		emails:    append([]Email(nil), s.emails...),
+		synthetic: s.synthetic,
+		version:   s.emailVersion,
+	}
 	s.mu.Unlock()
 
 	resp := &apiResponse{}
+	// results indexes each call's response map so later calls in the same
+	// request can resolve "#ids"-style back-references (RFC 8620 §3.7).
+	results := map[string]map[string]any{}
 	for _, call := range req.MethodCalls {
+		var args any
 		switch call.Name {
 		case "Mailbox/query":
-			resp.add(call.Name, call.CallID, mailboxQueryResponse(mbs))
+			args = mailboxQueryResponse(mbs)
 		case "Mailbox/get":
-			resp.add(call.Name, call.CallID, mailboxGetResponse(mbs, call.Args))
+			args = mailboxGetResponse(mbs, call.Args)
+		case "Email/query":
+			args = emailQueryResponse(snap, call.Args)
+		case "Email/get":
+			args = emailGetResponse(snap, call.Args, results)
 		default:
-			resp.add("error", call.CallID, map[string]any{
-				"type": "unknownMethod",
-			})
+			args = map[string]any{"type": "unknownMethod"}
+			resp.add("error", call.CallID, args)
+			continue
+		}
+		resp.add(call.Name, call.CallID, args)
+		if m, ok := args.(map[string]any); ok {
+			results[call.CallID] = m
 		}
 	}
 	resp.SessionState = "ses-1"
