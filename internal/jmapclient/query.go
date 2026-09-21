@@ -40,11 +40,13 @@ type queryHandle struct {
 	c     *Client
 	spec  mail.QuerySpec
 	ids   []mail.ID
+	start int // absolute position of the current page
 	total int
 	state string
 }
 
 func (h *queryHandle) IDs() []mail.ID { return h.ids }
+func (h *queryHandle) Start() int     { return h.start }
 func (h *queryHandle) Total() int     { return h.total }
 func (h *queryHandle) State() string  { return h.state }
 
@@ -124,6 +126,7 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 	}
 
 	h.ids = convertIDs(qr.IDs)
+	h.start = position
 	h.total = int(qr.Total)
 	h.state = qr.QueryState
 	return convertSummaries(gr.List), nil

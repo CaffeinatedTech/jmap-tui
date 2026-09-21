@@ -126,6 +126,8 @@ type QuerySpec struct {
 // travel with every page so each extension costs one round-trip (FR-K4).
 type QueryHandle interface {
 	IDs() []ID
+	// Start is the absolute position of IDs()[0] in the full result set.
+	Start() int
 	Total() int
 	State() string // queryState for mismatch detection (FR-B5)
 	Page(ctx context.Context, position, limit int) ([]ID, []EmailSummary, error)

@@ -29,7 +29,8 @@ type Query struct {
 
 // WindowConfig bounds a rolling window (FR-D3). Zero fields fall back to
 // defaults: 50-row chunks, a 2,000-row cap, prefetch when the cursor is
-// within 10 rows of a materialised edge.
+// within 10 rows of a materialised edge. (A 0 PrefetchAt cannot express
+// "never prefetch"; set 1 to prefetch only from the edge row itself.)
 type WindowConfig struct {
 	Chunk      int
 	Cap        int
@@ -50,8 +51,8 @@ func (c WindowConfig) withDefaults() WindowConfig {
 	if c.Cap <= 0 {
 		c.Cap = DefaultCap
 	}
-	if c.PrefetchAt < 0 {
-		c.PrefetchAt = 0
+	if c.PrefetchAt <= 0 {
+		c.PrefetchAt = DefaultPrefetchAt
 	}
 	return c
 }
