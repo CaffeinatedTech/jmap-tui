@@ -75,7 +75,7 @@ func shownPanes(w int, st State) (sidebar, list, preview bool) {
 func ComputeLayout(w, h int, st State) Layout {
 	var l Layout
 	sidebar, list, preview := shownPanes(w, st)
-	contentH := h - 1 // header line
+	contentH := h - 2 // header + status footer (FR-I5)
 	if st.HelpOpen {
 		return Layout{}
 	}
@@ -138,10 +138,71 @@ func Render(w, h int, st State) string {
 		panes = append(panes, renderPreview(l, contentHeight(h, st), st))
 	}
 	b.WriteString(joinPanes(panes, st.Theme))
+	b.WriteString("\n")
+	b.WriteString(renderFooter(w, st))
 	return b.String()
 }
 
-func contentHeight(h int, st State) int { return h - 1 }
+func contentHeight(h int, st State) int { return h - 2 }
+
+// renderFooter draws the status line (FR-I5): connection state, last-sync
+// time, sync errors, and the active mailbox's counts.
+func renderFooter(w int, st State) string {
+	th := st.Theme
+	stt := st.Snap.Status
+
+	var mode string
+	var modeStyle lipgloss.Style
+	switch stt.Mode {
+	case sync.ModePush:
+		mode, modeStyle = "live", th.Success
+	case sync.ModePoll:
+		mode, modeStyle = "polling", th.Muted
+	default:
+		mode, modeStyle = "connecting…", th.Muted
+	}
+	parts := []string{modeStyle.Render(mode)}
+
+	if !stt.LastSync.IsZero() {
+		parts = append(parts, th.Muted.Render("synced "+stt.LastSync.Format("15:04:05")))
+	}
+	if stt.Attempts > 1 {
+		parts = append(parts, th.Muted.Render(fmtInt(stt.Attempts)+" retries"))
+	}
+	if name := activeMailboxName(st); name != "" {
+		counts := activeMailboxCounts(st)
+		parts = append(parts, th.Muted.Render(name+" "+counts))
+	}
+	if st.Snap.NewAbove {
+		parts = append(parts, th.Accent.Render("↑ new mail"))
+	}
+	line := strings.Join(parts, "  ")
+
+	// A sync error is the one footer element that must never truncate away.
+	if stt.LastError != "" {
+		budget := max(w-lipgloss.Width(line)-2, 0)
+		errLine := th.Danger.Render(truncate(stt.LastError, budget))
+		pad := w - lipgloss.Width(line) - lipgloss.Width(errLine)
+		if pad > 0 {
+			return line + strings.Repeat(" ", pad) + errLine
+		}
+		return errLine
+	}
+	return truncate(line, w)
+}
+
+// activeMailboxCounts renders "N unread · M total" for the open mailbox.
+func activeMailboxCounts(st State) string {
+	for _, mb := range st.Snap.Mailboxes {
+		if mb.Mailbox.ID == st.Snap.ActiveMailbox {
+			if mb.Mailbox.UnreadEmails > 0 {
+				return fmtInt(mb.Mailbox.UnreadEmails) + " unread · " + fmtInt(mb.Mailbox.TotalEmails)
+			}
+			return fmtInt(mb.Mailbox.TotalEmails) + " total"
+		}
+	}
+	return ""
+}
 
 // joinPanes composes panes side by side with a hairline rule between them.
 // Panes are equal-height blocks; shorter panes keep blank rows.

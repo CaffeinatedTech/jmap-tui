@@ -83,12 +83,16 @@ func TestMailboxes(t *testing.T) {
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	mbs, err := c.Mailboxes(ctx)
+	list, err := c.Mailboxes(ctx)
 	if err != nil {
 		t.Fatalf("Mailboxes: %v", err)
 	}
+	mbs := list.Mailboxes
 	if len(mbs) != 3 {
 		t.Fatalf("got %d mailboxes, want 3", len(mbs))
+	}
+	if list.State == "" {
+		t.Error("MailboxList.State empty; Mailbox/changes needs a bootstrap state (FR-B5)")
 	}
 	// Server sort order (sortOrder asc) must survive conversion.
 	if mbs[0].ID != "mb-inbox" || mbs[1].ID != "mb-archive" || mbs[2].ID != "mb-agent" {
@@ -119,7 +123,15 @@ func TestUnimplementedMethodsAreTyped(t *testing.T) {
 	if _, err := c.Send(ctx, mail.Draft{}); !errors.Is(err, ErrUnimplemented) {
 		t.Errorf("Send err = %v", err)
 	}
-	if _, stop := c.Subscribe(ctx); stop == nil {
+}
+
+func TestSubscribeBeforeConnect(t *testing.T) {
+	c := New(Options{})
+	ch, stop := c.Subscribe(context.Background())
+	if ch != nil {
+		t.Error("Subscribe before Connect must report no push support (nil channel)")
+	}
+	if stop == nil {
 		t.Error("Subscribe stop func = nil")
 	}
 }

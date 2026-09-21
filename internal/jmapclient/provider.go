@@ -21,8 +21,3 @@ func (c *Client) Mutate(ctx context.Context, mutation mail.Mutation) error {
 func (c *Client) Send(ctx context.Context, draft mail.Draft) (mail.SendReceipt, error) {
 	return mail.SendReceipt{}, fmt.Errorf("jmapclient: Send: %w (lands in M5)", ErrUnimplemented)
 }
-
-// Subscribe implements mail.Provider; the live sync engine (M2) drives it.
-func (c *Client) Subscribe(ctx context.Context) (<-chan mail.Change, func() error) {
-	return nil, func() error { return fmt.Errorf("jmapclient: Subscribe: %w (lands in M2)", ErrUnimplemented) }
-}

@@ -98,6 +98,17 @@ type Window struct {
 	next        Request // monotonic request counter
 	outstanding Request // most recent issued request; 0 = none
 	pending     pendingKind
+
+	// dirty records that live changes mutated the window (or the server
+	// reported an unseen queryState), so the materialised positions are
+	// stale relative to the server's result set. The next extension is
+	// replaced by a cursor-anchored re-query (FR-B5, FR-D5).
+	dirty bool
+
+	// newAbove records that fresh mail arrived above a window that is
+	// scrolled away from position 0: it cannot slide in, so the UI shows a
+	// hint until the next replace brings the window honest again.
+	newAbove bool
 }
 
 // pendingKind records what the outstanding request will do on Complete:
@@ -169,7 +180,9 @@ func (w *Window) SettleJump(t JumpTarget) {
 // including when a fetch is already outstanding (one outstanding query per
 // window; the engine coalesces and debounces).
 func (w *Window) NextNeed() (r Request, position, limit, dir int, ok bool) {
-	if w.outstanding != 0 || len(w.ids) == 0 || w.total < 0 {
+	// A dirty window re-anchors before it extends: the engine drives that
+	// via ReanchorNeed (FR-B5).
+	if w.outstanding != 0 || w.dirty || len(w.ids) == 0 || w.total < 0 {
 		return 0, 0, 0, 0, false
 	}
 	moreForward := w.start+len(w.ids) < w.total
@@ -215,8 +228,17 @@ func (w *Window) Complete(r Request, position int, ids []mail.ID, total int, que
 	if total < 0 {
 		total = w.total
 	}
+	if w.queryState != "" && queryState != w.queryState && !w.pending.replace {
+		// The server's result set shifted under an extension (FR-B5):
+		// the ids still merge, but positions are suspect — re-anchor on
+		// the next need instead of guessing. Set after the reset below so
+		// the flag survives this Complete.
+		defer func() { w.dirty = true }()
+	}
 	w.total = total
 	w.queryState = queryState
+	w.dirty = false
+	w.newAbove = false
 
 	if len(ids) == 0 {
 		return nil
@@ -384,4 +406,114 @@ func (w *Window) AtEdge() (forward, backward bool) {
 	forward = len(w.ids)-1-w.cursor < w.cfg.PrefetchAt && w.start+len(w.ids) < w.total
 	backward = w.cursor < w.cfg.PrefetchAt && w.start > 0
 	return forward, backward
+}
+
+// --- live-change patching (M2, PLAN §4.1 case 1/3) ---
+
+// invalidate marks the window dirty after a live patch and discards any
+// in-flight fetch: its absolute positions predate the mutation, so its
+// result would merge into the wrong shape. The next extension is a
+// cursor-anchored re-query instead.
+func (w *Window) invalidate() {
+	w.dirty = true
+	w.next++
+	w.outstanding = 0
+}
+
+// Dirty reports whether live changes have mutated the window since the last
+// server-complete result (the engine re-anchors before extending).
+func (w *Window) Dirty() bool { return w.dirty }
+
+// NewAbove reports that fresh mail arrived above a window scrolled away
+// from position 0 (a UI hint until the next re-anchor).
+func (w *Window) NewAbove() bool { return w.newAbove }
+
+// RemoveIDs drops the given ids from the materialised window (live
+// destroys, PLAN §4.1 case 1) and returns how many rows went. Total shrinks
+// by that count; the cursor re-derives onto its neighbour when its own id
+// was destroyed, preserving the reading position by id (FR-D5).
+func (w *Window) RemoveIDs(ids []mail.ID) int {
+	if len(ids) == 0 || len(w.ids) == 0 {
+		return 0
+	}
+	gone := make(map[mail.ID]bool, len(ids))
+	for _, id := range ids {
+		gone[id] = true
+	}
+	kept := w.ids[:0]
+	removed := 0
+	for _, id := range w.ids {
+		if gone[id] {
+			removed++
+			continue
+		}
+		kept = append(kept, id)
+	}
+	if removed == 0 {
+		return 0
+	}
+	w.ids = kept
+	if w.total >= removed {
+		w.total -= removed
+	}
+	w.invalidate()
+	w.rederiveCursor()
+	return removed
+}
+
+// InsertTop slides a fresh id in at the top of the result when the window
+// sits at position 0 — the inbox-like, sorted-by-date-desc case (PLAN §4.1
+// case 3). It reports false when the window is scrolled deeper and the id
+// cannot slide in (the caller falls back to the new-above hint).
+func (w *Window) InsertTop(id mail.ID) bool {
+	if w.start != 0 {
+		w.newAbove = true
+		w.invalidate()
+		return false
+	}
+	w.ids = append([]mail.ID{id}, w.ids...)
+	if w.total >= 0 {
+		w.total++
+	}
+	// The cursor id now sits one row deeper; rederive keeps the user on
+	// the same message (FR-D5) or clamps safely on an empty window.
+	w.invalidate()
+	w.trim()
+	w.rederiveCursor()
+	return true
+}
+
+// MarkNewAbove records the new-above hint without inserting (window scrolled
+// away from the top when live mail arrived).
+func (w *Window) MarkNewAbove() {
+	if !w.newAbove {
+		w.newAbove = true
+		w.invalidate()
+	}
+}
+
+// ReanchorNeed issues the replace request that re-syncs a dirty window
+// around the cursor id (FR-B5, PLAN §4.1 case 2): the engine sends
+// Email/query with anchor=cursorID and anchorOffset=offset, so the fresh
+// chunk begins where the old window began and the cursor lands on the same
+// message regardless of how absolute positions shifted. ok=false when a
+// fetch is already outstanding or nothing is materialised.
+func (w *Window) ReanchorNeed() (r Request, anchor mail.ID, offset, limit int, ok bool) {
+	if w.outstanding != 0 || len(w.ids) == 0 || w.cursorID == "" {
+		return 0, "", 0, 0, false
+	}
+	limit = w.cfg.Chunk
+	offset = -w.cursor
+	r, _, _ = w.issue(0, limit, true, 0)
+	return r, w.cursorID, offset, limit, true
+}
+
+// AnchorNeed issues a replace request anchored at an arbitrary id — the
+// full re-query path for cannotCalculateChanges (PLAN §4.1 case 2), where
+// the cursor id is the only honest position left.
+func (w *Window) AnchorNeed(id mail.ID) Request {
+	w.next++
+	w.outstanding = w.next
+	w.pending = pendingKind{replace: true}
+	return w.next
 }

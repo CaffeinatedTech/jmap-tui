@@ -105,7 +105,7 @@ func runSmoke(args []string) error {
 	if err != nil {
 		return fmt.Errorf("smoke: mailboxes: %w", err)
 	}
-	printMailboxTree(mailboxes)
+	printMailboxTree(mailboxes.Mailboxes)
 	return nil
 }
 

@@ -36,7 +36,7 @@ func fixtureSnapshot() sync.Snapshot {
 		}
 	}
 	rows := []sync.Row{
-		{ID: "e4", Summary: sum("e4", "t4", "Dana Ops", "Deploy pipeline is green", now.Add(-35*time.Minute), "$seen", "$flagged")},
+		{ID: "e4", Summary: sum("e4", "t4", "Dana Ops", "Deploy pipeline is green", now.Add(-35*time.Minute), "$seen", "$flagged"), Fresh: true},
 		{ID: "e3", Summary: sum("e3", "t3", "Eve Security", "Quarterly audit report attached", now.Add(-3*time.Hour), "$seen", "$answered")},
 		{ID: "e2", Summary: sum("e2", "t1", "Bob Thread", "Re: planning sync", now.Add(-26*time.Hour), "$seen")},
 		{ID: "e1", Summary: sum("e1", "t1", "Alice Root", "planning sync", now.Add(-27*time.Hour))},
@@ -59,6 +59,11 @@ func fixtureSnapshot() sync.Snapshot {
 		Start:         0,
 		ActiveMailbox: "mb-inbox",
 		LoadForward:   true,
+		Fresh:         []mail.ID{"e4"},
+		Status: sync.Status{
+			Mode:     sync.ModePush,
+			LastSync: now,
+		},
 		Body: &sync.BodyView{
 			ID:   "e3",
 			Text: "Hello,\n\nFind the quarterly audit report attached.\n\nRegards,\nEve",
@@ -117,6 +122,26 @@ func goldenFrames() []frame {
 			st.Snap = sync.Snapshot{Total: -1}
 			return st
 		}},
+		{name: "status-polling", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Snap.Status = sync.Status{Mode: sync.ModePoll, LastSync: fixtureTime}
+			return st
+		}},
+		{name: "status-error", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Snap.Status = sync.Status{
+				Mode:      sync.ModePoll,
+				LastSync:  fixtureTime,
+				LastError: "push stream lost, reconnecting",
+				Attempts:  3,
+			}
+			return st
+		}},
+		{name: "new-above-hint", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Snap.NewAbove = true
+			return st
+		}},
 		{name: "help", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.HelpOpen = true
@@ -132,6 +157,7 @@ var (
 	sidebarOn      = true
 	showSize       = false
 	vpBody         = "Hello,\n\nFind the quarterly audit report attached.\n\nRegards,\nEve"
+	fixtureTime    = time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 	testKeyMap, _  = NewKeyMap(nil)
 )
 

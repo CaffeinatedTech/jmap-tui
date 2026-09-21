@@ -159,10 +159,11 @@ func (c *Client) SessionInfo() (SessionInfo, error) {
 	return info, nil
 }
 
-// Mailboxes returns the full mailbox list in server sort order (FR-B1).
-func (c *Client) Mailboxes(ctx context.Context) ([]mail.Mailbox, error) {
+// Mailboxes returns the full mailbox list in server sort order with the
+// state string it was read at (FR-B1, FR-B5).
+func (c *Client) Mailboxes(ctx context.Context) (mail.MailboxList, error) {
 	if c.session == nil {
-		return nil, errors.New("jmapclient: not connected")
+		return mail.MailboxList{}, errors.New("jmapclient: not connected")
 	}
 
 	query := &mailbox.Query{
@@ -172,21 +173,21 @@ func (c *Client) Mailboxes(ctx context.Context) ([]mail.Mailbox, error) {
 	}
 	inv, err := c.do(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("jmapclient: Mailbox/query: %w", err)
+		return mail.MailboxList{}, fmt.Errorf("jmapclient: Mailbox/query: %w", err)
 	}
 	qr, ok := inv.Args.(*mailbox.QueryResponse)
 	if !ok {
-		return nil, fmt.Errorf("jmapclient: Mailbox/query: unexpected response type %T", inv.Args)
+		return mail.MailboxList{}, fmt.Errorf("jmapclient: Mailbox/query: unexpected response type %T", inv.Args)
 	}
 
 	get := &mailbox.Get{Account: jmap.ID(c.accountID), IDs: qr.IDs}
 	inv, err = c.do(ctx, get)
 	if err != nil {
-		return nil, fmt.Errorf("jmapclient: Mailbox/get: %w", err)
+		return mail.MailboxList{}, fmt.Errorf("jmapclient: Mailbox/get: %w", err)
 	}
 	gr, ok := inv.Args.(*mailbox.GetResponse)
 	if !ok {
-		return nil, fmt.Errorf("jmapclient: Mailbox/get: unexpected response type %T", inv.Args)
+		return mail.MailboxList{}, fmt.Errorf("jmapclient: Mailbox/get: unexpected response type %T", inv.Args)
 	}
 
 	byID := make(map[jmap.ID]*mailbox.Mailbox, len(gr.List))
@@ -201,7 +202,7 @@ func (c *Client) Mailboxes(ctx context.Context) ([]mail.Mailbox, error) {
 		}
 		out = append(out, convertMailbox(mb))
 	}
-	return out, nil
+	return mail.MailboxList{Mailboxes: out, State: gr.State}, nil
 }
 
 // do performs one batched request carrying the single method m and returns

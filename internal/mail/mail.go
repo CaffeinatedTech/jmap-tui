@@ -6,8 +6,15 @@ package mail
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrCannotCalculateChanges reports a server that cannot produce a /changes
+// delta for the given sinceState (RFC 8620 §5.2). Providers wrap the
+// server's typed error with this sentinel so the sync engine can answer it
+// with a full re-query instead of guessing (FR-B5, PLAN §4.1 case 2).
+var ErrCannotCalculateChanges = errors.New("server cannot calculate changes")
 
 // ID is an opaque server-assigned object identifier. Callers must treat it as
 // an opaque string: the format differs between providers.
@@ -119,6 +126,14 @@ type QuerySpec struct {
 	// (collapsed) result set and page size.
 	Position int
 	Limit    int
+
+	// AnchorID and AnchorOffset address the result set by id instead of
+	// absolute position (RFC 8620 queryArguments): the page starts at
+	// AnchorOffset relative to the anchor id's current position. When set,
+	// Position is ignored. Re-anchoring after live changes (FR-B5) uses
+	// this, since absolute positions shift under the window.
+	AnchorID     ID
+	AnchorOffset int
 }
 
 // QueryHandle is a paged stream of ids from an open query. Page fetches
@@ -130,6 +145,9 @@ type QueryHandle interface {
 	Start() int
 	Total() int
 	State() string // queryState for mismatch detection (FR-B5)
+	// EmailState is the Email/get state string accompanying the page —
+	// the bootstrap value for Email/changes reconciliation (FR-B5).
+	EmailState() string
 	Page(ctx context.Context, position, limit int) ([]ID, []EmailSummary, error)
 }
 
@@ -143,9 +161,45 @@ type Draft struct{}
 // SendReceipt acknowledges a sent message. Its shape is finalised in M5.
 type SendReceipt struct{}
 
-// Change describes a server-side change pushed or polled to the client. Its
-// shape is finalised in M2 (live sync).
-type Change struct{}
+// Change describes a pushed or polled server notification that one or more
+// object types changed state (RFC 8620 §7.1 StateChange). Changed maps
+// account id → type name ("Email", "Mailbox") → the type's new state string.
+// It says nothing about *what* changed — /changes does that (FR-B2).
+type Change struct {
+	Changed map[ID]map[string]string
+}
+
+// EmailChangeSet is one Email/changes delta (RFC 8620 §5.2). Updated holds
+// created and modified ids alike.
+type EmailChangeSet struct {
+	Updated   []ID
+	Destroyed []ID
+	NewState  string
+	HasMore   bool
+}
+
+// MailboxChangeSet is one Mailbox/changes delta (RFC 8621 §2).
+type MailboxChangeSet struct {
+	Updated   []ID
+	Destroyed []ID
+	NewState  string
+	HasMore   bool
+}
+
+// MailboxList is the full mailbox tree plus the Mailbox/get state string it
+// was read at — the bootstrap value for Mailbox/changes (FR-B5).
+type MailboxList struct {
+	Mailboxes []Mailbox
+	State     string
+}
+
+// Identity is a sendable address from Identity/get (FR-B1). Reading is all
+// M2 needs; compose uses it in M5.
+type Identity struct {
+	ID    ID
+	Name  string
+	Email string
+}
 
 // Provider is the protocol seam (PLAN §1). Implementations must be safe for
 // concurrent use across goroutines, must never block on the UI thread, and
@@ -154,8 +208,9 @@ type Provider interface {
 	// Connect establishes the session and discovers server capabilities.
 	Connect(ctx context.Context) error
 
-	// Mailboxes returns the full mailbox tree, flat, in server sort order.
-	Mailboxes(ctx context.Context) ([]Mailbox, error)
+	// Mailboxes returns the full mailbox tree, flat, in server sort order,
+	// with its state string (FR-B1, FR-B5).
+	Mailboxes(ctx context.Context) (MailboxList, error)
 
 	// OpenQuery opens a server-side query and returns a paged id stream
 	// plus the summaries for the first page (batched by the provider).
@@ -167,13 +222,29 @@ type Provider interface {
 	// FetchBody fetches the full body of one message.
 	FetchBody(ctx context.Context, id ID) (EmailBody, error)
 
+	// EmailChanges fetches the Email delta since a state string (FR-B2).
+	// A cannotCalculateChanges server error is returned unwrapped so the
+	// engine can fall back to a full re-query (PLAN §4.1).
+	EmailChanges(ctx context.Context, sinceState string) (EmailChangeSet, error)
+
+	// MailboxChanges fetches the Mailbox delta since a state string.
+	MailboxChanges(ctx context.Context, sinceState string) (MailboxChangeSet, error)
+
+	// Identities returns the account's sendable identities. Servers without
+	// the submission capability yield an empty list, never an error (FR-A6).
+	Identities(ctx context.Context) ([]Identity, error)
+
 	// Mutate applies flags/move/copy/destroy operations (M3).
 	Mutate(ctx context.Context, mutation Mutation) error
 
 	// Send submits a message for delivery (M5).
 	Send(ctx context.Context, draft Draft) (SendReceipt, error)
 
-	// Subscribe returns a channel of live changes and a stop function; a nil
-	// channel means no push support and the caller must poll (FR-B3).
+	// Subscribe opens one EventSource push stream (RFC 8620 §7.3) and
+	// returns a channel of state-change notifications plus a stop function.
+	// A nil channel means the server advertises no push URL and the caller
+	// must poll (FR-B3). The stream closes — channel drained and closed —
+	// when ctx is cancelled, stop is called, or the connection dies; the
+	// implementation enforces liveness via the server ping interval.
 	Subscribe(ctx context.Context) (<-chan Change, func() error)
 }

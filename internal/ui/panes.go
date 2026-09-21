@@ -173,13 +173,19 @@ func renderList(l Layout, h int, st State) string {
 		subject := prefix + truncate(r.Summary.Subject, subjectW-len(prefix))
 		date := pad(RelativeDate(r.Summary.ReceivedAt, st.Now), dateW)
 
-		// Styles: selection wash spans every segment; unread bolds the
-		// sender and subject; date stays muted.
+		// Styles: selection wash spans every segment; a fresh (live-
+		// arrived) row gets the wash without focus (the slide-in highlight,
+		// PLAN §4.1 case 3); unread bolds sender and subject.
 		base, dim := th.Row, th.RowSelDim
+		fresh := r.Fresh
 		if sel && focused {
 			base, dim = th.RowSel, th.RowSel
+			fresh = false
 		} else if sel {
 			base, dim = th.RowSelDim, th.RowSelDim
+			fresh = false
+		} else if fresh {
+			base, dim = th.FreshRow, th.FreshRow
 		}
 		fromStyle, subjStyle := base, base
 		if unread && !sel {
@@ -187,7 +193,7 @@ func renderList(l Layout, h int, st State) string {
 			subjStyle = subjStyle.Bold(true)
 		}
 		dateStyle := dim
-		if !sel {
+		if !sel && !fresh {
 			dateStyle = th.Muted
 		}
 

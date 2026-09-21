@@ -81,8 +81,9 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 		pump(t, m, cmd)
 	}
 
-	// Init loads mailboxes; the snapshot then auto-opens the inbox.
-	pump(t, m, m.Init())
+	// The account load (Init's network half, minus the push loop); the
+	// snapshot then auto-opens the inbox.
+	pump(t, m, m.loadAccountCmd())
 	if m.snap.ActiveMailbox != "mb-inbox" {
 		t.Fatalf("active mailbox = %q, want mb-inbox", m.snap.ActiveMailbox)
 	}
@@ -150,6 +151,34 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 	default:
 		t.Fatal("context not cancelled on quit")
 	}
+}
+
+// TestAppLivePump proves the latest-wins broadcast reaches the model: a
+// waiter armed before a publish receives it as a live snapshot (FR-B2).
+func TestAppLivePump(t *testing.T) {
+	m, _ := newTestModel(t)
+	pump(t, m, m.loadAccountCmd())
+	if m.snap.ActiveMailbox != "mb-inbox" {
+		t.Fatalf("setup failed: active = %q", m.snap.ActiveMailbox)
+	}
+	before := m.snap.Version
+
+	wait := m.waitUpdates()
+	m.engine.MoveCursor(1) // publishes a new snapshot
+	msg := wait()
+	if msg == nil {
+		t.Fatal("waitUpdates returned nothing after a publish")
+	}
+	_, next := m.Update(msg)
+	if next == nil {
+		t.Fatal("live delivery did not re-arm the waiter")
+	}
+	if m.snap.Version <= before {
+		t.Fatalf("snapshot version = %d, want > %d", m.snap.Version, before)
+	}
+
+	// A stale delivery applies nothing but stays harmless.
+	_, _ = m.Update(msg)
 }
 
 // stripANSI removes escape sequences for readable assertions.

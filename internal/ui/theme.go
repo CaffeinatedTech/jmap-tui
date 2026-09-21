@@ -73,6 +73,8 @@ type Theme struct {
 	HelpDesc   lipgloss.Style
 	Attachment lipgloss.Style
 	Danger     lipgloss.Style
+	Success    lipgloss.Style
+	FreshRow   lipgloss.Style
 }
 
 // NewTheme derives the style set from a palette.
@@ -91,5 +93,7 @@ func NewTheme(p Palette) Theme {
 		HelpDesc:   lipgloss.NewStyle().Foreground(p.BodyFg),
 		Attachment: lipgloss.NewStyle().Foreground(p.Muted),
 		Danger:     lipgloss.NewStyle().Foreground(p.Danger),
+		Success:    lipgloss.NewStyle().Foreground(p.Success),
+		FreshRow:   base.Background(p.Selected),
 	}
 }

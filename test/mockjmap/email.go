@@ -57,29 +57,106 @@ type SyntheticMailbox struct {
 // syntheticBase is a fixed timestamp so tests never depend on wall time.
 var syntheticBase = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
-// SetEmails replaces the email fixtures and bumps the email state version.
+// SetEmails replaces the email fixtures and journals the change: ids
+// present in both sets count as updated, ids only in the old set count as
+// destroyed.
 func (s *Server) SetEmails(emails []Email) {
+	old := make(map[string]bool)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	for _, e := range s.emails {
+		old[e.ID] = true
+	}
+	var updated, destroyed []string
+	for _, e := range emails {
+		delete(old, e.ID)
+		updated = append(updated, e.ID)
+	}
+	for id := range old {
+		destroyed = append(destroyed, id)
+	}
 	s.emails = append([]Email(nil), emails...)
 	s.emailVersion++
+	s.journal = append(s.journal, journalEntry{typ: "Email", updated: updated, destroyed: destroyed, version: s.emailVersion})
+	s.mu.Unlock()
+}
+
+// CreateEmails appends fixtures and journals them as created (M2 sync tests
+// drive live arrival this way).
+func (s *Server) CreateEmails(emails []Email) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updated := make([]string, 0, len(emails))
+	for _, e := range emails {
+		s.emails = append(s.emails, e)
+		updated = append(updated, e.ID)
+	}
+	s.emailVersion++
+	s.journal = append(s.journal, journalEntry{typ: "Email", updated: updated, version: s.emailVersion})
+}
+
+// UpdateEmails mutates the named fixtures in place and journals them as
+// updated (flag flips, subject edits, moves). Unknown ids are ignored.
+func (s *Server) UpdateEmails(ids []string, fn func(*Email)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updated := []string{}
+	for i := range s.emails {
+		if contains(ids, s.emails[i].ID) {
+			fn(&s.emails[i])
+			updated = append(updated, s.emails[i].ID)
+		}
+	}
+	if len(updated) == 0 {
+		return
+	}
+	s.emailVersion++
+	s.journal = append(s.journal, journalEntry{typ: "Email", updated: updated, version: s.emailVersion})
+}
+
+// DestroyEmails removes fixtures and journals them as destroyed.
+func (s *Server) DestroyEmails(ids []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gone := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		gone[id] = true
+	}
+	kept := s.emails[:0]
+	destroyed := []string{}
+	for _, e := range s.emails {
+		if gone[e.ID] {
+			destroyed = append(destroyed, e.ID)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if len(destroyed) == 0 {
+		return
+	}
+	s.emails = kept
+	s.emailVersion++
+	s.journal = append(s.journal, journalEntry{typ: "Email", destroyed: destroyed, version: s.emailVersion})
 }
 
 // SetSyntheticMailbox sets (or clears with Count 0) the virtual mailbox.
+// Synthetic content is generated on demand, so the journal records a bare
+// version bump: /changes reports a new state with no per-id detail.
 func (s *Server) SetSyntheticMailbox(sm SyntheticMailbox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	smCopy := sm
 	s.synthetic = &smCopy
 	s.emailVersion++
+	s.journal = append(s.journal, journalEntry{typ: "Email", version: s.emailVersion})
 }
 
 // emailSnapshot is an immutable view of the email fixtures, taken under the
 // server lock so request handling never holds it.
 type emailSnapshot struct {
-	emails    []Email
-	synthetic *SyntheticMailbox
-	version   int
+	emails         []Email
+	synthetic      *SyntheticMailbox
+	emailVersion   int
+	mailboxVersion int
 }
 
 // lookup resolves real and synthetic fixture ids.
@@ -249,7 +326,7 @@ func emailQueryResponse(snap *emailSnapshot, args json.RawMessage) map[string]an
 	// over-send for a test double.
 	return map[string]any{
 		"accountId":           "acc1",
-		"queryState":          fmt.Sprintf("q-%d", snap.version),
+		"queryState":          fmt.Sprintf("q-%d", snap.emailVersion),
 		"canCalculateChanges": false,
 		"position":            start,
 		"ids":                 ids,
@@ -289,7 +366,7 @@ func emailGetResponse(snap *emailSnapshot, args json.RawMessage, results map[str
 	}
 	resp := map[string]any{
 		"accountId": "acc1",
-		"state":     fmt.Sprintf("m-%d", snap.version),
+		"state":     fmt.Sprintf("e-%d", snap.emailVersion),
 		"list":      list,
 	}
 	if len(notFound) > 0 {

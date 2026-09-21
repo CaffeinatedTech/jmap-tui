@@ -37,18 +37,20 @@ func (c *Client) OpenQuery(ctx context.Context, spec mail.QuerySpec) (mail.Query
 
 // queryHandle is the JMAP implementation of mail.QueryHandle.
 type queryHandle struct {
-	c     *Client
-	spec  mail.QuerySpec
-	ids   []mail.ID
-	start int // absolute position of the current page
-	total int
-	state string
+	c          *Client
+	spec       mail.QuerySpec
+	ids        []mail.ID
+	start      int // absolute position of the current page
+	total      int
+	state      string // queryState
+	emailState string // Email/get state at fetch time (FR-B5 bootstrap)
 }
 
-func (h *queryHandle) IDs() []mail.ID { return h.ids }
-func (h *queryHandle) Start() int     { return h.start }
-func (h *queryHandle) Total() int     { return h.total }
-func (h *queryHandle) State() string  { return h.state }
+func (h *queryHandle) IDs() []mail.ID     { return h.ids }
+func (h *queryHandle) Start() int         { return h.start }
+func (h *queryHandle) Total() int         { return h.total }
+func (h *queryHandle) State() string      { return h.state }
+func (h *queryHandle) EmailState() string { return h.emailState }
 
 // Page implements mail.QueryHandle.
 func (h *queryHandle) Page(ctx context.Context, position, limit int) ([]mail.ID, []mail.EmailSummary, error) {
@@ -83,6 +85,11 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 			CalculateTotal:  true,
 			CollapseThreads: h.spec.CollapseThreads,
 		}
+		if h.spec.AnchorID != "" {
+			tq.Position = 0
+			tq.Anchor = jmap.ID(h.spec.AnchorID)
+			tq.AnchorOffset = int64(h.spec.AnchorOffset)
+		}
 		qm, queryName = tq, tq.Name()
 	} else {
 		q := &email.Query{
@@ -93,6 +100,11 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 			Position:        int64(position),
 			Limit:           uint64(limit),
 			CalculateTotal:  true,
+		}
+		if h.spec.AnchorID != "" {
+			q.Position = 0
+			q.Anchor = jmap.ID(h.spec.AnchorID)
+			q.AnchorOffset = int64(h.spec.AnchorOffset)
 		}
 		qm, queryName = q, q.Name()
 	}
@@ -127,8 +139,14 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 
 	h.ids = convertIDs(qr.IDs)
 	h.start = position
+	if h.spec.AnchorID != "" {
+		// Anchor addressing: the requested position is meaningless; the
+		// server reports where the result actually begins (FR-B5).
+		h.start = int(qr.Position)
+	}
 	h.total = int(qr.Total)
 	h.state = qr.QueryState
+	h.emailState = gr.State
 	return convertSummaries(gr.List), nil
 }
 
@@ -235,6 +253,8 @@ type threadQuery struct {
 	Filter          json.RawMessage         `json:"filter,omitempty"`
 	Sort            []*email.SortComparator `json:"sort,omitempty"`
 	Position        int64                   `json:"position,omitempty"`
+	Anchor          jmap.ID                 `json:"anchor,omitempty"`
+	AnchorOffset    int64                   `json:"anchorOffset,omitempty"`
 	Limit           uint64                  `json:"limit,omitempty"`
 	CalculateTotal  bool                    `json:"calculateTotal,omitempty"`
 	CollapseThreads bool                    `json:"collapseThreads,omitempty"`

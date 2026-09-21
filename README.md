@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M1 landed (daily-drivable reader: mailbox browsing, rolling-window list, preview with HTML→text, thread expansion, live-verified against Stalwart).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M2 landed (everything above, plus live sync: push-driven updates, reconnect with poll fallback, and a status line; verified against Stalwart with ~1s push latency).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -54,6 +54,8 @@ Archive               │ ●     Alice Root     └ planning sync   1d  │ Sub
 ```
 
 Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. Dark and light palettes are terminal-adaptive.
+
+A footer status line reports the sync state: connection mode (`live` / `polling` / `connecting…`), last-sync time, retry count and errors, and the active mailbox's unread/total counts. New mail slides in at the top of the list with a brief highlight.
 
 ## Install
 

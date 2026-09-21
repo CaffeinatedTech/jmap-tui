@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mailtext"
@@ -32,6 +33,20 @@ type Engine struct {
 	body        *BodyView
 	bodyLoading mail.ID
 	version     uint64
+
+	// Live-sync state (M2): state strings are the only sync truth
+	// (FR-B5); fresh ids carry the new-mail highlight; overlays are the
+	// FR-B7 plumbing; updates is the latest-wins broadcast to the UI.
+	emailState   string
+	mailboxState string
+	status       Status
+	fresh        map[mail.ID]time.Time
+	overlay      map[mail.ID]*pendingOp
+	overlayOrder []mail.ID
+	identities   []mail.Identity
+	updates      chan Snapshot
+	liveOnce     sync.Once
+	liveCfg      liveConfig
 }
 
 // Config tunes an Engine.
@@ -41,11 +56,25 @@ type Config struct {
 
 	// BodyCache bounds the body LRU; 100 when zero (NFR-2).
 	BodyCache int
+
+	// PollInterval is the fallback poll period when push is unavailable or
+	// exhausted (FR-B3); 60s when zero.
+	PollInterval time.Duration
+
+	// PushRetries is how many failed push attempts are tolerated before
+	// falling back to polling (FR-B3); 3 when zero.
+	PushRetries int
 }
 
 func (c Config) withDefaults() Config {
 	if c.BodyCache <= 0 {
 		c.BodyCache = 100
+	}
+	if c.PollInterval <= 0 {
+		c.PollInterval = 60 * time.Second
+	}
+	if c.PushRetries <= 0 {
+		c.PushRetries = 3
 	}
 	return c
 }
@@ -57,6 +86,7 @@ type Row struct {
 	Summary      mail.EmailSummary
 	ThreadHeader bool // has an expanded thread beneath it
 	ThreadMember bool // rendered inside an expanded thread
+	Fresh        bool // arrived via live sync; highlighted until cleared
 }
 
 // MailboxNode is one sidebar entry with its rendered tree depth.
@@ -90,6 +120,17 @@ type Snapshot struct {
 	// when nothing is selected). Its ID matches the cursor id.
 	Body        *BodyView
 	BodyLoading bool
+
+	// NewAbove hints that fresh mail arrived above a window scrolled away
+	// from position 0 (PLAN §4.1 case 3).
+	NewAbove bool
+
+	// Fresh lists ids that arrived via live sync and are still inside the
+	// highlight TTL (the slide-in delight moment, PLAN §4.1 case 3).
+	Fresh []mail.ID
+
+	// Status is the live-sync state for the status line (FR-I5).
+	Status Status
 }
 
 // BodyView is the preview-ready content of one message: text already
@@ -100,7 +141,7 @@ type BodyView struct {
 	Attachments []mail.Attachment
 }
 
-// NewEngine returns an engine driving p.
+// NewEngine returns an engine driving p. Call Start to begin live sync.
 func NewEngine(p mail.Provider, cfg Config) *Engine {
 	c := cfg.withDefaults()
 	return &Engine{
@@ -110,21 +151,59 @@ func NewEngine(p mail.Provider, cfg Config) *Engine {
 		threads:   map[mail.ID][]mail.ID{},
 		expanded:  map[mail.ID]bool{},
 		bodies:    newBodyCache(c.BodyCache),
+		fresh:     map[mail.ID]time.Time{},
+		overlay:   map[mail.ID]*pendingOp{},
+		updates:   make(chan Snapshot, 1),
+		liveCfg: liveConfig{
+			pollInterval: c.PollInterval,
+			pushRetries:  c.PushRetries,
+			backoffBase:  defaultBackoffBase,
+		},
+		status: Status{Mode: ModeConnecting},
 	}
 }
 
+// Updates exposes the latest-wins snapshot broadcast: every publish pushes
+// the newest snapshot here (buffered 1, drained first). The app reads it
+// from a Cmd so live changes repaint without any user action (FR-B2).
+func (e *Engine) Updates() <-chan Snapshot { return e.updates }
+
 // LoadMailboxes fetches the mailbox tree and publishes it. The UI can
-// render the sidebar before any query resolves (NFR-3).
+// render the sidebar before any query resolves (NFR-3). The returned state
+// string bootstraps Mailbox/changes reconciliation (FR-B5).
 func (e *Engine) LoadMailboxes(ctx context.Context) error {
-	mbs, err := e.p.Mailboxes(ctx)
+	list, err := e.p.Mailboxes(ctx)
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.mailboxes = mbs
+	e.mailboxes = list.Mailboxes
+	e.mailboxState = list.State
 	e.rebuildMailboxTreeLocked()
 	e.publishLocked()
+	return nil
+}
+
+// Identities returns the account's sendable identities fetched at startup
+// (FR-B1); compose (M5) consumes them. Empty when the server lacks the
+// submission capability (FR-A6).
+func (e *Engine) Identities() []mail.Identity {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]mail.Identity(nil), e.identities...)
+}
+
+// LoadIdentities fetches identities over the network (FR-B1). Absence of
+// the capability is not an error (FR-A6).
+func (e *Engine) LoadIdentities(ctx context.Context) error {
+	ids, err := e.p.Identities(ctx)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.identities = ids
+	e.mu.Unlock()
 	return nil
 }
 
@@ -167,7 +246,8 @@ func (e *Engine) rebuildMailboxTreeLocked() {
 }
 
 // OpenMailbox issues a fresh query for the mailbox and resets the list
-// window (FR-C2).
+// window (FR-C2). The page's Email/get state bootstraps Email/changes
+// reconciliation (FR-B5).
 func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
 	e.window = NewWindow(Query{Filter: FilterSpec{MailboxID: id}}, e.cfg.Window)
@@ -175,6 +255,7 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.cursorRow = 0
 	e.bodyLoading = ""
 	e.body = nil
+	e.fresh = map[mail.ID]time.Time{}
 	r, pos, limit := e.window.Seed(0)
 	spec := e.querySpecLocked(pos, limit)
 	e.mu.Unlock()
@@ -188,6 +269,9 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	defer e.mu.Unlock()
 	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
 		return err
+	}
+	if st := handle.EmailState(); st != "" {
+		e.emailState = st
 	}
 	e.absorbSummariesLocked(sums)
 	e.publishLocked()
@@ -489,6 +573,9 @@ func (e *Engine) renderedRowsLocked() []Row {
 			continue // summary not yet arrived; row appears when it does
 		}
 		r := Row{ID: id, Summary: sum}
+		if _, fresh := e.fresh[id]; fresh {
+			r.Fresh = true
+		}
 		if e.expanded[sum.ThreadID] {
 			// The header (the thread's collapsed representative — its
 			// newest member) renders first; remaining members follow,
@@ -516,17 +603,18 @@ func (e *Engine) renderedRowsLocked() []Row {
 // evicts everything the visible state no longer needs (PLAN §3: summaries
 // are evicted when a window trims, so memory stays bounded no matter how
 // far the user scrolls — NFR-2). Bodies have their own LRU and are not
-// touched here.
+// touched here. Pending overlays re-apply on top of server truth (FR-B7).
 func (e *Engine) absorbSummariesLocked(sums []mail.EmailSummary) {
 	for _, s := range sums {
-		e.summaries[s.ID] = s
+		e.summaries[s.ID] = e.reapplyOverlayLocked(s)
 	}
 	e.evictSummariesLocked()
 }
 
 // evictSummariesLocked drops summaries outside the window and outside any
 // cached thread (so re-expanding a recently viewed thread needs no
-// refetch). Caller holds mu.
+// refetch) and outside any pending overlay (an optimistic row must not
+// lose its patch mid-flight). Caller holds mu.
 func (e *Engine) evictSummariesLocked() {
 	keep := map[mail.ID]bool{}
 	if e.window != nil {
@@ -538,6 +626,9 @@ func (e *Engine) evictSummariesLocked() {
 		for _, mid := range members {
 			keep[mid] = true
 		}
+	}
+	for id := range e.overlay {
+		keep[id] = true
 	}
 	for id := range e.summaries {
 		if !keep[id] {
@@ -563,8 +654,22 @@ func (e *Engine) rememberThreadLocked(threadID mail.ID, members []mail.ID) {
 	}
 }
 
-// publishLocked bumps the snapshot version.
-func (e *Engine) publishLocked() { e.version++ }
+// publishLocked bumps the snapshot version and broadcasts the newest
+// snapshot to the UI (latest wins: any unread stale snapshot is dropped
+// first). Cheap enough to call on every state change; the app repaints
+// from live updates without user action (FR-B2).
+func (e *Engine) publishLocked() {
+	e.version++
+	snap := e.snapshotLocked()
+	select {
+	case <-e.updates:
+	default:
+	}
+	select {
+	case e.updates <- snap:
+	default:
+	}
+}
 
 // Snapshot returns the current immutable view.
 func (e *Engine) Snapshot() Snapshot {
@@ -580,6 +685,16 @@ func (e *Engine) snapshotLocked() Snapshot {
 		Mailboxes:     e.mboxOrder,
 		Total:         -1,
 		ActiveMailbox: e.activeMailboxLocked(),
+		Status:        e.status,
+	}
+	e.expireFreshLocked()
+	if e.window != nil {
+		snap.NewAbove = e.window.NewAbove()
+	}
+	if len(e.fresh) > 0 {
+		for id := range e.fresh {
+			snap.Fresh = append(snap.Fresh, id)
+		}
 	}
 	if e.window == nil {
 		return snap
@@ -601,6 +716,20 @@ func (e *Engine) snapshotLocked() Snapshot {
 	}
 	snap.BodyLoading = e.bodyLoading != "" && e.bodyLoading == cursor
 	return snap
+}
+
+// FreshTTL bounds how long a live-arrival highlight lives; the app also
+// clears it on a timer and on cursor movement.
+const FreshTTL = 5 * time.Second
+
+// expireFreshLocked drops highlight entries past their TTL. Caller holds mu.
+func (e *Engine) expireFreshLocked() {
+	now := time.Now()
+	for id, at := range e.fresh {
+		if now.Sub(at) > FreshTTL {
+			delete(e.fresh, id)
+		}
+	}
 }
 
 // activeMailboxLocked reads the open mailbox from the window's query.

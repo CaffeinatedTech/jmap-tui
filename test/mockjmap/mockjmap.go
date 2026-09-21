@@ -1,8 +1,8 @@
 // Package mockjmap is an in-process fake JMAP server (httptest) used to test
-// protocol and sync behaviour without a network. Server v0 implements session
-// discovery, HTTP Basic auth, Mailbox/query and Mailbox/get — the surface the
-// M0 jmapclient wrapper exercises. Scriptable event injection arrives with
-// the sync-engine tests in M2.
+// protocol and sync behaviour without a network. Server v1 adds the M2
+// surface: an EventSource stream with scriptable drops, Email/changes and
+// Mailbox/changes backed by a change journal, and fixture mutators that
+// journal + broadcast so sync-engine tests can drive live reconciliation.
 package mockjmap
 
 import (
@@ -26,17 +26,58 @@ type Mailbox struct {
 	UnreadEmails uint64
 }
 
+// journalEntry records one fixture mutation for /changes replay: the type,
+// the ids touched, and the state version the mutation produced.
+type journalEntry struct {
+	typ       string
+	updated   []string
+	destroyed []string
+	version   int
+}
+
+// streamConn is one live EventSource connection.
+type streamConn struct {
+	close chan struct{}
+	mu    sync.Mutex
+	w     http.ResponseWriter
+	flush http.Flusher
+}
+
+func (sc *streamConn) send(event, data string) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	select {
+	case <-sc.close:
+		return false
+	default:
+	}
+	if _, err := fmt.Fprintf(sc.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return false
+	}
+	sc.flush.Flush()
+	return true
+}
+
 // Server is the fake JMAP server.
 type Server struct {
 	ts       *httptest.Server
 	username string
 	password string
 
-	mu           sync.Mutex
-	mailboxes    []Mailbox
-	emails       []Email
-	synthetic    *SyntheticMailbox
-	emailVersion int
+	mu             sync.Mutex
+	mailboxes      []Mailbox
+	emails         []Email
+	synthetic      *SyntheticMailbox
+	mailboxVersion int
+	emailVersion   int
+	journal        []journalEntry
+
+	// Test controls (M2 sync-engine suites).
+	failStreams       int // reject this many stream connects before accepting
+	noChanges         bool
+	streams           map[*streamConn]struct{}
+	lastMailboxNotify int
+	lastEmailNotify   int
 }
 
 // New starts the server and returns it. Close must be called when done.
@@ -45,7 +86,10 @@ func New(username, password string, mailboxes []Mailbox) *Server {
 		username:  username,
 		password:  password,
 		mailboxes: append([]Mailbox(nil), mailboxes...),
+		streams:   map[*streamConn]struct{}{},
 	}
+	s.mailboxVersion = 1
+	s.emailVersion = 1
 	s.ts = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
 }
@@ -56,11 +100,94 @@ func (s *Server) Close() { s.ts.Close() }
 // URL is the server base URL, suitable as jmapclient's ServerURL.
 func (s *Server) URL() string { return s.ts.URL }
 
-// SetMailboxes replaces the mailbox fixtures.
+// SetMailboxes replaces the mailbox fixtures and journals the change.
 func (s *Server) SetMailboxes(mailboxes []Mailbox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mailboxes = append([]Mailbox(nil), mailboxes...)
+	s.mailboxVersion++
+	ids := make([]string, 0, len(s.mailboxes))
+	for _, mb := range s.mailboxes {
+		ids = append(ids, mb.ID)
+	}
+	s.journal = append(s.journal, journalEntry{typ: "Mailbox", updated: ids, version: s.mailboxVersion})
+}
+
+// FailStreams makes the next n EventSource connects fail (FR-B3 tests).
+func (s *Server) FailStreams(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failStreams = n
+}
+
+// SetCannotCalculateChanges makes /changes answer cannotCalculateChanges
+// (PLAN §4.1 case 2 tests).
+func (s *Server) SetCannotCalculateChanges(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noChanges = v
+}
+
+// Notify broadcasts a StateChange event to every connected stream. Types
+// whose state has not moved since the last Notify are omitted.
+func (s *Server) Notify() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyLocked()
+}
+
+func (s *Server) notifyLocked() {
+	changed := map[string]string{}
+	if s.lastMailboxNotify != s.mailboxVersion {
+		changed["Mailbox"] = s.mailboxState()
+		s.lastMailboxNotify = s.mailboxVersion
+	}
+	if s.lastEmailNotify != s.emailVersion {
+		changed["Email"] = s.emailState()
+		s.lastEmailNotify = s.emailVersion
+	}
+	if len(changed) == 0 || len(s.streams) == 0 {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"@type":   "StateChange",
+		"changed": map[string]any{"acc1": changed},
+	})
+	if err != nil {
+		return
+	}
+	for sc := range s.streams {
+		if !sc.send("state", string(payload)) {
+			s.removeStreamLocked(sc)
+		}
+	}
+}
+
+func (s *Server) mailboxState() string { return fmt.Sprintf("m-%d", s.mailboxVersion) }
+func (s *Server) emailState() string   { return fmt.Sprintf("e-%d", s.emailVersion) }
+
+func (s *Server) removeStreamLocked(sc *streamConn) {
+	if _, ok := s.streams[sc]; ok {
+		delete(s.streams, sc)
+		close(sc.close)
+	}
+}
+
+// DropStreams terminates every connected EventSource stream (kill-the-push
+// tests, FR-B3).
+func (s *Server) DropStreams() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for sc := range s.streams {
+		s.removeStreamLocked(sc)
+	}
+}
+
+// StreamCount reports connected EventSource streams (test assertions).
+func (s *Server) StreamCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.streams)
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +196,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.handleSession(w, r)
 	case r.URL.Path == "/jmap/api" && r.Method == http.MethodPost:
 		s.handleAPI(w, r)
+	case strings.HasPrefix(r.URL.Path, "/jmap/event/") && r.Method == http.MethodGet:
+		s.handleEvent(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -124,6 +253,63 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
+// handleEvent is the RFC 8620 §7.3 EventSource endpoint: it streams `state`
+// events on demand and blocks until the connection is dropped.
+func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="jmap"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	if s.failStreams > 0 {
+		s.failStreams--
+		s.mu.Unlock()
+		http.Error(w, "stream unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.mu.Unlock()
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	sc := &streamConn{close: make(chan struct{}), w: w, flush: flusher}
+	s.streams[sc] = struct{}{}
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.removeStreamLocked(sc)
+		s.mu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, ": hello\n\n")
+	flusher.Flush()
+
+	// Push current state unconditionally so late subscribers reconcile
+	// immediately (independent of the delta bookkeeping Notify uses); then
+	// block until the server or client closes the stream.
+	s.mu.Lock()
+	if payload, err := json.Marshal(map[string]any{
+		"@type": "StateChange",
+		"changed": map[string]any{"acc1": map[string]string{
+			"Mailbox": s.mailboxState(),
+			"Email":   s.emailState(),
+		}},
+	}); err == nil {
+		sc.send("state", string(payload))
+	}
+	s.mu.Unlock()
+
+	select {
+	case <-sc.close:
+	case <-r.Context().Done():
+	}
+}
+
 // apiRequest is the RFC 8620 RequestBody.
 type apiRequest struct {
 	Using       []string           `json:"using"`
@@ -171,9 +357,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	mbs := append([]Mailbox(nil), s.mailboxes...)
 	snap := &emailSnapshot{
-		emails:    append([]Email(nil), s.emails...),
-		synthetic: s.synthetic,
-		version:   s.emailVersion,
+		emails:         append([]Email(nil), s.emails...),
+		synthetic:      s.synthetic,
+		emailVersion:   s.emailVersion,
+		mailboxVersion: s.mailboxVersion,
 	}
 	s.mu.Unlock()
 
@@ -185,15 +372,26 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		var args any
 		switch call.Name {
 		case "Mailbox/query":
-			args = mailboxQueryResponse(mbs)
+			args = mailboxQueryResponse(mbs, snap)
 		case "Mailbox/get":
-			args = mailboxGetResponse(mbs, call.Args)
+			args = mailboxGetResponse(mbs, snap, call.Args)
+		case "Mailbox/changes":
+			args = s.changesResponse("Mailbox", call.Args)
 		case "Email/query":
 			args = emailQueryResponse(snap, call.Args)
 		case "Email/get":
 			args = emailGetResponse(snap, call.Args, results)
+		case "Email/changes":
+			args = s.changesResponse("Email", call.Args)
 		default:
 			args = map[string]any{"type": "unknownMethod"}
+			resp.add("error", call.CallID, args)
+			continue
+		}
+		// An error-shaped args map rides under the generic "error" method
+		// name so protocol clients decode it as a MethodError (RFC 8620
+		// §3.6.1) — how cannotCalculateChanges travels.
+		if m, ok := args.(map[string]any); ok && m["type"] == "cannotCalculateChanges" {
 			resp.add("error", call.CallID, args)
 			continue
 		}
@@ -206,11 +404,68 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func mailboxQueryResponse(mbs []Mailbox) map[string]any {
+// changesResponse replays the journal for one type between sinceState and
+// now, or answers cannotCalculateChanges when the test knob demands it.
+func (s *Server) changesResponse(typ string, args json.RawMessage) any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var req struct {
+		SinceState string `json:"sinceState"`
+	}
+	_ = json.Unmarshal(args, &req)
+
+	current := s.mailboxState()
+	if typ == "Email" {
+		current = s.emailState()
+	}
+	if s.noChanges {
+		return map[string]any{"type": "cannotCalculateChanges"}
+	}
+
+	prefix := strings.ToLower(typ[0:1]) + "-"
+	var since int
+	if _, err := fmt.Sscanf(req.SinceState, prefix+"%d", &since); err != nil && req.SinceState != current {
+		return map[string]any{"type": "cannotCalculateChanges"}
+	}
+	updated := map[string]bool{}
+	destroyed := map[string]bool{}
+	for _, e := range s.journal {
+		if e.typ != typ || e.version <= since {
+			continue
+		}
+		for _, id := range e.updated {
+			if !destroyed[id] {
+				updated[id] = true
+			}
+		}
+		for _, id := range e.destroyed {
+			delete(updated, id)
+			destroyed[id] = true
+		}
+	}
+	ids := func(m map[string]bool) []string {
+		out := make([]string, 0, len(m))
+		for id := range m {
+			out = append(out, id)
+		}
+		sort.Strings(out)
+		return out
+	}
+	return map[string]any{
+		"accountId":      "acc1",
+		"oldState":       req.SinceState,
+		"newState":       current,
+		"hasMoreChanges": false,
+		"updated":        ids(updated),
+		"destroyed":      ids(destroyed),
+	}
+}
+
+func mailboxQueryResponse(mbs []Mailbox, snap *emailSnapshot) map[string]any {
 	sorted := sortedIDs(mbs)
 	return map[string]any{
 		"accountId":           "acc1",
-		"queryState":          "q-1",
+		"queryState":          fmt.Sprintf("qm-%d", snap.mailboxVersion),
 		"canCalculateChanges": true,
 		"position":            0,
 		"ids":                 sorted,
@@ -218,7 +473,7 @@ func mailboxQueryResponse(mbs []Mailbox) map[string]any {
 	}
 }
 
-func mailboxGetResponse(mbs []Mailbox, args json.RawMessage) map[string]any {
+func mailboxGetResponse(mbs []Mailbox, snap *emailSnapshot, args json.RawMessage) map[string]any {
 	var get struct {
 		Account string   `json:"accountId"`
 		IDs     []string `json:"ids"`
@@ -246,7 +501,7 @@ func mailboxGetResponse(mbs []Mailbox, args json.RawMessage) map[string]any {
 	}
 	return map[string]any{
 		"accountId": "acc1",
-		"state":     "m-1",
+		"state":     fmt.Sprintf("m-%d", snap.mailboxVersion),
 		"list":      list,
 	}
 }

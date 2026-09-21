@@ -41,8 +41,9 @@ type Model struct {
 	vp       viewport.Model
 	vpBodyID mail.ID
 
-	lastCtrlC time.Time
-	err       string
+	lastCtrlC  time.Time
+	err        string
+	freshArmed bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -63,8 +64,13 @@ func New(opts Options) *Model {
 	}
 }
 
-// snapMsg carries a fresh engine snapshot.
-type snapMsg struct{ snap sync.Snapshot }
+// snapMsg carries a fresh engine snapshot. live marks snapshots delivered
+// by the sync loop's broadcast (as opposed to an operation's return), which
+// re-arm the waiter.
+type snapMsg struct {
+	snap sync.Snapshot
+	live bool
+}
 
 // errMsg carries a failed engine operation.
 type errMsg struct {
@@ -83,9 +89,41 @@ func (m *Model) engineOp(op string, f func(ctx context.Context) (sync.Snapshot, 
 	}
 }
 
-// Init loads the mailbox tree; the first snapshot then opens the inbox.
+// waitUpdates consumes the engine's latest-wins broadcast; each delivery
+// re-arms itself so exactly one waiter is outstanding at a time (FR-B2:
+// live changes repaint with no user action).
+func (m *Model) waitUpdates() tea.Cmd {
+	return func() tea.Msg {
+		snap, ok := <-m.engine.Updates()
+		if !ok {
+			return nil
+		}
+		return snapMsg{snap: snap, live: true}
+	}
+}
+
+// freshFade is the timer that clears the new-mail highlight (the slide-in
+// fades, PLAN §4.1 case 3).
+func (m *Model) freshFade() tea.Cmd {
+	return tea.Tick(sync.FreshTTL, func(time.Time) tea.Msg {
+		snap := m.engine.ClearFresh()
+		return snapMsg{snap: snap}
+	})
+}
+
+// Init starts the sync loop, loads identities + the mailbox tree, and arms
+// the live-update waiter; the first mailbox snapshot then opens the inbox.
 func (m *Model) Init() tea.Cmd {
-	return m.engineOp("load-mailboxes", func(ctx context.Context) (sync.Snapshot, error) {
+	m.engine.Start(m.ctx)
+	return tea.Batch(m.waitUpdates(), m.loadAccountCmd())
+}
+
+// loadAccountCmd fetches identities and the mailbox tree (FR-B1).
+func (m *Model) loadAccountCmd() tea.Cmd {
+	return m.engineOp("load-account", func(ctx context.Context) (sync.Snapshot, error) {
+		// Identity absence or failure never blocks reading (FR-A6):
+		// compose needs identities in M5, the reader does not.
+		_ = m.engine.LoadIdentities(ctx)
 		if err := m.engine.LoadMailboxes(ctx); err != nil {
 			return sync.Snapshot{}, err
 		}
@@ -102,7 +140,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case snapMsg:
-		return m.applySnapshot(msg.snap)
+		// Snapshots are immutable per version: stale deliveries (a
+		// broadcast racing an op's direct return) apply nothing but still
+		// re-arm the waiter for live deliveries.
+		var cmd tea.Cmd
+		if msg.snap.Version > m.snap.Version {
+			_, cmd = m.applySnapshot(msg.snap)
+		}
+		if msg.live {
+			return m, tea.Batch(cmd, m.waitUpdates())
+		}
+		return m, cmd
 
 	case errMsg:
 		m.err = truncateErr(msg.op, msg.err)
@@ -123,12 +171,23 @@ func truncateErr(op string, err error) string {
 }
 
 // applySnapshot stores a new snapshot and schedules follow-up work:
-// first-open of the inbox, prefetch at window edges, lazy body loads.
+// first-open of the inbox, prefetch at window edges, lazy body loads, and
+// the fresh-row fade timer.
 func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	m.snap = snap
 	m.err = ""
 
 	var cmds []tea.Cmd
+
+	// Fresh-row fade (PLAN §4.1 case 3): one timer per highlight batch.
+	if len(snap.Fresh) > 0 {
+		if !m.freshArmed {
+			m.freshArmed = true
+			cmds = append(cmds, m.freshFade())
+		}
+	} else {
+		m.freshArmed = false
+	}
 
 	// First load: open the inbox (FR-B1 initial window).
 	if snap.ActiveMailbox == "" && len(snap.Mailboxes) > 0 {
@@ -370,6 +429,10 @@ func (m *Model) nextPane(dir int) ui.Pane {
 }
 
 func (m *Model) moveCursor(delta int) (tea.Model, tea.Cmd) {
+	// Touching the list acknowledges fresh arrivals: drop the highlight.
+	if len(m.snap.Fresh) > 0 {
+		m.engine.ClearFresh()
+	}
 	m.snap = m.engine.MoveCursor(delta)
 	return m.applySnapshot(m.snap)
 }
