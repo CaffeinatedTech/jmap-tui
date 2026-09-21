@@ -246,41 +246,51 @@ func (f queryFilter) hasSearchFilter() bool {
 		f.HasAttachment != nil
 }
 
-// matchesSearch applies the RFC 8621 §4.4.1 conditions the fake honours,
-// case-insensitively, with AND semantics. "text" matches subject, the
-// from/to addresses, and the body content; before/after are exclusive
-// bounds on receivedAt.
-func matchesSearch(e Email, f queryFilter) bool {
-	sub := func(hay, needle string) bool {
-		return strings.Contains(strings.ToLower(hay), strings.ToLower(needle))
+// tokenHaystack lowercases and splits content into whole tokens —
+// Stalwart-class servers match whole tokens only (PLAN §7): a partial
+// word matches nothing on any searchable field.
+func tokenHaystack(parts ...string) map[string]bool {
+	tokens := map[string]bool{}
+	for _, p := range parts {
+		for _, f := range strings.Fields(strings.ToLower(p)) {
+			tokens[f] = true
+		}
 	}
-	if f.Text != "" {
-		hay := e.Subject + " " + e.TextBody + " " + e.HTMLBody + " " + e.Preview
-		for _, a := range e.From {
-			hay += " " + a.Name + " " + a.Email
-		}
-		for _, a := range e.To {
-			hay += " " + a.Name + " " + a.Email
-		}
-		if !sub(hay, f.Text) {
+	return tokens
+}
+
+// tokenMatch reports whether every word of the needle appears as a whole
+// token (servers tokenize the needle too — a multi-word needle is an AND
+// of its words).
+func tokenMatch(tokens map[string]bool, needle string) bool {
+	for _, w := range strings.Fields(strings.ToLower(needle)) {
+		if !tokens[w] {
 			return false
 		}
 	}
-	fromOK, toOK := f.From == "", f.To == ""
-	for _, a := range e.From {
-		if sub(a.Name, f.From) || sub(a.Email, f.From) {
-			fromOK = true
+	return true
+}
+
+// matchesSearch applies the RFC 8621 §4.4.1 conditions the fake honours,
+// with the token semantics real servers use (verified against Stalwart,
+// PLAN §7): text/from/to/subject match whole tokens only, AND across a
+// multi-word needle; before/after are exclusive receivedAt bounds.
+func matchesSearch(e Email, f queryFilter) bool {
+	if f.Text != "" {
+		froms, tos := addrStrings(e.From), addrStrings(e.To)
+		parts := append([]string{e.Subject, e.TextBody, e.HTMLBody, e.Preview}, froms...)
+		parts = append(parts, tos...)
+		if !tokenMatch(tokenHaystack(parts...), f.Text) {
+			return false
 		}
 	}
-	for _, a := range e.To {
-		if sub(a.Name, f.To) || sub(a.Email, f.To) {
-			toOK = true
-		}
-	}
-	if !fromOK || !toOK {
+	if f.From != "" && !tokenMatch(tokenHaystack(addrStrings(e.From)...), f.From) {
 		return false
 	}
-	if f.Subject != "" && !sub(e.Subject, f.Subject) {
+	if f.To != "" && !tokenMatch(tokenHaystack(addrStrings(e.To)...), f.To) {
+		return false
+	}
+	if f.Subject != "" && !tokenMatch(tokenHaystack(e.Subject), f.Subject) {
 		return false
 	}
 	if f.After != nil && !e.ReceivedAt.After(*f.After) {
@@ -296,6 +306,15 @@ func matchesSearch(e Email, f queryFilter) bool {
 		return false
 	}
 	return true
+}
+
+// addrStrings flattens addresses into "Name Email" strings for tokenising.
+func addrStrings(addrs []Address) []string {
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, a.Name+" "+a.Email)
+	}
+	return out
 }
 
 // scoped resolves the candidate set for a query filter. Synthetic scopes
