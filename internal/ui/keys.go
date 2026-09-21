@@ -1,0 +1,217 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Action is a stable identifier for a user command, used for key remapping
+// in config ([keys] tables) and for help generation (FR-I3, FR-I4).
+type Action string
+
+// The M1 action set. Actions for later milestones (read/unread, star, move,
+// search, compose, account switch …) join here as they land.
+const (
+	ActListDown      Action = "list.down"
+	ActListUp        Action = "list.up"
+	ActListTop       Action = "list.top"
+	ActListBottom    Action = "list.bottom"
+	ActListPageDown  Action = "list.page_down"
+	ActListPageUp    Action = "list.page_up"
+	ActToggleThread  Action = "list.toggle_thread"
+	ActToggleSize    Action = "list.toggle_size"
+	ActSidebarDown   Action = "sidebar.down"
+	ActSidebarUp     Action = "sidebar.up"
+	ActOpenMailbox   Action = "sidebar.open"
+	ActSidebarClose  Action = "sidebar.close"
+	ActPreviewDown   Action = "preview.down"
+	ActPreviewUp     Action = "preview.up"
+	ActPreviewHalf   Action = "preview.half_down"
+	ActPreviewHalfUp Action = "preview.half_up"
+	ActPreviewTop    Action = "preview.top"
+	ActPreviewBottom Action = "preview.bottom"
+	ActCyclePane     Action = "pane.cycle"
+	ActCyclePaneRev  Action = "pane.cycle_reverse"
+	ActToggleSidebar Action = "pane.toggle_sidebar"
+	ActHelp          Action = "ui.help"
+	ActQuit          Action = "ui.quit"
+)
+
+// Binding is one key → action mapping. Help carries the human description
+// shown by the overlay (FR-I4).
+type Binding struct {
+	Key  string // keystroke notation: "j", "ctrl+c", "shift+tab"
+	Act  Action
+	Help string
+	Pane Pane // which pane the action belongs to (for context-sensitive help)
+}
+
+// defaultBindings is the canonical keymap (README). Keys are single strings;
+// remaps replace by action.
+func defaultBindings() []Binding {
+	return []Binding{
+		{Key: "j", Act: ActListDown, Help: "next message", Pane: PaneList},
+		{Key: "down", Act: ActListDown, Help: "next message", Pane: PaneList},
+		{Key: "k", Act: ActListUp, Help: "previous message", Pane: PaneList},
+		{Key: "up", Act: ActListUp, Help: "previous message", Pane: PaneList},
+		{Key: "g", Act: ActListTop, Help: "first message", Pane: PaneList},
+		{Key: "shift+g", Act: ActListBottom, Help: "last message", Pane: PaneList},
+		{Key: "ctrl+f", Act: ActListPageDown, Help: "page down", Pane: PaneList},
+		{Key: "ctrl+b", Act: ActListPageUp, Help: "page up", Pane: PaneList},
+		{Key: "enter", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
+		{Key: "o", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
+		{Key: "s", Act: ActToggleSize, Help: "show/hide sizes", Pane: PaneList},
+		{Key: "j", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
+		{Key: "down", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
+		{Key: "k", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
+		{Key: "up", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
+		{Key: "enter", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
+		{Key: "l", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
+		{Key: "h", Act: ActSidebarClose, Help: "collapse sidebar", Pane: PaneSidebar},
+		{Key: "j", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
+		{Key: "down", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
+		{Key: "k", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
+		{Key: "up", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
+		{Key: "d", Act: ActPreviewHalf, Help: "half page down", Pane: PanePreview},
+		{Key: "u", Act: ActPreviewHalfUp, Help: "half page up", Pane: PanePreview},
+		{Key: "ctrl+f", Act: ActPreviewDown, Help: "page down", Pane: PanePreview},
+		{Key: "ctrl+b", Act: ActPreviewUp, Help: "page up", Pane: PanePreview},
+		{Key: "g", Act: ActPreviewTop, Help: "top of message", Pane: PanePreview},
+		{Key: "shift+g", Act: ActPreviewBottom, Help: "bottom of message", Pane: PanePreview},
+		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
+		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
+		{Key: "[", Act: ActToggleSidebar, Help: "show/hide sidebar", Pane: PaneAny},
+		{Key: "?", Act: ActHelp, Help: "help", Pane: PaneAny},
+		{Key: "q", Act: ActQuit, Help: "quit", Pane: PaneAny},
+	}
+}
+
+// KeyMap resolves keystrokes to actions with per-pane precedence: a binding
+// registered to a specific pane shadows the same key bound to PaneAny, so
+// "j" can mean next-message in the list and scroll-down in the preview
+// without ambiguity (FR-I3: conflicts forbidden — same key+pane is a
+// config error).
+type KeyMap struct {
+	byAction map[Action]string
+	specific map[string]Action // pane-key → action (uniqueness enforced)
+	keys     []Binding         // in definition order, for help
+}
+
+// Pane identifies a focusable region.
+type Pane int
+
+// Panes, in cycling order.
+const (
+	PaneSidebar Pane = iota
+	PaneList
+	PanePreview
+	paneCount
+
+	// PaneAny is a wildcard for global bindings.
+	PaneAny Pane = -1
+)
+
+// NewKeyMap builds the keymap from defaults plus user remaps (config
+// [keys].<action> = "key"). The first listed binding for an action is its
+// primary key (shown in help); later bindings are aliases. A remap
+// replacing a key already bound to a different action in the same pane is
+// rejected as a conflict by Validate.
+func NewKeyMap(remaps map[Action]string) (*KeyMap, error) {
+	km := &KeyMap{
+		byAction: map[Action]string{},
+		specific: map[string]Action{},
+		keys:     defaultBindings(),
+	}
+	for i := range km.keys {
+		b := &km.keys[i]
+		if _, exists := km.byAction[b.Act]; !exists {
+			km.byAction[b.Act] = b.Key
+		}
+	}
+	for act, key := range remaps {
+		if _, ok := km.byAction[act]; !ok {
+			return nil, fmt.Errorf("keys: unknown action %q", act)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("keys: empty key for action %q", act)
+		}
+		km.byAction[act] = key
+	}
+	// The primary binding takes the resolved key (possibly remapped);
+	// aliases keep their own keys.
+	primarySeen := map[Action]bool{}
+	for i := range km.keys {
+		b := &km.keys[i]
+		if !primarySeen[b.Act] {
+			b.Key = km.byAction[b.Act]
+			primarySeen[b.Act] = true
+		}
+		km.specific[paneKey(b.Pane, b.Key)] = b.Act
+	}
+	return km, nil
+}
+
+func paneKey(p Pane, key string) string {
+	return fmt.Sprintf("%d\x00%s", p, strings.ToLower(key))
+}
+
+// Match resolves a keystroke in the given pane: pane-specific bindings win
+// over PaneAny bindings.
+func (km *KeyMap) Match(pane Pane, keystroke string) (Action, bool) {
+	if act, ok := km.specific[paneKey(pane, keystroke)]; ok {
+		return act, true
+	}
+	if act, ok := km.specific[paneKey(PaneAny, keystroke)]; ok {
+		return act, true
+	}
+	return "", false
+}
+
+// Key returns the key bound to an action.
+func (km *KeyMap) Key(act Action) string { return km.byAction[act] }
+
+// HelpSection is a pane's bindings for the overlay (FR-I4).
+type HelpSection struct {
+	Title    string
+	Bindings []Binding
+}
+
+// Help generates the overlay content for a pane: the pane's own bindings
+// plus the global ones, in definition order, with aliases grouped
+// ("j/down").
+func (km *KeyMap) Help(pane Pane) HelpSection {
+	sec := HelpSection{}
+	seen := map[Action]bool{}
+	for _, b := range km.keys {
+		if b.Pane != pane && b.Pane != PaneAny {
+			continue
+		}
+		if seen[b.Act] {
+			continue
+		}
+		seen[b.Act] = true
+		keys := []string{}
+		for _, cand := range km.keys {
+			if cand.Act == b.Act && cand.Pane == b.Pane {
+				keys = append(keys, cand.Key)
+			}
+		}
+		grouped := b
+		grouped.Key = strings.Join(keys, "/")
+		sec.Bindings = append(sec.Bindings, grouped)
+	}
+	return sec
+}
+
+// Validate reports duplicate key bindings within the same pane (FR-I3).
+func (km *KeyMap) Validate() error {
+	seen := map[string]Action{}
+	for _, b := range km.keys {
+		pk := paneKey(b.Pane, b.Key)
+		if prev, dup := seen[pk]; dup {
+			return fmt.Errorf("keys: %q bound to both %s and %s in the same context", b.Key, prev, b.Act)
+		}
+		seen[pk] = b.Act
+	}
+	return nil
+}

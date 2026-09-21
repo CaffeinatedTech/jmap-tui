@@ -23,6 +23,7 @@ type Engine struct {
 	mailboxes   []mail.Mailbox
 	mboxOrder   []MailboxNode
 	window      *Window
+	cursorRow   int // index into rendered rows (incl. thread members)
 	summaries   map[mail.ID]mail.EmailSummary
 	threads     map[mail.ID][]mail.ID // threadID → member ids, oldest first
 	expanded    map[mail.ID]bool
@@ -170,6 +171,7 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
 	e.window = NewWindow(Query{Filter: FilterSpec{MailboxID: id}}, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
+	e.cursorRow = 0
 	e.bodyLoading = ""
 	e.body = nil
 	r, pos, limit := e.window.Seed(0)
@@ -191,25 +193,51 @@ func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	return nil
 }
 
-// MoveCursor shifts the list cursor and returns the fresh snapshot. It is
-// purely local state — no network (NFR-1).
+// MoveCursor shifts the rendered-row cursor and returns the fresh snapshot.
+// The cursor spans expanded thread members too (FR-D2); the underlying
+// window cursor follows the owning thread header so window math (edges,
+// prefetch) stays anchored. Purely local — no network (NFR-1).
 func (e *Engine) MoveCursor(delta int) Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.window != nil {
-		e.window.Move(delta)
+	rows := e.renderedRowsLocked()
+	if len(rows) > 0 {
+		e.cursorRow = min(max(e.cursorRow+delta, 0), len(rows)-1)
+		e.syncWindowCursorLocked(rows)
 	}
 	e.publishLocked()
 	return e.snapshotLocked()
 }
 
-// SeekCursor puts the cursor on the given message id (sidebar→list jumps
-// and neighbours-of-destroyed rows).
+// syncWindowCursorLocked aligns the window cursor with the thread header
+// owning the rendered cursor row.
+func (e *Engine) syncWindowCursorLocked(rows []Row) {
+	if e.window == nil || len(rows) == 0 {
+		return
+	}
+	header := rows[e.cursorRow].ID
+	if rows[e.cursorRow].ThreadMember {
+		for i := e.cursorRow; i >= 0; i-- {
+			if rows[i].ThreadHeader {
+				header = rows[i].ID
+				break
+			}
+		}
+	}
+	e.window.SeekID(header)
+}
+
+// SeekCursor puts the cursor on the given message id if rendered.
 func (e *Engine) SeekCursor(id mail.ID) Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.window != nil {
-		e.window.SeekID(id)
+	rows := e.renderedRowsLocked()
+	for i, r := range rows {
+		if r.ID == id {
+			e.cursorRow = i
+			e.syncWindowCursorLocked(rows)
+			break
+		}
 	}
 	e.publishLocked()
 	return e.snapshotLocked()
@@ -219,10 +247,11 @@ func (e *Engine) SeekCursor(id mail.ID) Snapshot {
 func (e *Engine) CursorID() mail.ID {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.window == nil {
+	rows := e.renderedRowsLocked()
+	if e.cursorRow < 0 || e.cursorRow >= len(rows) {
 		return ""
 	}
-	return e.window.CursorID()
+	return rows[e.cursorRow].ID
 }
 
 // Prefetch satisfies any pending edge extension the window wants (FR-D3).
@@ -314,8 +343,25 @@ func (e *Engine) Jump(ctx context.Context, t JumpTarget) error {
 		return err
 	}
 	e.window.SettleJump(t)
+	e.alignCursorWithWindowLocked()
 	e.publishLocked()
 	return nil
+}
+
+// alignCursorWithWindowLocked moves the rendered cursor to the row of the
+// window cursor id (after jumps/re-anchors). Caller holds mu.
+func (e *Engine) alignCursorWithWindowLocked() {
+	id := e.window.CursorID()
+	if id == "" {
+		return
+	}
+	rows := e.renderedRowsLocked()
+	for i, r := range rows {
+		if r.ID == id {
+			e.cursorRow = i
+			return
+		}
+	}
 }
 
 // ToggleThread expands or collapses the cursor message's thread in place
@@ -326,7 +372,12 @@ func (e *Engine) ToggleThread(ctx context.Context) error {
 		e.mu.Unlock()
 		return nil
 	}
-	id := e.window.CursorID()
+	rows := e.renderedRowsLocked()
+	if e.cursorRow < 0 || e.cursorRow >= len(rows) {
+		e.mu.Unlock()
+		return nil
+	}
+	id := rows[e.cursorRow].ID
 	sum, ok := e.summaries[id]
 	if !ok || id == "" {
 		e.mu.Unlock()
@@ -406,11 +457,58 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 // setBodyLocked installs the body view when id still matches the cursor.
 // The caller must hold mu.
 func (e *Engine) setBodyLocked(id mail.ID, text string, atts []mail.Attachment) {
-	if e.window == nil || e.window.CursorID() != id {
+	if e.window == nil || e.cursorIDLocked() != id {
 		return
 	}
 	e.body = &BodyView{ID: id, Text: text, Attachments: atts}
 	e.publishLocked()
+}
+
+// cursorIDLocked returns the rendered-row cursor id. Caller holds mu.
+func (e *Engine) cursorIDLocked() mail.ID {
+	rows := e.renderedRowsLocked()
+	if e.cursorRow < 0 || e.cursorRow >= len(rows) {
+		return ""
+	}
+	return rows[e.cursorRow].ID
+}
+
+// renderedRowsLocked builds the rendered row list: collapsed window ids,
+// with expanded threads splicing their remaining members (oldest-first)
+// beneath their header. Caller holds mu.
+func (e *Engine) renderedRowsLocked() []Row {
+	if e.window == nil {
+		return nil
+	}
+	ids := e.window.IDs()
+	rows := make([]Row, 0, len(ids))
+	for _, id := range ids {
+		sum, ok := e.summaries[id]
+		if !ok {
+			continue // summary not yet arrived; row appears when it does
+		}
+		r := Row{ID: id, Summary: sum}
+		if e.expanded[sum.ThreadID] {
+			// The header (the thread's collapsed representative — its
+			// newest member) renders first; remaining members follow,
+			// oldest-first, so the header is never duplicated.
+			r.ThreadHeader = true
+			rows = append(rows, r)
+			for _, mid := range e.threads[sum.ThreadID] {
+				if mid == id {
+					continue
+				}
+				ms, ok := e.summaries[mid]
+				if !ok {
+					continue
+				}
+				rows = append(rows, Row{ID: mid, Summary: ms, ThreadMember: true})
+			}
+			continue
+		}
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 // absorbSummariesLocked stores page summaries (id-keyed, last wins).
@@ -443,46 +541,20 @@ func (e *Engine) snapshotLocked() Snapshot {
 	}
 	snap.Total = e.window.Total()
 	snap.Start = e.window.Start()
-	snap.Cursor, _ = e.window.Cursor()
 
-	ids := e.window.IDs()
-	rows := make([]Row, 0, len(ids))
-	for _, id := range ids {
-		sum, ok := e.summaries[id]
-		if !ok {
-			continue // summary not yet arrived; row appears when it does
-		}
-		r := Row{ID: id, Summary: sum}
-		if e.expanded[sum.ThreadID] {
-			// The header (the thread's collapsed representative — its
-			// newest member) renders first; remaining members follow,
-			// oldest-first, so the header is never duplicated.
-			r.ThreadHeader = true
-			rows = append(rows, r)
-			for _, mid := range e.threads[sum.ThreadID] {
-				if mid == id {
-					continue
-				}
-				ms, ok := e.summaries[mid]
-				if !ok {
-					continue
-				}
-				rows = append(rows, Row{ID: mid, Summary: ms, ThreadMember: true})
-			}
-			continue
-		}
-		rows = append(rows, r)
-	}
+	rows := e.renderedRowsLocked()
+	snap.Cursor = min(max(e.cursorRow, 0), max(len(rows)-1, 0))
 	snap.Rows = rows
 
 	fwd, bwd := e.window.AtEdge()
 	snap.LoadForward = fwd
 	snap.LoadBackward = bwd
 
-	if e.body != nil && e.window.CursorID() == e.body.ID {
+	cursor := e.cursorIDLocked()
+	if e.body != nil && cursor == e.body.ID {
 		snap.Body = e.body
 	}
-	snap.BodyLoading = e.bodyLoading != "" && e.bodyLoading == e.window.CursorID()
+	snap.BodyLoading = e.bodyLoading != "" && e.bodyLoading == cursor
 	return snap
 }
 

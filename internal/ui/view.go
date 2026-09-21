@@ -1,0 +1,248 @@
+package ui
+
+import (
+	"strings"
+	"time"
+
+	"charm.land/lipgloss/v2"
+
+	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
+)
+
+// State is everything Render needs. The app builds it each frame from its
+// model; golden tests build it from fixtures.
+type State struct {
+	Theme Theme
+	Snap  sync.Snapshot
+
+	Focus          Pane
+	SidebarVisible bool
+	ShowSize       bool
+	HelpOpen       bool
+	SidebarSel     int // sidebar cursor row index
+
+	// VpView is the pre-rendered preview viewport (sized by the app via
+	// ComputeLayout).
+	VpView string
+
+	// HelpSec is the generated binding list for the overlay (FR-I4).
+	HelpSec HelpSection
+
+	// Err flashes a non-fatal error line under the header.
+	Err string
+
+	// Now anchors relative dates; injected for deterministic goldens.
+	Now time.Time
+}
+
+// Pane widths per FR-I1: sidebar 24–30, the list takes 55% of what's left
+// (clamped), the preview takes the remainder.
+const (
+	sidebarWidth = 26
+	listMin      = 36
+	listMax      = 60
+)
+
+// Layout is the resolved pane geometry for one frame.
+type Layout struct {
+	SidebarW int // 0 when the sidebar is not shown
+	ListW    int // 0 when the list is not shown
+	PreviewW int // 0 when the preview is not shown
+
+	BodyH int // preview viewport height (0 when preview hidden)
+}
+
+// shownPanes decides which panes render for the given width and focus
+// (FR-I1): three panes ≥ 100 cols, two panes 60–99 (preview swaps in for
+// the list when focused), single focused pane below 60.
+func shownPanes(w int, st State) (sidebar, list, preview bool) {
+	if w < 60 {
+		return st.Focus == PaneSidebar && st.SidebarVisible,
+			st.Focus == PaneList,
+			st.Focus == PanePreview
+	}
+	if w < 100 {
+		sidebar = st.SidebarVisible
+		list = st.Focus != PanePreview
+		preview = st.Focus == PanePreview
+		return sidebar, list, preview
+	}
+	return st.SidebarVisible, true, true
+}
+
+// ComputeLayout resolves pane sizes for the frame. The app uses it to size
+// the preview viewport; Render uses it to compose.
+func ComputeLayout(w, h int, st State) Layout {
+	var l Layout
+	sidebar, list, preview := shownPanes(w, st)
+	contentH := h - 1 // header line
+	if st.HelpOpen {
+		return Layout{}
+	}
+	if sidebar {
+		l.SidebarW = sidebarWidth
+	}
+	rest := w - l.SidebarW
+	listW := max(min(rest*55/100, listMax), listMin)
+	if list && preview {
+		l.ListW = listW
+		if pw := rest - listW; pw > 0 {
+			l.PreviewW = pw
+		} else {
+			l.ListW = rest
+		}
+	} else if list {
+		l.ListW = rest
+	} else if preview {
+		l.PreviewW = rest
+	}
+	if l.PreviewW > 0 {
+		// header block + hairline + attachments strip + error line budget
+		l.BodyH = contentH - previewChrome(st)
+		if l.BodyH < 1 {
+			l.BodyH = 1
+		}
+	}
+	return l
+}
+
+// previewChrome counts the preview's fixed lines for the given state.
+func previewChrome(st State) int {
+	n := len(previewHeader(st.Snap)) + 1 + 1 // header block + rule + strip
+	if st.Err != "" {
+		n++
+	}
+	return n
+}
+
+// Render composes one full frame, width w and height h.
+func Render(w, h int, st State) string {
+	if st.HelpOpen {
+		return renderHelp(w, h, st)
+	}
+	var b strings.Builder
+	b.WriteString(renderHeader(w, st))
+	b.WriteString("\n")
+
+	l := ComputeLayout(w, h, st)
+	sidebar, list, preview := shownPanes(w, st)
+
+	var panes []string
+	if l.SidebarW > 0 && sidebar {
+		panes = append(panes, renderSidebar(l, contentHeight(h, st), st))
+	}
+	if l.ListW > 0 && list {
+		panes = append(panes, renderList(l, contentHeight(h, st), st))
+	}
+	if l.PreviewW > 0 && preview {
+		panes = append(panes, renderPreview(l, contentHeight(h, st), st))
+	}
+	b.WriteString(joinPanes(panes, st.Theme))
+	return b.String()
+}
+
+func contentHeight(h int, st State) int { return h - 1 }
+
+// joinPanes composes panes side by side with a hairline rule between them.
+// Panes are equal-height blocks; shorter panes keep blank rows.
+func joinPanes(panes []string, th Theme) string {
+	switch len(panes) {
+	case 0:
+		return ""
+	case 1:
+		return panes[0]
+	}
+	split := make([][]string, len(panes))
+	widths := make([]int, len(panes))
+	maxH := 0
+	for i, p := range panes {
+		split[i] = strings.Split(p, "\n")
+		for _, ln := range split[i] {
+			widths[i] = max(widths[i], lipgloss.Width(ln))
+		}
+		maxH = max(maxH, len(split[i]))
+	}
+	var out strings.Builder
+	padStyle := lipgloss.NewStyle()
+	for row := 0; row < maxH; row++ {
+		for i := range split {
+			ln := ""
+			if row < len(split[i]) {
+				ln = split[i][row]
+			}
+			out.WriteString(padStyle.Width(widths[i]).Render(ln))
+			if i < len(split)-1 {
+				out.WriteString(th.Rule.Render("│"))
+			}
+		}
+		if row < maxH-1 {
+			out.WriteString("\n")
+		}
+	}
+	return out.String()
+}
+
+// renderHeader draws the breadcrumb line: title, active mailbox, totals.
+func renderHeader(w int, st State) string {
+	th := st.Theme
+	var parts []string
+	parts = append(parts, th.Accent.Render("jmap-tui"))
+	if name := activeMailboxName(st); name != "" {
+		parts = append(parts, th.Header.Render(name))
+	}
+	if st.Snap.Total >= 0 {
+		parts = append(parts, th.Muted.Render(renderCount(st)))
+	}
+	line := strings.Join(parts, "  ")
+	if st.Err != "" {
+		pad := w - lipgloss.Width(line) - lipgloss.Width(st.Err) - 2
+		if pad > 0 {
+			line += strings.Repeat(" ", pad) + th.Danger.Render(st.Err)
+		}
+	}
+	return line
+}
+
+func renderCount(st State) string {
+	unread := 0
+	for _, mb := range st.Snap.Mailboxes {
+		if mb.Mailbox.ID == st.Snap.ActiveMailbox {
+			unread = mb.Mailbox.UnreadEmails
+		}
+	}
+	if unread > 0 {
+		return strings.TrimSpace(strings.Join([]string{itoa(st.Snap.Total), "messages", "·", itoa(unread), "unread"}, " "))
+	}
+	return strings.TrimSpace(strings.Join([]string{itoa(st.Snap.Total), "messages"}, " "))
+}
+
+func itoa(n int) string {
+	if n < 0 {
+		return ""
+	}
+	return fmtInt(n)
+}
+
+func fmtInt(n int) string {
+	// small local itoa to keep imports tidy
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
+func activeMailboxName(st State) string {
+	for _, mb := range st.Snap.Mailboxes {
+		if mb.Mailbox.ID == st.Snap.ActiveMailbox {
+			return mb.Mailbox.Name
+		}
+	}
+	return ""
+}
