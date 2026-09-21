@@ -154,8 +154,15 @@ func (c *Client) FetchSummaries(ctx context.Context, ids []mail.ID) ([]mail.Emai
 	return convertSummaries(gr.List), nil
 }
 
-// bodyProperties keeps the fetched body lean: identity enough to download
-// attachments later, never content (FR-E4, NFR-4).
+// bodyFetchProperties is the full property set for body fetches: summary
+// metadata plus the body structure parts and their values. Listing the
+// body properties explicitly is required — a Properties list that omits
+// them yields null body structure even with FetchAllBodyValues.
+var bodyFetchProperties = append(append([]string{}, summaryProperties...),
+	"blobId", "textBody", "htmlBody", "attachments", "bodyValues")
+
+// bodyProperties keeps the fetched body parts lean: identity enough to
+// download attachments later, never content (FR-E4, NFR-4).
 var bodyProperties = []string{"partId", "blobId", "size", "name", "type", "charset", "disposition"}
 
 // FetchBody implements mail.Provider with the FR-E2 preference order: the
@@ -168,7 +175,7 @@ func (c *Client) FetchBody(ctx context.Context, id mail.ID) (mail.EmailBody, err
 	get := &email.Get{
 		Account:            jmap.ID(c.accountID),
 		IDs:                []jmap.ID{jmap.ID(id)},
-		Properties:         summaryProperties,
+		Properties:         bodyFetchProperties,
 		BodyProperties:     bodyProperties,
 		FetchAllBodyValues: true,
 	}
