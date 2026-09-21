@@ -26,6 +26,7 @@ type Engine struct {
 	cursorRow   int // index into rendered rows (incl. thread members)
 	summaries   map[mail.ID]mail.EmailSummary
 	threads     map[mail.ID][]mail.ID // threadID → member ids, oldest first
+	threadOrder []mail.ID             // thread cache insertion order (bounded)
 	expanded    map[mail.ID]bool
 	bodies      *bodyCache
 	body        *BodyView
@@ -404,7 +405,7 @@ func (e *Engine) ToggleThread(ctx context.Context) error {
 		}
 		e.mu.Lock()
 		e.absorbSummariesLocked(sums)
-		e.threads[sum.ThreadID] = append([]mail.ID(nil), handle.IDs()...)
+		e.rememberThreadLocked(sum.ThreadID, append([]mail.ID(nil), handle.IDs()...))
 	}
 	e.expanded[sum.ThreadID] = true
 	e.publishLocked()
@@ -511,10 +512,54 @@ func (e *Engine) renderedRowsLocked() []Row {
 	return rows
 }
 
-// absorbSummariesLocked stores page summaries (id-keyed, last wins).
+// absorbSummariesLocked stores page summaries (id-keyed, last wins), then
+// evicts everything the visible state no longer needs (PLAN §3: summaries
+// are evicted when a window trims, so memory stays bounded no matter how
+// far the user scrolls — NFR-2). Bodies have their own LRU and are not
+// touched here.
 func (e *Engine) absorbSummariesLocked(sums []mail.EmailSummary) {
 	for _, s := range sums {
 		e.summaries[s.ID] = s
+	}
+	e.evictSummariesLocked()
+}
+
+// evictSummariesLocked drops summaries outside the window and outside any
+// cached thread (so re-expanding a recently viewed thread needs no
+// refetch). Caller holds mu.
+func (e *Engine) evictSummariesLocked() {
+	keep := map[mail.ID]bool{}
+	if e.window != nil {
+		for _, id := range e.window.IDs() {
+			keep[id] = true
+		}
+	}
+	for _, members := range e.threads {
+		for _, mid := range members {
+			keep[mid] = true
+		}
+	}
+	for id := range e.summaries {
+		if !keep[id] {
+			delete(e.summaries, id)
+		}
+	}
+}
+
+// maxThreadCache bounds the remembered thread expansions (NFR-2); the
+// oldest entry is dropped when exceeded.
+const maxThreadCache = 64
+
+// rememberThreadLocked caches a thread's member ids with LRU-style
+// eviction. Caller holds mu.
+func (e *Engine) rememberThreadLocked(threadID mail.ID, members []mail.ID) {
+	e.threads[threadID] = members
+	e.threadOrder = append(e.threadOrder, threadID)
+	for len(e.threadOrder) > maxThreadCache {
+		oldest := e.threadOrder[0]
+		e.threadOrder = e.threadOrder[1:]
+		delete(e.threads, oldest)
+		delete(e.expanded, oldest)
 	}
 }
 
