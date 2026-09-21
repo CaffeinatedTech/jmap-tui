@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M2 landed (everything above, plus live sync: push-driven updates, reconnect with poll fallback, and a status line; verified against Stalwart with ~1s push latency).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M3 landed (the M2 reader + live sync, plus full triage: read/unread, star, multi-select batch actions, move/copy, delete-to-trash with permanent-destroy undo window, archive with remembered fallback, undo toasts, and attachment save; verified against Stalwart with server-side checks).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -87,17 +87,21 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 | List | `g` / `G` | Top / bottom |
 | List | `Space` / `u` | Toggle read/unread |
 | List | `*` | Toggle star/flag |
+| List | `x` | Select (multi-select; batched actions) |
 | List | `y` | Archive |
 | List | `m` | Move to mailbox… |
-| List | `#` | Delete (to Trash) |
-| List | `x` | Select (multi-select) |
-| List | `/` | Search |
-| List | `R` | Force resync |
-| Any | `c` | Compose |
+| List | `C` | Copy to mailbox… |
+| List | `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
+| Message | `s` | Save attachments… |
+| Any | `ctrl+z` | Undo last action (while its toast shows) |
+| List | `/` | Search *(M4)* |
+| Any | `c` | Compose *(M5)* |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
-| Any | `S` | Switch account |
+| Any | `S` | Switch account *(M6)* |
 | Any | `?` | Help overlay |
 | Any | `q` | Quit |
+
+Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
 
 ## Stack
 

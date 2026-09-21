@@ -107,7 +107,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-G1] [M3]** Toggle read/unread (`Email/set` `keywords` `$seen`), star/flag (`$flagged`), answered/replied indicators (`$answered`, `$draft`), custom keywords [FUTURE UI].
 - **[FR-G2] [M3]** Move (`m` → mailbox picker) and copy between mailboxes; delete moves to role-`trash` mailbox; permanent delete inside Trash.
 - **[FR-G3] [M3]** Multi-select (`x`) with all actions applying to the selection as one batched `/set`.
-- **[FR-G4] [M3]** Archive (`y`) → role-`archive` mailbox; if the server has no archive role, fall back to a user-configured mailbox with a one-time prompt.
+- **[FR-G4] [M3]** Archive (`y`) → role-`archive` mailbox; if the server has no archive role, fall back to a user-chosen mailbox with a one-time prompt, remembered per account in app-managed prefs (FR-J1).
 - **[FR-G5] [M3]** Every destructive action shows a brief undo toast (5s default) — implemented as a second `/set` reversal, not a modal.
 
 ## FR-H — Compose & send
@@ -132,7 +132,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## FR-J — Configuration & credentials
 
-- **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app.
+- **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app. App-managed preferences (remembered in-app choices, e.g. the archive destination per account) live in `prefs.toml` next to the config file; the app owns and writes only that file, never `config.toml`.
 - **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless use. Plaintext-in-config is a config-error, not a fallback.
 - **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors.
 
@@ -174,4 +174,4 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 1. **HTML conversion fidelity** — in-repo converter is v1; do we ever want an optional external renderer (glow/w3m/pandoc) pipe? *(lean no for v1, revisit)*
 2. **Address book integration** (JMAP CardDAV capability) for autocomplete — post-v1?
 3. **Windows terminal support depth** — best-effort accepted for v0.1; confirm no blockers at M1. *(M1 note: no blockers observed — pure Go, no cgo, no platform-specific code paths; RSS measurement gracefully skips off-Linux.)*
-4. **Default archive behaviour** when server exposes no archive role — create one (needs write perms) or prompt? *(lean: prompt once, remember per account)*
+4. **Default archive behaviour** when server exposes no archive role — create one (needs write perms) or prompt? *(Resolved M3 2026-09-21: prompt once via the mailbox picker, remember per account in app-managed prefs.toml — FR-J1, FR-G4.)*
