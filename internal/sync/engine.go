@@ -374,10 +374,11 @@ func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
 	}
 	e.absorbSummariesLocked(sums)
 	// Fuzzy fallback (FR-F1): the server matched whole tokens only and
-	// found nothing — a partial word like "fixtu" — so scan the scope's
-	// headers client-side and stream matches in. Non-zero results take
-	// the fast path and never scan.
-	if e.window.Total() == 0 && len(lowerWords(s.Text)) > 0 {
+	// found nothing — a partial word in any text-ish field — so scan the
+	// scope's headers client-side and stream matches in. Non-zero results
+	// take the fast path and never scan; exact-only searches (keyword,
+	// attachment, dates) have no substring semantics to fall back to.
+	if e.window.Total() == 0 && s.scannable() {
 		e.startScanLocked(ctx, s)
 	}
 	e.publishLocked()
