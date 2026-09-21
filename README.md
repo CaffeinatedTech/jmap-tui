@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M0 landed (scaffold, config/keyring, JMAP client wrapper, live-connection smoke test).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M1 landed (daily-drivable reader: mailbox browsing, rolling-window list, preview with HTML→text, thread expansion, live-verified against Stalwart).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -37,7 +37,23 @@ IMAP support is a **future roadmap item**, designed for from day one via a provi
 
 ## Screenshots
 
-> _Coming in M1 — this space will fill in._
+> Rendered output from the golden test suite (real UI frames, ANSI colours in the terminal):
+
+Three panes (≥100 cols) — sidebar · list · preview, one accent, hairline rules:
+
+```text
+jmap-tui  Inbox  1432 messages · 3 unread
+Inbox               3 │ ★   Dana Ops      Deploy pipeline is … 35m │ From: Eve Security <eve@example.test>
+Sent Items            │   ↩   Eve Security  Quarterly audit r… 3h  │ To: me@example.test
+  agent-test          │       Bob Thread    ▾ Re: planning sync 1d │ Date: Mon, 21 Sep 2026 07:00
+Archive               │ ●     Alice Root     └ planning sync   1d  │ Subject: Quarterly audit report attached
+                      │ ↓ more                                     │ ──────────────────────────────
+                      │                                            │ Hello,
+                      │                                            │ Find the quarterly audit report attached.
+                      │                                            │ 1 attachment: audit-q3.pdf (242.5K)
+```
+
+Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. Dark and light palettes are terminal-adaptive.
 
 ## Install
 

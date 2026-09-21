@@ -173,5 +173,5 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 1. **HTML conversion fidelity** — in-repo converter is v1; do we ever want an optional external renderer (glow/w3m/pandoc) pipe? *(lean no for v1, revisit)*
 2. **Address book integration** (JMAP CardDAV capability) for autocomplete — post-v1?
-3. **Windows terminal support depth** — best-effort accepted for v0.1; confirm no blockers at M1.
+3. **Windows terminal support depth** — best-effort accepted for v0.1; confirm no blockers at M1. *(M1 note: no blockers observed — pure Go, no cgo, no platform-specific code paths; RSS measurement gracefully skips off-Linux.)*
 4. **Default archive behaviour** when server exposes no archive role — create one (needs write perms) or prompt? *(lean: prompt once, remember per account)*

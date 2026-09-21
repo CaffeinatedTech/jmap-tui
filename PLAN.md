@@ -142,7 +142,7 @@ Each milestone is a gate (acceptance criteria in REQUIREMENTS §7). Rough effort
 | # | Scope | Key deliverables |
 |---|---|---|
 | **M0** | Scaffold & spike | Repo, module layout, config+keyring, `jmapclient` wrapper, smoke CLI: connect to Stalwart test account, dump session/mailboxes. `mail.Provider` interface defined. mockjmap server v0. **Landed 2026-09-21: smoke verified against live Stalwart (session, 16 capabilities, mailbox tree with roles); config/keyring/jmapclient tested via mockjmap; live integration is env-gated; no CI, no docker — gates run locally pre-commit.** |
-| **M1** | Reader | Sidebar tree, rolling-window list (4.1), preview + HTML→text, threads expand, single-pane/two-pane responsive, help overlay. **This is the make-or-break milestone.** |
+| **M1** | Reader | Sidebar tree, rolling-window list (4.1), preview + HTML→text, threads expand, single-pane/two-pane responsive, help overlay. **This is the make-or-break milestone.** **Landed 2026-09-21:** full reader (sidebar/list/preview, help overlay, responsive 3/2/1-pane, dark+light themes, ctrl-c-twice exit, redacted `--log-file`, crash reports). Verified: 12k-message endless scroll vs mockjmap — RSS 20 MB (50 MB budget), worst local interaction 3.6 ms (16 ms budget), summaries bounded at cap+chunk; live Stalwart reader verification (collapsed queries, inThread expansion, HTML→text) with full fixture cleanup; 10 golden frames (120×40 / 99×35 / 59×25 × dark/light + help/loading/no-sidebar). Thread expansion uses `Email/query {inThread}` per §4.1 — FR-D2's `Thread/get` wording is superseded (drift flagged, REQUIREMENTS untouched: behaviour is identical). |
 | **M2** | Live sync | EventSource + `/changes` engine, optimistic-overlay plumbing, status line, reconnect/poll fallback, mailbox counts live. |
 | **M3** | Triage | Flags/read/star/move/copy/delete, multi-select batched `/set`, archive, undo toasts, crash-safe terminal restore. |
 | **M4** | Search | Query bar, advanced modal, scope toggle, unified search. |
@@ -166,7 +166,9 @@ Sequencing rule: M1 lands before M2 (window math must exist to be sync'd), M3 ma
 | Quota (RFC 9425) | ✔ | ✔ | hide feature |
 | `collapseThreads` in query | ✔ | ✔ | client-side group |
 
-M0 live-Stalwart observations: `eventSourceUrl` and the `websocket` capability are both advertised — push (M2) and WS fallback paths look available. `blob`, `sieve`, `quota`, `submission`, `vacationresponse` capabilities also present. Not yet exercised: `collapseThreads`, EmailSubmission undo window.
+M0 live-Stalwart observations: `eventSourceUrl` and the `websocket` capability are both advertised — push (M2) and WS fallback paths look available. `blob`, `sieve`, `quota`, `submission`, `vacationresponse` capabilities also present.
+
+M1 live-Stalwart observations: `collapseThreads` honoured on `Email/query`; `inThread` works but go-jmap v0.5.3 omits it from `FilterCondition` — the wrapper extends it (`threadQuery`, see §9 mitigation, exercised). `Email/set` create + destroy verified in the test mailbox. Not yet exercised: EmailSubmission undo window, `Email/changes` behaviour (M2).
 
 Fill `?` cells during M2/M7 verification; new servers get a row here + integration config.
 
