@@ -8,7 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
+	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
+	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
 
 // searchTestModel is the reader model with the search debounce shrunk so
@@ -44,7 +46,10 @@ func TestSearchBarOpenTypeDebounceClose(t *testing.T) {
 	}
 
 	// Typing arms the debounce; firing the current generation issues.
-	typeInto(m, 't')
+	// A full token takes the fast path — rows are present immediately.
+	for _, r := range "thread" {
+		typeInto(m, r)
+	}
 	pump(t, m, m.debounceSearch(m.search.seq))
 	if !m.snap.SearchActive {
 		t.Fatalf("SearchActive = false, ViewKey = %q", m.snap.ViewKey)
@@ -52,8 +57,11 @@ func TestSearchBarOpenTypeDebounceClose(t *testing.T) {
 	if !strings.Contains(m.snap.ViewKey, "s:") {
 		t.Fatalf("ViewKey = %q, want a search view", m.snap.ViewKey)
 	}
-	if m.search.spec.Text != "t" {
-		t.Fatalf("spec.Text = %q, want t", m.search.spec.Text)
+	if m.search.spec.Text != "thread" {
+		t.Fatalf("spec.Text = %q, want thread", m.search.spec.Text)
+	}
+	if len(m.snap.Rows) == 0 {
+		t.Fatal("fast-path search returned no rows")
 	}
 
 	// Esc restores the mailbox view with the cursor position preserved.
@@ -215,5 +223,93 @@ func TestFullscreenToggle(t *testing.T) {
 	_, _ = m.handleKey(key("v"))
 	if m.fullscreen {
 		t.Fatal("v did not leave fullscreen")
+	}
+}
+
+func TestCtrlSOpensAdvancedModalDirectly(t *testing.T) {
+	m := searchTestModel(t)
+
+	// ctrl+s from a closed search view opens the bar AND the fielded
+	// form in one step (FR-F2 regression: it used to only open the bar).
+	_, _ = m.handleKey(keyCtrl('s'))
+	if m.search == nil {
+		t.Fatal("ctrl+s did not open the search bar")
+	}
+	if m.search.adv == nil {
+		t.Fatal("ctrl+s did not open the advanced modal")
+	}
+
+	// "/" while the modal is open types into the selected field — the
+	// modal owns the keyboard until esc or enter.
+	typeInto(m, 'q')
+	if got := m.search.adv.fields[0].input.Value(); got != "q" {
+		t.Fatalf("modal text field = %q, want q", got)
+	}
+}
+
+func TestSearchFuzzyScanIndicator(t *testing.T) {
+	m, srv := newTestModelWith(t, []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 3, UnreadEmails: 2},
+	})
+	srv.SetSyntheticMailbox(mockjmap.SyntheticMailbox{MailboxID: "mb-syn", Prefix: "syn", Count: 1200})
+	pump(t, m, m.loadAccountCmd())
+
+	_, _ = m.handleKey(key("/"))
+	// Tab to the all-mailbox scope so the scan covers the synthetic box.
+	_, scopeCmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	pump(t, m, scopeCmd)
+
+	// A partial word over a 1,200-message scope: zero server results, so
+	// the engine's LIKE scan takes over and streams matches in (FR-F1
+	// fuzzy fallback). The scan needs several chunks — catch it active.
+	for _, r := range "synth" {
+		typeInto(m, r)
+	}
+	pump(t, m, m.debounceSearch(m.search.seq))
+	if !m.snap.SearchActive {
+		t.Fatalf("SearchActive = false, ViewKey = %q", m.snap.ViewKey)
+	}
+
+	// Wait for the scan to publish (async goroutine → live broadcast).
+	// Each wait is bounded: once the scan finishes, no further publishes
+	// come and the waiter must not block the test.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.snap.Scan != nil && len(m.snap.Rows) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+		msgCh := make(chan tea.Msg, 1)
+		go func() { msgCh <- m.waitUpdates()() }()
+		select {
+		case msg := <-msgCh:
+			if msg != nil {
+				m.Update(msg)
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if m.snap.Scan == nil {
+		t.Fatal("zero-result search never started a scan")
+	}
+	if len(m.snap.Rows) == 0 {
+		t.Fatal("scan produced no rows")
+	}
+
+	// The header indicator maps the engine's live scan progress.
+	m.snap.Scan = &sync.ScanProgress{Active: true, Scanned: 500, Total: 1200}
+	st := m.uiState()
+	if st.Search == nil || !st.Search.Scanning {
+		t.Fatalf("header scan indicator missing: %+v", st.Search)
+	}
+	if st.Search.Scanned != 500 || st.Search.ScanTotal != 1200 {
+		t.Fatalf("scan progress = %d/%d, want 500/1200", st.Search.Scanned, st.Search.ScanTotal)
+	}
+	m.snap.Scan = nil
+
+	// Esc cancels the scan and restores the mailbox view.
+	pump(t, m, m.closeSearch())
+	if m.snap.SearchActive || m.snap.Scan != nil {
+		t.Fatal("scan survived esc")
 	}
 }

@@ -210,6 +210,17 @@ func goldenFrames() []frame {
 			}
 			return st
 		}},
+		{name: "search-scanning", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Search = &SearchView{
+				Query:     "synth",
+				Scope:     "all mailboxes",
+				Scanning:  true,
+				Scanned:   4500,
+				ScanTotal: 12000,
+			}
+			return st
+		}},
 		{name: "search-advanced", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.AdvSearch = &AdvSearchView{

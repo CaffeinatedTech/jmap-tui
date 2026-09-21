@@ -13,6 +13,12 @@ type SearchView struct {
 	Query  string
 	Tokens []string // advanced-field tokens, e.g. "from:x@y"
 	Scope  string   // "Inbox" or "all mailboxes"
+
+	// Scanning reports an active fuzzy LIKE scan (FR-F1 fallback): the
+	// header shows "scanning n/N" while the client walks the scope.
+	Scanning  bool
+	Scanned   int
+	ScanTotal int // -1 until the first scope page lands
 }
 
 // AdvField is one labelled input row of the advanced-search modal (FR-F2).

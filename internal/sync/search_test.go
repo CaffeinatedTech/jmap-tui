@@ -10,6 +10,9 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
 
+// sync is aliased here only for the scan tests' snapshot assertions; the
+// package under test IS sync, so plain identifiers are used elsewhere.
+
 // searchFixtures: subjects/keywords/attachments tuned so each filter
 // dimension separates cleanly. Timestamps from a 09:00 UTC base:
 // s1 12:00 (inbox, attachment, $seen), s2 11:00 (agent-test),
@@ -162,7 +165,7 @@ func TestEngineSearchAdvancedFields(t *testing.T) {
 		spec SearchSpec
 		want int
 	}{
-		{"from", SearchSpec{From: "ops@example"}, 1},
+		{"from", SearchSpec{From: "ops@example.test"}, 1},
 		{"subject", SearchSpec{Subject: "invoice"}, 1},
 		{"keyword", SearchSpec{HasKeyword: "$flagged"}, 1},
 		{"attachment", SearchSpec{HasAttachment: boolPtr(true)}, 1},
@@ -339,4 +342,150 @@ func TestEngineMailboxViewReanchorsAfterSearch(t *testing.T) {
 		}
 	}
 	t.Fatalf("new mail missing after re-anchor + scroll up; rows=%v", e.Snapshot().Rows)
+}
+
+// --- fuzzy LIKE scan (FR-F1 auto fallback) ---
+
+func waitForSnapshot(t *testing.T, e *Engine, fn func(Snapshot) bool) Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := e.Snapshot()
+		if fn(snap) {
+			return snap
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for scan state")
+	return Snapshot{}
+}
+
+func TestEngineSearchFuzzyScanFallback(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// Partial word: the server token index matches nothing, so the scan
+	// takes over and substring-matches the headers.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "invoi", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 1 || snap.Rows[0].ID != "s1" {
+		t.Fatalf("scan rows = %v, want [s1]", snap.Rows)
+	}
+	if snap.Scan.Scanned != 2 || snap.Scan.Total != 2 {
+		t.Fatalf("scan progress = %d/%d, want 2/2", snap.Scan.Scanned, snap.Scan.Total)
+	}
+	if snap.Total != 1 {
+		t.Fatalf("progressive total = %d, want 1", snap.Total)
+	}
+	if snap.SearchActive != true || snap.ViewKey == "m:mb-inbox" {
+		t.Fatalf("search view state wrong: active=%v key=%q", snap.SearchActive, snap.ViewKey)
+	}
+	snap = e.SearchClose()
+	if snap.SearchActive || snap.Scan != nil {
+		t.Fatal("scan survived SearchClose")
+	}
+}
+
+func TestEngineSearchFuzzyScanMultiWord(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// Every word must substring-match (AND): "invoi" + "septemb" → s1.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "invoi septemb", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 1 || snap.Rows[0].ID != "s1" {
+		t.Fatalf("scan rows = %v, want [s1]", snap.Rows)
+	}
+	// A second word set with no joint match stays empty.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "invoi zzz", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap = waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active && len(s.Rows) == 0
+	})
+	if snap.Scan.Scanned != 2 {
+		t.Fatalf("scanned = %d, want 2", snap.Scan.Scanned)
+	}
+}
+
+func TestEngineSearchFuzzyScanScopeAndSender(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// Partial sender fragment: no token matches server-side, so the scan
+	// substring-matches the From address.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "ben o", ScopeMailbox: "mb-agent"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	snap := waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && !s.Scan.Active
+	})
+	if len(snap.Rows) != 1 || snap.Rows[0].ID != "s2" {
+		t.Fatalf("scan rows = %v, want [s2] (from-substring)", snap.Rows)
+	}
+}
+
+func TestEngineSearchFastPathNeverScans(t *testing.T) {
+	e, _ := newSearchEngine(t, searchFixtures(), nil)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// A full-word query with server hits takes the fast path.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "invoice", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond) // give a wrongly-started scan time to run
+	snap := e.Snapshot()
+	if snap.Scan != nil {
+		t.Fatal("fast-path search started a scan")
+	}
+	if snap.Total != 1 {
+		t.Fatalf("fast-path total = %d, want 1", snap.Total)
+	}
+}
+
+func TestEngineSearchScanSupersededByNewSearch(t *testing.T) {
+	syn := &mockjmap.SyntheticMailbox{MailboxID: "mb-big", Prefix: "syn", Count: 1200}
+	e, _ := newSearchEngine(t, searchFixtures(), syn)
+	mustOpen(t, e, "mb-inbox")
+	ctx := context.Background()
+
+	// 1200-message scope: the scan needs multiple chunks, so it is still
+	// running when the next search lands.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "zzznotfound", ScopeMailbox: "mb-agent"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	waitForSnapshot(t, e, func(s Snapshot) bool {
+		return s.Scan != nil && s.Scan.Scanned > 0
+	})
+
+	// A new search (with hits) must cancel the running scan and replace
+	// the view.
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "invoice", ScopeMailbox: "mb-inbox"}); err != nil {
+		t.Fatalf("SearchOpen 2: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	snap := e.Snapshot()
+	if snap.Scan != nil {
+		t.Fatal("new search did not cancel the running scan")
+	}
+	if snap.Total != 1 || snap.Rows[0].ID != "s1" {
+		t.Fatalf("replacement search rows = %v", snap.Rows)
+	}
+	// Scanned must not advance afterwards (the goroutine exited).
+	time.Sleep(50 * time.Millisecond)
+	if s2 := e.Snapshot(); s2.Scan != nil {
+		t.Fatal("scan resurrected after supersede")
+	}
 }

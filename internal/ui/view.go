@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -330,6 +331,13 @@ func renderHeader(w int, st State) string {
 			parts = append(parts, th.Muted.Render(tok))
 		}
 		parts = append(parts, th.Muted.Render("in: "+st.Search.Scope))
+		if st.Search.Scanning {
+			progress := "scanning…"
+			if st.Search.ScanTotal >= 0 {
+				progress = fmt.Sprintf("scanning %s/%s", fmtInt(st.Search.Scanned), fmtInt(st.Search.ScanTotal))
+			}
+			parts = append(parts, th.Muted.Render(progress))
+		}
 	} else {
 		parts = append(parts, th.Accent.Render("jmap-tui"))
 		if name := activeMailboxName(st); name != "" {

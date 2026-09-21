@@ -298,7 +298,7 @@ func (m *Model) toggleFullscreen() {
 // --- render state ---
 
 // searchView assembles the query-bar line (FR-F1): live input view,
-// advanced tokens, and the scope name.
+// advanced tokens, scope name, and the fuzzy-scan progress.
 func (m *Model) searchView() *ui.SearchView {
 	s := m.search
 	v := &ui.SearchView{Query: s.input.View()}
@@ -312,6 +312,11 @@ func (m *Model) searchView() *ui.SearchView {
 		} else {
 			v.Scope = "mailbox"
 		}
+	}
+	if p := m.snap.Scan; p != nil && p.Active {
+		v.Scanning = true
+		v.Scanned = p.Scanned
+		v.ScanTotal = p.Total
 	}
 	return v
 }

@@ -28,7 +28,11 @@ type Engine struct {
 	cursorRow int // index into rendered rows (incl. thread members)
 	// saved holds the mailbox view while a search view is open (FR-F1):
 	// Esc restores it with cursor position intact.
-	saved       *savedView
+	saved *savedView
+	// scan is the active fuzzy LIKE scan, if any (FR-F1 auto fallback);
+	// scanGen supersedes it (bump = cancel).
+	scan        *scanState
+	scanGen     uint64
 	summaries   map[mail.ID]mail.EmailSummary
 	threads     map[mail.ID][]mail.ID // threadID → member ids, oldest first
 	threadOrder []mail.ID             // thread cache insertion order (bounded)
@@ -125,6 +129,10 @@ type Snapshot struct {
 	// SearchActive reports that a search view is open over the mailbox
 	// view (FR-F1).
 	SearchActive bool
+
+	// Scan is the fuzzy LIKE scan's progress (FR-F1 auto fallback):
+	// non-nil while a scan is running over an empty server result.
+	Scan *ScanProgress
 
 	// Edge hints: more results exist beyond the materialised window in that
 	// direction (the UI may show a loading hint while a fetch runs).
@@ -267,6 +275,7 @@ func (e *Engine) rebuildMailboxTreeLocked() {
 func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
 	e.saved = nil
+	e.cancelScanLocked()
 	e.window = NewWindow(Query{Filter: FilterSpec{MailboxID: id}}, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
@@ -339,6 +348,7 @@ func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
 	if e.saved == nil {
 		e.saved = &savedView{win: e.window, cursorRow: e.cursorRow}
 	}
+	e.cancelScanLocked()
 	e.window = NewWindow(Query{Filter: fs}, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
@@ -363,6 +373,13 @@ func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
 		e.emailState = st
 	}
 	e.absorbSummariesLocked(sums)
+	// Fuzzy fallback (FR-F1): the server matched whole tokens only and
+	// found nothing — a partial word like "fixtu" — so scan the scope's
+	// headers client-side and stream matches in. Non-zero results take
+	// the fast path and never scan.
+	if e.window.Total() == 0 && len(lowerWords(s.Text)) > 0 {
+		e.startScanLocked(ctx, s)
+	}
 	e.publishLocked()
 	return nil
 }
@@ -381,6 +398,7 @@ func (e *Engine) SearchClose() Snapshot {
 	e.window = e.saved.win
 	e.cursorRow = e.saved.cursorRow
 	e.saved = nil
+	e.cancelScanLocked()
 	e.expanded = map[mail.ID]bool{}
 	e.body, e.bodyLoading = nil, ""
 	e.fresh = map[mail.ID]time.Time{}
@@ -537,9 +555,11 @@ func (e *Engine) querySpecLocked(position, limit int) mail.QuerySpec {
 }
 
 // Jump re-anchors the window at the top or bottom of the result (FR-D3).
+// It is a no-op while a fuzzy scan owns the view — the scan result list
+// has no server-side positions to jump within.
 func (e *Engine) Jump(ctx context.Context, t JumpTarget) error {
 	e.mu.Lock()
-	if e.window == nil {
+	if e.window == nil || e.scan != nil {
 		e.mu.Unlock()
 		return nil
 	}
@@ -586,9 +606,10 @@ func (e *Engine) alignCursorWithWindowLocked() {
 
 // ToggleThread expands or collapses the cursor message's thread in place
 // (FR-D2). Expansion is a sub-list — window math is untouched (PLAN §4.1).
+// Scan results are flat rows; threads do not expand there.
 func (e *Engine) ToggleThread(ctx context.Context) error {
 	e.mu.Lock()
-	if e.window == nil {
+	if e.window == nil || e.scan != nil {
 		e.mu.Unlock()
 		return nil
 	}
@@ -695,8 +716,23 @@ func (e *Engine) cursorIDLocked() mail.ID {
 
 // renderedRowsLocked builds the rendered row list: collapsed window ids,
 // with expanded threads splicing their remaining members (oldest-first)
-// beneath their header. Caller holds mu.
+// beneath their header. During a fuzzy scan the rows are the scan's flat
+// match list instead. Caller holds mu.
 func (e *Engine) renderedRowsLocked() []Row {
+	if e.scan != nil {
+		rows := make([]Row, 0, len(e.scan.matches))
+		for _, id := range e.scan.matches {
+			sum, ok := e.summaries[id]
+			if !ok {
+				continue // match summary not yet stored; lands next publish
+			}
+			if op, pending := e.overlay[id]; pending && op.ov.Destroy {
+				continue // pending delayed destroy: hidden until commit/cancel
+			}
+			rows = append(rows, Row{ID: id, Summary: sum})
+		}
+		return rows
+	}
 	if e.window == nil {
 		return nil
 	}
@@ -765,6 +801,11 @@ func (e *Engine) evictSummariesLocked() {
 	}
 	if e.saved != nil && e.saved.win != nil {
 		for _, id := range e.saved.win.IDs() {
+			keep[id] = true
+		}
+	}
+	if e.scan != nil {
+		for _, id := range e.scan.matches {
 			keep[id] = true
 		}
 	}
@@ -864,6 +905,26 @@ func (e *Engine) snapshotLocked() Snapshot {
 		}
 	}
 	if e.window == nil {
+		return snap
+	}
+	if e.scan != nil {
+		// Fuzzy scan owns the view: matches stream in newest-first and
+		// the total is progressive until the scan completes (FR-F1).
+		snap.Total = len(e.scan.matches)
+		snap.Start = 0
+		snap.Scan = &ScanProgress{
+			Active:  e.scan.scanned < e.scan.total || e.scan.total < 0,
+			Scanned: e.scan.scanned,
+			Total:   e.scan.total,
+		}
+		rows := e.renderedRowsLocked()
+		snap.Cursor = min(max(e.cursorRow, 0), max(len(rows)-1, 0))
+		snap.Rows = rows
+		cursor := e.cursorIDLocked()
+		if e.body != nil && cursor == e.body.ID {
+			snap.Body = e.body
+		}
+		snap.BodyLoading = e.bodyLoading != "" && e.bodyLoading == cursor
 		return snap
 	}
 	snap.Total = e.window.Total()

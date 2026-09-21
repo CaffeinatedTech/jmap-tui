@@ -474,12 +474,15 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		if m.search == nil {
 			return m, m.openSearch()
 		}
-		m.search.adv = nil
 		m.openAdvSearch()
 		return m, nil
 	case ui.ActSearchAdv:
+		// ctrl+s always reaches the fielded form — opening the bar first
+		// when the search view is closed (FR-F2).
 		if m.search == nil {
-			return m, m.openSearch()
+			cmd := m.openSearch()
+			m.openAdvSearch()
+			return m, cmd
 		}
 		m.openAdvSearch()
 		return m, nil
