@@ -51,7 +51,7 @@ func runTUI(args []string) error {
 		defer closeLog()
 	}
 
-	provider, cfg, err := connectAccount(connectOpts{
+	copts := connectOpts{
 		configPath:   *configPath,
 		accountID:    *accountID,
 		url:          *url,
@@ -59,7 +59,8 @@ func runTUI(args []string) error {
 		passwordFile: *passwordFile,
 		timeout:      *timeout,
 		logger:       logger,
-	})
+	}
+	provider, cfg, err := connectAccount(copts)
 	if err != nil {
 		return err
 	}
@@ -70,7 +71,24 @@ func runTUI(args []string) error {
 	}
 	pal := resolvePalette(first(*theme, cfg.Theme))
 
-	m := app.New(app.Options{Provider: provider, Keys: keys, Theme: ui.NewTheme(pal)})
+	// App-managed preferences (FR-J1): prefs.toml next to the config file.
+	prefsPath, err := config.DefaultPrefsPath()
+	if err != nil {
+		prefsPath = ""
+	}
+	prefs, err := config.LoadPrefs(prefsPath)
+	if err != nil {
+		return fmt.Errorf("prefs: %w", err)
+	}
+
+	m := app.New(app.Options{
+		Provider:  provider,
+		Keys:      keys,
+		Theme:     ui.NewTheme(pal),
+		AccountID: copts.accountID,
+		Prefs:     prefs,
+		PrefsPath: prefsPath,
+	})
 	program := tea.NewProgram(m, tea.WithContext(m.Ctx()))
 
 	defer func() {

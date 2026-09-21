@@ -6,10 +6,6 @@
 
 
 
-
-
-
-
                      [38;2;130;170;255mHelp — message list[m
                      
                        [38;2;130;170;255mj/down    [m  [38;2;192;202;245mnext message[m
@@ -20,9 +16,17 @@
                        [38;2;130;170;255mctrl+b    [m  [38;2;192;202;245mpage up[m
                        [38;2;130;170;255menter/o   [m  [38;2;192;202;245mexpand/collapse thread[m
                        [38;2;130;170;255ms         [m  [38;2;192;202;245mshow/hide sizes[m
+                       [38;2;130;170;255mspace/u   [m  [38;2;192;202;245mtoggle read/unread[m
+                       [38;2;130;170;255m*         [m  [38;2;192;202;245mtoggle star[m
+                       [38;2;130;170;255mx         [m  [38;2;192;202;245mselect for batch action[m
+                       [38;2;130;170;255mm         [m  [38;2;192;202;245mmove to mailbox…[m
+                       [38;2;130;170;255mC         [m  [38;2;192;202;245mcopy to mailbox…[m
+                       [38;2;130;170;255my         [m  [38;2;192;202;245marchive[m
+                       [38;2;130;170;255m#         [m  [38;2;192;202;245mdelete (to trash)[m
                        [38;2;130;170;255mtab       [m  [38;2;192;202;245mnext pane[m
                        [38;2;130;170;255mshift+tab [m  [38;2;192;202;245mprevious pane[m
                        [38;2;130;170;255m[         [m  [38;2;192;202;245mshow/hide sidebar[m
+                       [38;2;130;170;255mctrl+z    [m  [38;2;192;202;245mundo last action[m
                        [38;2;130;170;255m?         [m  [38;2;192;202;245mhelp[m
                        [38;2;130;170;255mq         [m  [38;2;192;202;245mquit[m
                      

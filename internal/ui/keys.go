@@ -9,8 +9,7 @@ import (
 // in config ([keys] tables) and for help generation (FR-I3, FR-I4).
 type Action string
 
-// The M1 action set. Actions for later milestones (read/unread, star, move,
-// search, compose, account switch …) join here as they land.
+// Actions, in milestone order. Triage actions (M3) follow the reader set.
 const (
 	ActListDown      Action = "list.down"
 	ActListUp        Action = "list.up"
@@ -20,6 +19,13 @@ const (
 	ActListPageUp    Action = "list.page_up"
 	ActToggleThread  Action = "list.toggle_thread"
 	ActToggleSize    Action = "list.toggle_size"
+	ActToggleRead    Action = "list.toggle_read"
+	ActToggleStar    Action = "list.toggle_star"
+	ActToggleSelect  Action = "list.toggle_select"
+	ActMove          Action = "list.move"
+	ActCopy          Action = "list.copy"
+	ActDelete        Action = "list.delete"
+	ActArchive       Action = "list.archive"
 	ActSidebarDown   Action = "sidebar.down"
 	ActSidebarUp     Action = "sidebar.up"
 	ActOpenMailbox   Action = "sidebar.open"
@@ -30,9 +36,11 @@ const (
 	ActPreviewHalfUp Action = "preview.half_up"
 	ActPreviewTop    Action = "preview.top"
 	ActPreviewBottom Action = "preview.bottom"
+	ActSaveAttach    Action = "preview.save_attachment"
 	ActCyclePane     Action = "pane.cycle"
 	ActCyclePaneRev  Action = "pane.cycle_reverse"
 	ActToggleSidebar Action = "pane.toggle_sidebar"
+	ActUndo          Action = "ui.undo"
 	ActHelp          Action = "ui.help"
 	ActQuit          Action = "ui.quit"
 )
@@ -61,6 +69,14 @@ func defaultBindings() []Binding {
 		{Key: "enter", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
 		{Key: "o", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
 		{Key: "s", Act: ActToggleSize, Help: "show/hide sizes", Pane: PaneList},
+		{Key: "space", Act: ActToggleRead, Help: "toggle read/unread", Pane: PaneList},
+		{Key: "u", Act: ActToggleRead, Help: "toggle read/unread", Pane: PaneList},
+		{Key: "*", Act: ActToggleStar, Help: "toggle star", Pane: PaneList},
+		{Key: "x", Act: ActToggleSelect, Help: "select for batch action", Pane: PaneList},
+		{Key: "m", Act: ActMove, Help: "move to mailbox…", Pane: PaneList},
+		{Key: "C", Act: ActCopy, Help: "copy to mailbox…", Pane: PaneList},
+		{Key: "y", Act: ActArchive, Help: "archive", Pane: PaneList},
+		{Key: "#", Act: ActDelete, Help: "delete (to trash)", Pane: PaneList},
 		{Key: "j", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
 		{Key: "down", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
 		{Key: "k", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
@@ -78,9 +94,11 @@ func defaultBindings() []Binding {
 		{Key: "ctrl+b", Act: ActPreviewUp, Help: "page up", Pane: PanePreview},
 		{Key: "g", Act: ActPreviewTop, Help: "top of message", Pane: PanePreview},
 		{Key: "shift+g", Act: ActPreviewBottom, Help: "bottom of message", Pane: PanePreview},
+		{Key: "s", Act: ActSaveAttach, Help: "save attachments…", Pane: PanePreview},
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
 		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
 		{Key: "[", Act: ActToggleSidebar, Help: "show/hide sidebar", Pane: PaneAny},
+		{Key: "ctrl+z", Act: ActUndo, Help: "undo last action", Pane: PaneAny},
 		{Key: "?", Act: ActHelp, Help: "help", Pane: PaneAny},
 		{Key: "q", Act: ActQuit, Help: "quit", Pane: PaneAny},
 	}

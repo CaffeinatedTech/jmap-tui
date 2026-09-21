@@ -157,7 +157,9 @@ func renderList(l Layout, h int, st State) string {
 		sel := i == cursor
 		focused := st.Focus == PaneList
 
-		subjectW := w - (4 + 1) - fromW - 1 - dateW - sizeW
+		// Row anatomy (FR-D1, FR-G3): selection gutter, flag cells,
+		// sender, subject with thread markers, optional size, date.
+		subjectW := w - 1 - (4 + 1) - fromW - 1 - dateW - sizeW
 		if subjectW < 4 {
 			subjectW = 4
 		}
@@ -172,6 +174,11 @@ func renderList(l Layout, h int, st State) string {
 		}
 		subject := prefix + truncate(r.Summary.Subject, subjectW-len(prefix))
 		date := pad(RelativeDate(r.Summary.ReceivedAt, st.Now), dateW)
+
+		mark := " "
+		if st.Selected != nil && st.Selected[r.ID] {
+			mark = th.Accent.Render("×")
+		}
 
 		// Styles: selection wash spans every segment; a fresh (live-
 		// arrived) row gets the wash without focus (the slide-in highlight,
@@ -198,6 +205,7 @@ func renderList(l Layout, h int, st State) string {
 		}
 
 		var line strings.Builder
+		line.WriteString(mark)
 		line.WriteString(flags(r.Summary, th))
 		line.WriteString(" ")
 		line.WriteString(fromStyle.Render(pad(from, fromW)))

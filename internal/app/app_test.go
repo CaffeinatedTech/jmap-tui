@@ -19,9 +19,17 @@ import (
 // terminal.
 func newTestModel(t *testing.T) (*Model, *mockjmap.Server) {
 	t.Helper()
-	srv := mockjmap.New("tester@example.com", "correct-horse", []mockjmap.Mailbox{
+	return newTestModelWith(t, []mockjmap.Mailbox{
 		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 3, UnreadEmails: 2},
+		{ID: "mb-trash", Name: "Trash", Role: "trash", SortOrder: 3},
+		{ID: "mb-archive", Name: "Archive", Role: "archive", SortOrder: 4},
 	})
+}
+
+// newTestModelWith builds the reader model against a custom mailbox tree.
+func newTestModelWith(t *testing.T, mailboxes []mockjmap.Mailbox) (*Model, *mockjmap.Server) {
+	t.Helper()
+	srv := mockjmap.New("tester@example.com", "correct-horse", mailboxes)
 	srv.SetEmails([]mockjmap.Email{
 		{
 			ID: "e2", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
@@ -29,6 +37,9 @@ func newTestModel(t *testing.T) (*Model, *mockjmap.Server) {
 			Subject:    "Re: thread starter",
 			ReceivedAt: time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC),
 			TextBody:   "The reply body.\n",
+			Attachments: []mockjmap.Attachment{
+				{BlobID: "b1", Name: "notes.txt", Type: "text/plain", Size: 5},
+			},
 		},
 		{
 			ID: "e1", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
@@ -38,6 +49,7 @@ func newTestModel(t *testing.T) (*Model, *mockjmap.Server) {
 			HTMLBody:   "<html><body><p>The <b>original</b> body.</p></body></html>",
 		},
 	})
+	srv.SetBlob("b1", []byte("hello"))
 	t.Cleanup(srv.Close)
 
 	c := jmapclient.New(jmapclient.Options{ServerURL: srv.URL(), Username: "tester@example.com", Password: "correct-horse"})

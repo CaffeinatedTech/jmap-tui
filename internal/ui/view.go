@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 )
 
@@ -30,6 +31,22 @@ type State struct {
 
 	// Err flashes a non-fatal error line under the header.
 	Err string
+
+	// Selected marks multi-selected row ids (FR-G3): rendered with a
+	// leading marker gutter in the list.
+	Selected map[mail.ID]bool
+
+	// Toast is the transient action-receipt line above the footer
+	// (FR-G5); ToastHint, when set, renders the undo-key affordance.
+	Toast     string
+	ToastHint string
+
+	// Picker is the mailbox picker modal (move/copy/archive destination).
+	Picker *PickerView
+
+	// FilePick is the attachment-save overlay (FR-E4): the app pre-renders
+	// the bubbles filepicker and hands over the string.
+	FilePick *FilePickView
 
 	// Now anchors relative dates; injected for deterministic goldens.
 	Now time.Time
@@ -75,7 +92,7 @@ func shownPanes(w int, st State) (sidebar, list, preview bool) {
 func ComputeLayout(w, h int, st State) Layout {
 	var l Layout
 	sidebar, list, preview := shownPanes(w, st)
-	contentH := h - 2 // header + status footer (FR-I5)
+	contentH := frameContentHeight(h, st)
 	if st.HelpOpen {
 		return Layout{}
 	}
@@ -120,6 +137,12 @@ func Render(w, h int, st State) string {
 	if st.HelpOpen {
 		return renderHelp(w, h, st)
 	}
+	if st.Picker != nil {
+		return renderPicker(w, h, st)
+	}
+	if st.FilePick != nil {
+		return renderFilePick(w, h, st)
+	}
 	var b strings.Builder
 	b.WriteString(renderHeader(w, st))
 	b.WriteString("\n")
@@ -139,11 +162,25 @@ func Render(w, h int, st State) string {
 	}
 	b.WriteString(joinPanes(panes, st.Theme))
 	b.WriteString("\n")
+	if st.Toast != "" {
+		b.WriteString(renderToast(w, st))
+		b.WriteString("\n")
+	}
 	b.WriteString(renderFooter(w, st))
 	return b.String()
 }
 
-func contentHeight(h int, st State) int { return h - 2 }
+func contentHeight(h int, st State) int { return frameContentHeight(h, st) }
+
+// frameContentHeight is the pane-area height: header + footer, minus the
+// toast line while one is visible (FR-G5).
+func frameContentHeight(h int, st State) int {
+	n := h - 2
+	if st.Toast != "" {
+		n--
+	}
+	return n
+}
 
 // renderFooter draws the status line (FR-I5): connection state, last-sync
 // time, sync errors, and the active mailbox's counts.
@@ -189,6 +226,21 @@ func renderFooter(w int, st State) string {
 		return errLine
 	}
 	return truncate(line, w)
+}
+
+// renderToast draws the action-receipt line (FR-G5): right-aligned above
+// the footer, with the undo affordance in the accent colour.
+func renderToast(w int, st State) string {
+	th := st.Theme
+	line := st.Toast
+	if st.ToastHint != "" {
+		line += "  " + th.Accent.Render(st.ToastHint)
+	}
+	used := lipgloss.Width(line)
+	if used >= w {
+		return truncate(line, w)
+	}
+	return strings.Repeat(" ", w-used) + line
 }
 
 // activeMailboxCounts renders "N unread · M total" for the open mailbox.

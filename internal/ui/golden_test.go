@@ -142,6 +142,40 @@ func goldenFrames() []frame {
 			st.Snap.NewAbove = true
 			return st
 		}},
+		{name: "selection", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Selected = map[mail.ID]bool{"e3": true, "e4": true}
+			return st
+		}},
+		{name: "toast", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Toast = "Marked 1 message read"
+			st.ToastHint = "ctrl+z undo"
+			return st
+		}},
+		{name: "picker", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Picker = &PickerView{
+				Title: "Move to mailbox",
+				Items: []PickerItem{
+					{ID: "mb-inbox", Label: "Inbox"},
+					{ID: "mb-sent", Label: "Sent Items"},
+					{ID: "mb-agent", Label: "agent-test", Depth: 1},
+					{ID: "mb-archive", Label: "Archive"},
+				},
+				Sel: 2,
+			}
+			return st
+		}},
+		{name: "save-attachments", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.FilePick = &FilePickView{
+				Title: "Save attachments to…",
+				Path:  "/home/tester/Downloads",
+				View:  "  drwxr-xr-x  agent-test\n  drwxr-xr-x  invoices\n",
+			}
+			return st
+		}},
 		{name: "help", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.HelpOpen = true

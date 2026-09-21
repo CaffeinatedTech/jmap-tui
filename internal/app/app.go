@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
@@ -21,6 +22,15 @@ type Options struct {
 	Provider mail.Provider
 	Keys     *ui.KeyMap
 	Theme    ui.Theme // resolved dark/light at startup (FR-I2)
+
+	// AccountID is the config account id in use; app-managed preferences
+	// (prefs.toml, FR-J1) key off it. Empty disables preference writes.
+	AccountID string
+
+	// Prefs is the app-managed preference store (FR-J1) and PrefsPath
+	// where it persists; either may be empty (session-only memory).
+	Prefs     *config.Prefs
+	PrefsPath string
 }
 
 // Model is the Bubble Tea model for the reader.
@@ -41,9 +51,19 @@ type Model struct {
 	vp       viewport.Model
 	vpBodyID mail.ID
 
-	lastCtrlC  time.Time
-	err        string
-	freshArmed bool
+	lastCtrlC     time.Time
+	err           string
+	freshArmed    bool
+	activeMailbox mail.ID // last seen active mailbox (selection resets)
+
+	// Triage state (M3): multi-select set, modal overlays, toast, and the
+	// prepared (delayed) destroy (FR-G2..G5).
+	sel            map[mail.ID]bool
+	picker         *pickerState
+	fp             *filepickState
+	toast          *toastState
+	pendingDestroy *pendingDestroy
+	seq            int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -156,6 +176,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = truncateErr(msg.op, msg.err)
 		return m, nil
 
+	case triageDoneMsg:
+		return m.handleTriageDone(msg)
+
+	case toastExpireMsg:
+		if m.toast != nil && m.toast.id == msg.id {
+			m.toast = nil
+		}
+		return m, nil
+
+	case destroyCommitMsg:
+		if m.pendingDestroy == nil || m.pendingDestroy.seq != msg.seq {
+			return m, nil
+		}
+		ids := m.pendingDestroy.ids
+		m.pendingDestroy = nil
+		m.toast = nil
+		return m, m.triageCmd(sync.TriageSpec{Kind: sync.TriageDestroy, IDs: ids},
+			"Destroyed")
+
+	case saveResultMsg:
+		if msg.err != nil {
+			m.err = truncateErr("save attachment", msg.err)
+			return m, nil
+		}
+		return m, m.showToast(msg.text, "", nil, nil)
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -178,6 +224,13 @@ func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	m.err = ""
 
 	var cmds []tea.Cmd
+
+	// A mailbox switch resets the multi-select (FR-G3): the selection is
+	// a view over the open mailbox's rows.
+	if m.sel != nil && snap.ActiveMailbox != "" && snap.ActiveMailbox != m.activeMailbox {
+		m.sel = map[mail.ID]bool{}
+	}
+	m.activeMailbox = snap.ActiveMailbox
 
 	// Fresh-row fade (PLAN §4.1 case 3): one timer per highlight batch.
 	if len(snap.Fresh) > 0 {
@@ -294,6 +347,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Modal overlays swallow keys while open (move/copy/archive picker,
+	// attachment save).
+	if m.picker != nil {
+		cmd, _ := m.pickerKey(key)
+		return m, cmd
+	}
+	if m.fp != nil {
+		cmd, _ := m.filePickKey(msg)
+		return m, cmd
+	}
+
 	focus := m.focus
 	if act, ok := m.opts.Keys.Match(focus, key); ok {
 		return m.runAction(act)
@@ -351,6 +415,38 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActToggleSize:
 		m.showSize = !m.showSize
 		return m, nil
+
+	// --- triage (M3, FR-G1..G5) ---
+	case ui.ActToggleRead:
+		return m, m.keywordCmd(sync.TriageRead)
+	case ui.ActToggleStar:
+		return m, m.keywordCmd(sync.TriageStar)
+	case ui.ActToggleSelect:
+		if id := m.cursorID(); id != "" {
+			if m.sel == nil {
+				m.sel = map[mail.ID]bool{}
+			}
+			if m.sel[id] {
+				delete(m.sel, id)
+			} else {
+				m.sel[id] = true
+			}
+		}
+		return m, nil
+	case ui.ActMove:
+		m.openPicker(pickerMove)
+		return m, nil
+	case ui.ActCopy:
+		m.openPicker(pickerCopy)
+		return m, nil
+	case ui.ActArchive:
+		return m.archiveAction()
+	case ui.ActDelete:
+		return m.deleteAction()
+	case ui.ActUndo:
+		return m.undoAction()
+	case ui.ActSaveAttach:
+		return m.openFilePicker()
 
 	// --- sidebar pane ---
 	case ui.ActSidebarDown:
@@ -478,6 +574,21 @@ func (m *Model) uiState() ui.State {
 		ShowSize:       m.showSize,
 		SidebarSel:     m.sidebarSel,
 		Now:            time.Now(),
+		Selected:       m.sel,
+	}
+	if m.picker != nil {
+		st.Picker = m.pickerView()
+	}
+	if m.fp != nil {
+		st.FilePick = &ui.FilePickView{
+			Title: "Save attachments to…",
+			Path:  m.fp.fp.CurrentDirectory,
+			View:  m.fp.fp.View(),
+		}
+	}
+	if m.toast != nil {
+		st.Toast = m.toast.text
+		st.ToastHint = m.toast.hint
 	}
 	if m.helpOpen {
 		st.HelpOpen = true
