@@ -1310,19 +1310,15 @@ func fixtureTotal(t *testing.T, c *Client, ctx context.Context, id string) int {
 }
 
 // seedSearchFixture tops the fixture mailbox up to the target with
-// deterministic content. It reports the seeding timestamp and whether any
-// messages were created this run (date-window assertions only run on
-// fresh seeds, since the spread anchors at the seed instant).
-func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, user string) (seedTime time.Time, fresh bool) {
+// deterministic content, in FR-K4-sized batches.
+func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, user string) {
 	t.Helper()
 	have := fixtureTotal(t, c, ctx, fixtureID)
 	if have >= searchFixtureTarget {
 		t.Logf("fixture already holds %d messages (target %d) — reusing", have, searchFixtureTarget)
-		return time.Time{}, false
+		return
 	}
-	seedTime = time.Now().UTC().Truncate(time.Second)
-	fresh = true
-
+	seedTime := time.Now().UTC().Truncate(time.Second)
 	for start := have; start < searchFixtureTarget; start += searchFixtureBatch {
 		end := min(start+searchFixtureBatch, searchFixtureTarget)
 		create := map[jmap.ID]*email.Email{}
@@ -1364,7 +1360,6 @@ func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, 
 		}
 		t.Logf("seeded fixture batch [%d,%d)", start, end)
 	}
-	return seedTime, fresh
 }
 
 // TestLiveSearchVerification is the M4 gate (FR-F1..F3): a persistent
@@ -1383,7 +1378,7 @@ func TestLiveSearchVerification(t *testing.T) {
 	}
 
 	fixtureID := ensureSearchFixtureMailbox(t, c, ctx)
-	seedTime, fresh := seedSearchFixture(t, c, ctx, fixtureID, user)
+	seedSearchFixture(t, c, ctx, fixtureID, user)
 	total := fixtureTotal(t, c, ctx, fixtureID)
 	if total < searchFixtureTarget {
 		t.Fatalf("fixture total = %d, want ≥ %d", total, searchFixtureTarget)
@@ -1392,6 +1387,34 @@ func TestLiveSearchVerification(t *testing.T) {
 	// every 3rd $flagged. These hold for reused fixtures too.
 	wantWidgets := (total + 9) / 10
 	wantFlagged := (total + 2) / 3
+
+	// Stalwart indexes full-text search asynchronously: a freshly seeded
+	// fixture may under-count for a few seconds (observed: 2972/3000
+	// right after creation, 3000/3000 one run later). Settle-wait so the
+	// gate is re-runnable at any time.
+	settleDeadline := time.Now().Add(20 * time.Second)
+	for {
+		h, _, err := c.OpenQuery(ctx, mail.QuerySpec{
+			MailboxID: mail.ID(fixtureID),
+			Search:    &mail.SearchFilter{Text: "quota alpha beta"},
+			Limit:     1,
+		})
+		if err != nil {
+			t.Fatalf("text search: %v", err)
+		}
+		if h.Total() == total {
+			break
+		}
+		if time.Now().After(settleDeadline) {
+			t.Fatalf("text search total = %d, want %d (index did not settle)", h.Total(), total)
+		}
+		t.Logf("text search total = %d/%d — full-text index settling, retrying…", h.Total(), total)
+		select {
+		case <-ctx.Done():
+			t.Fatal("cancelled while waiting for the search index")
+		case <-time.After(2 * time.Second):
+		}
+	}
 
 	// --- first page latency across the full fixture (acceptance gate) ---
 	start := time.Now()
@@ -1456,36 +1479,53 @@ func TestLiveSearchVerification(t *testing.T) {
 		t.Fatalf("subject search total = %d, want %d", h.Total(), total)
 	}
 
-	if fresh {
-		// Date-window filters (FR-F1 after/before, exclusive bounds) —
-		// only meaningful right after a fresh seed spread.
-		after := seedTime.AddDate(0, 0, -10).Add(12 * time.Hour)
-		h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
-			MailboxID: mail.ID(fixtureID),
-			Search:    &mail.SearchFilter{After: after},
-			Limit:     1,
-		})
-		if err != nil {
-			t.Fatalf("after search: %v", err)
-		}
-		if h.Total() != 10 {
-			t.Fatalf("after-search total = %d, want 10", h.Total())
-		}
-		before := seedTime.AddDate(0, 0, -20).Add(12 * time.Hour)
-		h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
-			MailboxID: mail.ID(fixtureID),
-			Search:    &mail.SearchFilter{Before: before},
-			Limit:     1,
-		})
-		if err != nil {
-			t.Fatalf("before search: %v", err)
-		}
-		if h.Total() != total-20 {
-			t.Fatalf("before-search total = %d, want %d", h.Total(), total-20)
-		}
-	} else {
-		t.Log("reused fixture: skipping date-window assertions")
+	// Date-window filters (FR-F1 after/before, exclusive bounds). The
+	// spread anchors at the newest fixture message's receivedAt (message
+	// 0), so the assertions hold on reused fixtures too. Caveat: if the
+	// fixture was ever topped up after a partial run, destroy the mailbox
+	// once and let the gate reseed cleanly.
+	newest, _, err := c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{Subject: "agent-search fixture"},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("newest fixture query: %v", err)
 	}
+	if len(newest.IDs()) == 0 {
+		t.Fatal("fixture mailbox empty")
+	}
+	newestSums, err := c.FetchSummaries(ctx, newest.IDs()[:1])
+	if err != nil || len(newestSums) == 0 {
+		t.Fatalf("newest fixture summary: %v", err)
+	}
+	seedTime := newestSums[0].ReceivedAt
+
+	after := seedTime.AddDate(0, 0, -10).Add(12 * time.Hour)
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{After: after},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("after search: %v", err)
+	}
+	if h.Total() != 10 {
+		t.Fatalf("after-search total = %d, want 10", h.Total())
+	}
+	before := seedTime.AddDate(0, 0, -20).Add(12 * time.Hour)
+	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
+		MailboxID: mail.ID(fixtureID),
+		Search:    &mail.SearchFilter{Before: before},
+		Limit:     1,
+	})
+	if err != nil {
+		t.Fatalf("before search: %v", err)
+	}
+	if h.Total() != total-20 {
+		t.Fatalf("before-search total = %d, want %d", h.Total(), total-20)
+	}
+	t.Logf("date-window filters verified (after: 10 hits, before: %d hits)", total-20)
 
 	// --- all-mailbox scope (FR-F3): no inMailbox on the wire ---
 	h, _, err = c.OpenQuery(ctx, mail.QuerySpec{
