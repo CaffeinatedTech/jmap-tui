@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -41,6 +42,11 @@ type Options struct {
 
 	// Timeout is the per-request HTTP timeout; 30s when zero.
 	Timeout time.Duration
+
+	// Logger receives redacted request logs (method, URL, status,
+	// duration — never credentials or bodies, FR-K2). nil disables
+	// logging.
+	Logger *slog.Logger
 }
 
 // Client is the JMAP implementation of mail.Provider.
@@ -61,11 +67,15 @@ func New(opts Options) *Client {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
+	transport := http.RoundTripper(basicAuthTransport{username: opts.Username, password: opts.Password})
+	if opts.Logger != nil {
+		transport = loggingTransport{next: transport, logger: opts.Logger}
+	}
 	return &Client{
 		opts: opts,
 		hc: &http.Client{
 			Timeout:   timeout,
-			Transport: basicAuthTransport{username: opts.Username, password: opts.Password},
+			Transport: transport,
 		},
 	}
 }

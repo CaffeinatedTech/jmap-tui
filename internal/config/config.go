@@ -45,6 +45,25 @@ type Config struct {
 
 	// Accounts maps a stable account id to its settings.
 	Accounts map[string]*Account `toml:"accounts"`
+
+	// Window bounds the rolling query window (FR-D3); zero values mean
+	// defaults.
+	Window Window `toml:"window"`
+
+	// Keys remaps actions to keystrokes: action id → key (FR-I3). Keys are
+	// validated when the keymap is built.
+	Keys map[string]string `toml:"keys"`
+
+	// Theme selects the palette: "dark", "light", or "auto" (default).
+	Theme string `toml:"theme"`
+}
+
+// Window holds the rolling-window tuning knobs (FR-D3). Zero fields fall
+// back to sync defaults.
+type Window struct {
+	Chunk    int `toml:"chunk"`
+	Cap      int `toml:"cap"`
+	Prefetch int `toml:"prefetch"`
 }
 
 // DefaultPath returns the conventional config location:
@@ -131,6 +150,32 @@ func validate(cfg *Config, md toml.MetaData) error {
 		if err := validateAccount(id, a); err != nil {
 			return err
 		}
+	}
+	if err := validateWindow(cfg.Window); err != nil {
+		return err
+	}
+	switch cfg.Theme {
+	case "", "dark", "light", "auto":
+	default:
+		return fmt.Errorf("theme %q is not one of: dark, light, auto", cfg.Theme)
+	}
+	for act, key := range cfg.Keys {
+		if act == "" {
+			return fmt.Errorf("keys: empty action id")
+		}
+		if key == "" {
+			return fmt.Errorf("keys: %q: empty key binding", act)
+		}
+	}
+	return nil
+}
+
+func validateWindow(w Window) error {
+	if w.Chunk < 0 || w.Cap < 0 || w.Prefetch < 0 {
+		return fmt.Errorf("window: chunk, cap, and prefetch must be positive integers")
+	}
+	if w.Chunk > 0 && w.Cap > 0 && w.Cap < w.Chunk {
+		return fmt.Errorf("window: cap (%d) must be >= chunk (%d)", w.Cap, w.Chunk)
 	}
 	return nil
 }

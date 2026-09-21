@@ -437,3 +437,7 @@ func (m *Model) View() tea.View {
 
 // Cancel exposes the root context cancel for clean shutdown from outside.
 func (m *Model) Cancel() { m.cancel() }
+
+// Ctx returns the root context, cancelled on quit — used to tie the tea
+// program lifetime to in-flight engine work (FR-K1).
+func (m *Model) Ctx() context.Context { return m.ctx }

@@ -1,6 +1,6 @@
-// Command jmap-tui is a JMAP-first terminal email client. The interactive
-// TUI lands in M1; M0 ships the smoke subcommand that proves the connection
-// path: session discovery, Basic auth, and the mailbox tree.
+// Command jmap-tui is a JMAP-first terminal email client. The default
+// command runs the interactive reader (M1); `smoke` proves the connection
+// path (M0).
 package main
 
 import (
@@ -21,12 +21,13 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		usage()
-		return nil
+		return runTUI(nil)
 	}
 	switch args[0] {
 	case "smoke":
 		return runSmoke(args[1:])
+	case "tui":
+		return runTUI(args[1:])
 	case "--version", "version":
 		fmt.Printf("jmap-tui %s\n", version)
 		return nil
@@ -45,9 +46,15 @@ func usage() {
 	fmt.Print(`jmap-tui — a JMAP-first terminal email client
 
 Usage:
-  jmap-tui smoke [flags]   connect to a JMAP server and dump session + mailboxes (M0)
+  jmap-tui                 run the interactive reader (M1)
+  jmap-tui smoke [flags]   connect and dump session + mailboxes (M0)
   jmap-tui version         print version
 
-The interactive TUI arrives in M1.
+TUI flags:
+  --config PATH       config file (default: $XDG_CONFIG_HOME/jmap-tui/config.toml)
+  --account ID        account from config (default: default_account)
+  --theme THEME       dark, light, or auto (default)
+  --log-file PATH     write a redacted debug log (off by default)
+  --log-level LEVEL   debug | info | warn | error (with --log-file)
 `)
 }
