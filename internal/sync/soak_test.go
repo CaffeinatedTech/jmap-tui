@@ -275,3 +275,93 @@ func TestSoakLivePushDuringScroll(t *testing.T) {
 		t.Fatalf("local interaction took %v under churn, over the %v budget (NFR-1)", worstLocal, budget)
 	}
 }
+
+// TestSoakSearchScrollBounded is the M4 companion to the endless-scroll
+// soak: a search view over a 12k-message mailbox scrolled end to end with
+// jump re-anchors, then closed — asserting the same NFR-1/2 bounds and
+// that the parked mailbox view doubles nothing beyond one extra window's
+// summaries (FR-F1 Esc is instant, so the parked rows stay resident).
+func TestSoakSearchScrollBounded(t *testing.T) {
+	const total = 12000
+	srv := mockjmap.New("tester@example.com", "correct-horse", []mockjmap.Mailbox{
+		{ID: "mb-big", Name: "Big", TotalEmails: total},
+	})
+	srv.SetSyntheticMailbox(mockjmap.SyntheticMailbox{MailboxID: "mb-big", Prefix: "syn", Count: total})
+	defer srv.Close()
+
+	c := jmapclient.New(jmapclient.Options{ServerURL: srv.URL(), Username: "tester@example.com", Password: "correct-horse"})
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	e := NewEngine(c, Config{Window: WindowConfig{Chunk: 50, Cap: 2000, PrefetchAt: 10}})
+	ctx := context.Background()
+
+	if err := e.LoadMailboxes(ctx); err != nil {
+		t.Fatalf("LoadMailboxes: %v", err)
+	}
+	if err := e.OpenMailbox(ctx, "mb-big"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+
+	if err := e.SearchOpen(ctx, SearchSpec{Text: "Synthetic"}); err != nil {
+		t.Fatalf("SearchOpen: %v", err)
+	}
+	if snap := e.Snapshot(); snap.Total != total {
+		t.Fatalf("search total = %d, want %d", snap.Total, total)
+	}
+
+	const localBudget = 16 * time.Millisecond
+	var worstLocal time.Duration
+	const step = 25
+	for moved := 0; moved < total; moved += step {
+		t0 := time.Now()
+		e.MoveCursor(step)
+		if d := time.Since(t0); d > worstLocal {
+			worstLocal = d
+		}
+		if err := e.Prefetch(ctx); err != nil {
+			t.Fatalf("Prefetch at %d: %v", moved, err)
+		}
+		if snap := e.Snapshot(); len(snap.Rows) > 2000 {
+			t.Fatalf("search window grew to %d rows at position %d", len(snap.Rows), moved)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if err := e.Jump(ctx, JumpEnd); err != nil {
+			t.Fatalf("JumpEnd: %v", err)
+		}
+		if err := e.Jump(ctx, JumpStart); err != nil {
+			t.Fatalf("JumpStart: %v", err)
+		}
+	}
+
+	// Two windows are resident while searching (active + parked): at
+	// most 2×(cap+chunk) summaries (FR-F1 instant-Esc cost, bounded).
+	if got := len(e.summaries); got > 4200 {
+		t.Fatalf("summaries held = %d, want <= ~2×(cap+chunk)", got)
+	}
+
+	snapAfterClose := e.SearchClose()
+	if snapAfterClose.SearchActive {
+		t.Fatal("SearchActive survived SearchClose")
+	}
+
+	if kb, ok := rssKB(); ok {
+		budgetKB := 50 * 1024
+		if raceEnabled {
+			budgetKB = 150 * 1024
+		}
+		if kb > budgetKB {
+			t.Fatalf("RSS = %d KB exceeds the %d KB budget (NFR-2)", kb, budgetKB)
+		}
+		t.Logf("RSS after 12k-message search scroll + jumps + close: %d KB", kb)
+	}
+	budget := localBudget
+	if raceEnabled {
+		budget *= 3
+	}
+	if worstLocal > budget {
+		t.Fatalf("local interaction took %v, over the %v budget (NFR-1)", worstLocal, budget)
+	}
+	t.Logf("worst local interaction: %v (budget %v)", worstLocal, budget)
+}
