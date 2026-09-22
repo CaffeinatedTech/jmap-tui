@@ -325,6 +325,24 @@ type savedView struct {
 	cursorRow int
 }
 
+// Equal reports whether two specs describe the same query. The app uses
+// it to skip re-issuing an unchanged search on Enter — an identical
+// re-issue would restart an in-flight fuzzy scan from scratch.
+func (s SearchSpec) Equal(o SearchSpec) bool {
+	if s.Text != o.Text || s.From != o.From || s.To != o.To ||
+		s.Subject != o.Subject || s.HasKeyword != o.HasKeyword ||
+		s.ScopeMailbox != o.ScopeMailbox {
+		return false
+	}
+	if !s.After.Equal(o.After) || !s.Before.Equal(o.Before) {
+		return false
+	}
+	if (s.HasAttachment == nil) != (o.HasAttachment == nil) {
+		return false
+	}
+	return s.HasAttachment == nil || *s.HasAttachment == *o.HasAttachment
+}
+
 // SearchOpen enters the search view (FR-F1): the mailbox window is parked
 // with its cursor row, and a fresh window pages a new query built from the
 // search spec. Re-issuing while already searching (new terms, scope

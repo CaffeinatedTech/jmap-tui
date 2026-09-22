@@ -22,13 +22,18 @@ const advDateLayout = "2006-01-02"
 
 // searchState owns the query bar and the advanced modal (FR-F1, FR-F2).
 // spec accumulates the fields of the open search; Text mirrors the input.
+// editing is the bar's focus: while true it owns the keyboard; once a
+// search is confirmed (Enter) focus moves to the list and normal pane
+// keys apply — / re-focuses the bar, Esc clears the search (FR-F1).
 type searchState struct {
-	input     textinput.Model
-	spec      sync.SearchSpec
-	baseScope mail.ID // scope the search opened with (tab returns here)
-	adv       *advState
-	seq       int    // debounce generation; a firing tick must match
-	issued    string // text of the last issued query (debounce no-op guard)
+	input      textinput.Model
+	spec       sync.SearchSpec
+	baseScope  mail.ID // scope the search opened with (tab returns here)
+	adv        *advState
+	editing    bool
+	seq        int             // debounce generation; a firing tick must match
+	issued     string          // text of the last issued query (debounce no-op guard)
+	issuedSpec sync.SearchSpec // full spec of the last issued query
 }
 
 // advField is one editable row of the advanced modal.
@@ -52,21 +57,31 @@ type advState struct {
 type searchDebounceMsg struct{ seq int }
 
 // openSearch enters the search view (FR-F1): the query bar takes the
-// header, scoped to the open mailbox (FR-F3; all mailboxes when none is
-// open).
+// header with the keyboard, scoped to the open mailbox (FR-F3; all
+// mailboxes when none is open).
 func (m *Model) openSearch() tea.Cmd {
 	ti := textinput.New()
 	ti.Placeholder = "type to search…"
 	ti.Prompt = ""
 	ti.SetWidth(32)
-	ti.Focus()
-	m.search = &searchState{input: ti, baseScope: m.snap.ActiveMailbox}
+	m.search = &searchState{input: ti, baseScope: m.snap.ActiveMailbox, editing: true}
 	m.search.spec.ScopeMailbox = m.snap.ActiveMailbox
-	return ti.Focus()
+	// Focus after the state lands: textinput.Focus has a pointer
+	// receiver, so this must reach the stored model, not a local copy.
+	return m.search.input.Focus()
 }
 
-// searchKey routes a keypress while the query bar is open. Everything is
-// consumed: the bar, the advanced modal, and scope/tab own the keyboard.
+// refocusSearch hands the keyboard back to an open bar ("/" while
+// browsing search results, FR-F1).
+func (m *Model) refocusSearch() tea.Cmd {
+	m.search.editing = true
+	return m.search.input.Focus()
+}
+
+// searchKey routes a keypress while the bar (or the advanced modal over
+// it) has the keyboard. While the modal is open it swallows everything;
+// the bar handles enter (confirm + focus the results), esc (clear),
+// tab (scope), and ctrl+s (modal).
 func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	if s := m.search; s.adv != nil {
 		return m.advKey(msg)
@@ -77,7 +92,15 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		return m.closeSearch()
 	case "enter":
-		return m.issueSearch()
+		// Confirm: focus the results (FR-F1). Re-issuing an identical
+		// spec would restart an in-flight fuzzy scan, so only search
+		// when something changed since the last issue.
+		s.editing = false
+		s.input.Blur()
+		if !s.spec.Equal(s.issuedSpec) {
+			return m.issueSearch()
+		}
+		return nil
 	case "tab":
 		return m.toggleSearchScope()
 	case "ctrl+s":
@@ -119,6 +142,7 @@ func (m *Model) toggleSearchScope() tea.Cmd {
 func (m *Model) issueSearch() tea.Cmd {
 	spec := m.search.spec
 	m.search.issued = spec.Text
+	m.search.issuedSpec = spec
 	return m.engineOp("search", func(ctx context.Context) (sync.Snapshot, error) {
 		if err := m.engine.SearchOpen(ctx, spec); err != nil {
 			return sync.Snapshot{}, err
@@ -235,7 +259,8 @@ func (m *Model) advKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// advConfirm validates the form and runs the search.
+// advConfirm validates the form and runs the search, landing focus in
+// the results list (FR-F1: Enter confirms and jumps into the results).
 func (m *Model) advConfirm() tea.Cmd {
 	av := m.search.adv
 	spec := m.search.spec
@@ -266,6 +291,8 @@ func (m *Model) advConfirm() tea.Cmd {
 	m.search.adv = nil
 	m.search.spec = spec
 	m.search.input.SetValue(spec.Text)
+	m.search.editing = false
+	m.search.input.Blur()
 	return m.issueSearch()
 }
 

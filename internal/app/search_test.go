@@ -313,3 +313,129 @@ func TestSearchFuzzyScanIndicator(t *testing.T) {
 		t.Fatal("scan survived esc")
 	}
 }
+
+// searchTestModelWithExtraRow is the standard search model plus one
+// standalone (non-threaded) message, so subject searches yield two
+// independent rows.
+func searchTestModelWithExtraRow(t *testing.T) (*Model, *mockjmap.Server) {
+	t.Helper()
+	m, srv := newTestModel(t)
+	old := searchDebounce
+	searchDebounce = time.Millisecond
+	t.Cleanup(func() { searchDebounce = old })
+	pump(t, m, m.loadAccountCmd())
+	srv.CreateEmails([]mockjmap.Email{{
+		ID: "e9", ThreadID: "t9", MailboxIDs: []string{"mb-inbox"},
+		From:       []mockjmap.Address{{Name: "Zoe Solo", Email: "zoe@example.test"}},
+		Subject:    "second thread note",
+		ReceivedAt: time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC),
+		TextBody:   "A standalone message.\n",
+	}})
+	return m, srv
+}
+
+func TestSearchEnterConfirmsAndFocussList(t *testing.T) {
+	m, _ := searchTestModelWithExtraRow(t)
+
+	_, _ = m.handleKey(key("/"))
+	for _, r := range "thread" {
+		typeInto(m, r)
+	}
+	// Enter confirms: search issued, keyboard returns to the list.
+	_, cmd := m.handleKey(keyEnter())
+	if cmd == nil {
+		t.Fatal("enter issued no search")
+	}
+	pump(t, m, cmd)
+	if m.search.editing {
+		t.Fatal("enter left the cursor in the search bar")
+	}
+	if !m.snap.SearchActive || len(m.snap.Rows) < 2 {
+		t.Fatalf("search results missing: active=%v rows=%d", m.snap.SearchActive, len(m.snap.Rows))
+	}
+
+	// j/k navigate the results now (the bar no longer owns the keys).
+	before := m.snap.Cursor
+	_, _ = m.handleKey(key("j"))
+	if m.snap.Cursor != before+1 {
+		t.Fatalf("cursor %d after j, want %d — list navigation blocked", m.snap.Cursor, before+1)
+	}
+
+	// A letter that is no binding does not leak into the search.
+	_, _ = m.handleKey(key("z"))
+	if m.search.spec.Text != "thread" {
+		t.Fatalf("query mutated while browsing results: %q", m.search.spec.Text)
+	}
+
+	// "/" re-focuses the bar for editing.
+	_, cmd = m.handleKey(key("/"))
+	if !m.search.editing {
+		t.Fatal("/ did not re-focus the search bar")
+	}
+	if cmd == nil {
+		t.Fatal("refocus produced no command (input cursor)")
+	}
+
+	// Esc clears the search from the bar.
+	pump(t, m, m.closeSearch())
+	if m.search != nil || m.snap.SearchActive {
+		t.Fatal("esc did not clear the search")
+	}
+}
+
+func TestSearchEnterDoesNotRestartScan(t *testing.T) {
+	m, srv := newTestModelWith(t, []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 3, UnreadEmails: 2},
+	})
+	srv.SetSyntheticMailbox(mockjmap.SyntheticMailbox{MailboxID: "mb-syn", Prefix: "syn", Count: 1200})
+	pump(t, m, m.loadAccountCmd())
+
+	_, _ = m.handleKey(key("/"))
+	// Tab to the all-mailbox scope so the scan has real work to do.
+	_, scopeCmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	pump(t, m, scopeCmd)
+	for _, r := range "synth" {
+		typeInto(m, r)
+	}
+	// Fire the debounce, then let the scan stream its first batches.
+	pump(t, m, m.debounceSearch(m.search.seq))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.snap.Scan != nil && m.snap.Scan.Scanned > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+		msgCh := make(chan tea.Msg, 1)
+		go func() { msgCh <- m.waitUpdates()() }()
+		select {
+		case msg := <-msgCh:
+			if msg != nil {
+				m.Update(msg)
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if m.snap.Scan == nil {
+		t.Fatal("scan never started")
+	}
+	if !m.snap.Scan.Active {
+		t.Log("note: scan already finished (fast mock); restart check is weaker")
+	}
+
+	// Enter with an unchanged spec: no re-issue, the scan keeps its
+	// progress (an identical re-issue would cancel and restart it).
+	scanned := m.snap.Scan.Scanned
+	_, cmd := m.handleKey(keyEnter())
+	if cmd != nil {
+		pump(t, m, cmd)
+	}
+	if m.snap.Scan == nil {
+		t.Fatal("enter reset the scan state")
+	}
+	if m.snap.Scan.Scanned < scanned {
+		t.Fatalf("scan restarted by enter: scanned %d → %d", scanned, m.snap.Scan.Scanned)
+	}
+	if m.search.editing {
+		t.Fatal("enter left the cursor in the search bar")
+	}
+}

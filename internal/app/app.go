@@ -366,7 +366,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Modal overlays swallow keys while open (move/copy/archive picker,
-	// attachment save, search bar + advanced modal).
+	// attachment save).
 	if m.picker != nil {
 		cmd, _ := m.pickerKey(key)
 		return m, cmd
@@ -375,7 +375,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd, _ := m.filePickKey(msg)
 		return m, cmd
 	}
-	if m.search != nil {
+	// The search bar and the advanced modal over it own the keyboard
+	// only while the bar is focused; once a search is confirmed, normal
+	// pane keys apply (FR-F1).
+	if m.search != nil && (m.search.editing || m.search.adv != nil) {
 		return m, m.searchKey(msg)
 	}
 
@@ -471,11 +474,19 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 
 	// --- search (M4, FR-F1..F3) ---
 	case ui.ActSearch:
-		if m.search == nil {
+		// "/": open the bar, re-focus it over existing results, or (from
+		// the bar itself) open the advanced modal — the FR-F2 "/ /" chord.
+		switch {
+		case m.search == nil:
 			return m, m.openSearch()
+		case m.search.adv != nil:
+			return m, nil
+		case m.search.editing:
+			m.openAdvSearch()
+			return m, nil
+		default:
+			return m, m.refocusSearch()
 		}
-		m.openAdvSearch()
-		return m, nil
 	case ui.ActSearchAdv:
 		// ctrl+s always reaches the fielded form — opening the bar first
 		// when the search view is closed (FR-F2).
@@ -484,7 +495,9 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 			m.openAdvSearch()
 			return m, cmd
 		}
-		m.openAdvSearch()
+		if m.search.adv == nil {
+			m.openAdvSearch()
+		}
 		return m, nil
 
 	// --- full-screen message view (FR-E5) ---

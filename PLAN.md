@@ -136,6 +136,8 @@ Servers verify token-only search (PLAN §7: Stalwart matches whole words on ever
 
 Purely exact searches (keyword/attachment/dates only, no text-ish field) never scan: the server's zero is final and a scope walk would only repeat it (FR-K4). Scan views are flat (no thread expansion, no server-side jump positions); triage and live-change patches apply to scan matches as usual. Bodies are never scanned — summaries never carry them (full-word body search is the fast path's job).
 
+Focus model (M4 addendum 2, user feedback): the query bar is a focused overlay, not a modal — `Enter` confirms the search **and** moves the cursor into the results list (an unchanged spec is not re-issued, so Enter never restarts an in-flight scan); while browsing results all pane keys apply; `/` re-focuses the bar; `Esc` clears the search from anywhere the search view is open (bar or list).
+
 ## 5. UI design notes (minimal & elegant)
 
 - **Type:** rows are single-height, generous cell padding, muted secondary text; unread = bold + accent dot; selection = soft background wash, not a harsh inverse.
