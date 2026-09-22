@@ -39,6 +39,7 @@ const (
 	ActSaveAttach    Action = "preview.save_attachment"
 	ActSearch        Action = "ui.search"
 	ActSearchAdv     Action = "ui.search_advanced"
+	ActSearchClear   Action = "ui.search_clear"
 	ActFullscreen    Action = "preview.fullscreen"
 	ActCyclePane     Action = "pane.cycle"
 	ActCyclePaneRev  Action = "pane.cycle_reverse"
@@ -101,6 +102,7 @@ func defaultBindings() []Binding {
 		{Key: "v", Act: ActFullscreen, Help: "full-screen message", Pane: PaneAny},
 		{Key: "/", Act: ActSearch, Help: "search", Pane: PaneAny},
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
+		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
 		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
 		{Key: "[", Act: ActToggleSidebar, Help: "show/hide sidebar", Pane: PaneAny},

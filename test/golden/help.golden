@@ -24,6 +24,7 @@
                        [38;2;130;170;255mv         [m  [38;2;192;202;245mfull-screen message[m
                        [38;2;130;170;255m/         [m  [38;2;192;202;245msearch[m
                        [38;2;130;170;255mctrl+s    [m  [38;2;192;202;245madvanced search[m
+                       [38;2;130;170;255mesc       [m  [38;2;192;202;245mclear search[m
                        [38;2;130;170;255mtab       [m  [38;2;192;202;245mnext pane[m
                        [38;2;130;170;255mshift+tab [m  [38;2;192;202;245mprevious pane[m
                        [38;2;130;170;255m[         [m  [38;2;192;202;245mshow/hide sidebar[m

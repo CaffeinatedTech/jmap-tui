@@ -96,7 +96,7 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 | Message | `v` | Full-screen message (hides sidebar + list) |
 | Any | `/` | Search — server-side query bar; `Enter` confirms and jumps into the results, `/` re-focuses the bar |
 | Any | `ctrl+s` | Advanced search (fielded form; also `/` while the query bar is open) |
-| Query bar | `Esc` | Clear the search (works while browsing results too) |
+| Any | `Esc` | Clear the search (while a search view is open; no-op otherwise) |
 | Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
 | Any | `c` | Compose *(M5)* |

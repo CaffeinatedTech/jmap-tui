@@ -439,3 +439,39 @@ func TestSearchEnterDoesNotRestartScan(t *testing.T) {
 		t.Fatal("enter left the cursor in the search bar")
 	}
 }
+
+func TestSearchEscClearsFromResults(t *testing.T) {
+	m, _ := searchTestModelWithExtraRow(t)
+
+	// Confirm a search, then clear it from the results list — the bar is
+	// not focused here, so esc must flow through the global binding.
+	_, _ = m.handleKey(key("/"))
+	for _, r := range "thread" {
+		typeInto(m, r)
+	}
+	_, cmd := m.handleKey(keyEnter())
+	pump(t, m, cmd)
+	if m.search.editing || !m.snap.SearchActive {
+		t.Fatalf("setup: editing=%v active=%v", m.search.editing, m.snap.SearchActive)
+	}
+
+	// Esc with focus in the list clears the search — via the binding,
+	// not a manual close (the returned command is what esc produced).
+	_, escCmd := m.handleKey(keyEsc())
+	if escCmd == nil {
+		t.Fatal("esc while browsing results produced no command")
+	}
+	pump(t, m, escCmd)
+	if m.search != nil || m.snap.SearchActive {
+		t.Fatal("esc did not clear the search while browsing results")
+	}
+	if m.snap.ViewKey != "m:mb-inbox" {
+		t.Fatalf("view after esc = %q, want the mailbox view", m.snap.ViewKey)
+	}
+
+	// Esc with no search open is a no-op.
+	_, _ = m.handleKey(keyEsc())
+	if m.search != nil {
+		t.Fatal("esc invented a search state")
+	}
+}

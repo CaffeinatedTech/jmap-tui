@@ -499,6 +499,13 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 			m.openAdvSearch()
 		}
 		return m, nil
+	case ui.ActSearchClear:
+		// Esc while browsing results clears the search (FR-F1); with no
+		// search open it is a no-op.
+		if m.search != nil {
+			return m, m.closeSearch()
+		}
+		return m, nil
 
 	// --- full-screen message view (FR-E5) ---
 	case ui.ActFullscreen:
