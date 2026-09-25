@@ -80,7 +80,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## FR-D — Message list & rolling window
 
-- **[FR-D1] [M1]** Rows show: flags (unread dot, star, attachment paperclip, answered/replied markers), sender, subject, date (relative < 7d, absolute otherwise), size on request, thread depth chevron.
+- **[FR-D1] [M1]** Rows show: flags (unread dot, star, attachment paperclip, answered/replied markers), sender, subject, date (relative < 7d, absolute otherwise), size on request, thread depth chevron. The list renders a window clamped to the panel height that **scrolls to keep the cursor on screen** (centered when the list overflows, clamped at both ends); the sidebar tree follows its selection the same way. *(Scroll-to-cursor added post-M7 2026-09-25: rows beyond the pane were rendered from the top, so a deep cursor ran off the panel and the selection disappeared.)*
 - **[FR-D2] [M1]** Threads collapsed by default via `collapseThreads=true`; expanding loads full thread (`Thread/get` + `Email/get`) in place. Collapse state is per-view, in-memory.
 - **[FR-D3] [M1]** **Rolling window:** the query runs server-side with `limit` = chunk (default 50). Scrolling within 10 rows of a loaded edge prefetches the next chunk (`position`/`anchor` offsets) so the user only ever experiences smooth endless scroll. Window may grow to a configurable cap (default 2,000 rows); scrolling further re-anchors and trims the far edge, silently — to the user it is still endless.
 - **[FR-D4] [M1]** Only **summaries** are fetched for the window (`Email/get` with small property set). Bodies load lazily on open.

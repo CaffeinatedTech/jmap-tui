@@ -65,9 +65,20 @@ func sidebarLabel(w int, name string, th Theme) string {
 	return cell + pad(th.SidebarLabel.Render(" "+name), w-2) + cell
 }
 
+// listTop picks the first visible row so a pane of avail rows keeps the
+// cursor in view: centered when the list overflows the pane, clamped to
+// both ends. Stateless — every frame derives it from the cursor alone
+// (FR-D1: the selection can never run off the panel).
+func listTop(rowCount, cursor, avail int) int {
+	if avail <= 0 || rowCount <= avail {
+		return 0
+	}
+	return max(0, min(cursor-avail/2, rowCount-avail))
+}
+
 // renderSidebar draws the mailbox tree (FR-C1): top rule, account label,
 // then hierarchy indentation, unread counts, one accent on the active
-// mailbox.
+// mailbox. The tree scrolls to keep the selected mailbox in view.
 func renderSidebar(l Layout, h int, st State) string {
 	th := st.Theme
 	w := max(l.SidebarW-1, 0)
@@ -83,10 +94,13 @@ func renderSidebar(l Layout, h int, st State) string {
 		b.WriteString("\n")
 		used++
 	}
-	for i, node := range st.Snap.Mailboxes {
+	// Rule + label consumed two rows; the tree gets whatever is left.
+	top := listTop(len(st.Snap.Mailboxes), st.SidebarSel, h-used)
+	for i := top; i < len(st.Snap.Mailboxes); i++ {
 		if used >= h {
 			break
 		}
+		node := st.Snap.Mailboxes[i]
 		indent := strings.Repeat("  ", node.Depth)
 		name := node.Mailbox.Name
 		plain := indent + name
@@ -190,6 +204,21 @@ func renderList(l Layout, h int, st State) string {
 
 	rows := st.Snap.Rows
 	cursor := st.Snap.Cursor
+	// Rows visible in the pane: rule + the two edge markers (drawn below)
+	// are subtracted, so the window around the cursor is sized exactly —
+	// the list scrolls with the cursor and never spills past the panel.
+	avail := h - 1
+	if st.Snap.LoadBackward {
+		avail--
+	}
+	if st.Snap.LoadForward {
+		avail--
+	}
+	top := 0
+	if st.Snap.Total >= 0 {
+		top = listTop(len(rows), cursor, avail)
+	}
+	end := min(top+max(avail, 0), len(rows))
 
 	var b strings.Builder
 	used := 0
@@ -209,10 +238,11 @@ func renderList(l Layout, h int, st State) string {
 		b.WriteString("\n")
 		used++
 	}
-	for i, r := range rows {
+	for i := top; i < end; i++ {
 		if st.Snap.Total < 0 || used >= h {
 			break
 		}
+		r := rows[i]
 		unread := !r.Summary.Keywords.Has("$seen")
 		sel := i == cursor
 		focused := st.Focus == PaneList
