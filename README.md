@@ -137,6 +137,7 @@ undo_delay = "5s"   # 0s submits immediately
 | List | `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
+| Any | `PgUp` / `PgDn` | Page the preview — from any pane, focus stays put |
 | List | `n` | Compose a new message |
 | List | `r` | Reply |
 | List | `a` | Reply to all |

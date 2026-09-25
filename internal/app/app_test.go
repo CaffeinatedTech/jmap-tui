@@ -256,6 +256,47 @@ func TestLayoutTogglePersists(t *testing.T) {
 	}
 }
 
+// TestPreviewPagingFromAnyPane: pgdn/pgup page the preview regardless of
+// the focused pane and never steal focus; the preview's own keys keep
+// working while it is focused (FR-E3).
+func TestPreviewPagingFromAnyPane(t *testing.T) {
+	m, _ := newTestModel(t)
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		pump(t, m, cmd)
+	}
+	pump(t, m, m.loadAccountCmd())
+
+	// A long body in a short viewport, so a page move is observable.
+	m.vp.SetContent(strings.Repeat("line of text\n", 100))
+	m.vp.SetHeight(10)
+	m.vp.GotoTop()
+
+	m.focus = ui.PaneList
+	_, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if cmd != nil {
+		t.Fatal("preview paging produced a command (local scroll only)")
+	}
+	if m.vp.YOffset() == 0 {
+		t.Fatal("pgdn did not scroll the preview from the list pane")
+	}
+	if m.focus != ui.PaneList {
+		t.Fatalf("focus = %v, want list (unchanged)", m.focus)
+	}
+
+	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.vp.YOffset() != 0 {
+		t.Fatalf("pgup offset = %d, want 0", m.vp.YOffset())
+	}
+
+	// The current method while the preview is active is untouched.
+	m.focus = ui.PanePreview
+	_, _ = m.handleKey(key("d"))
+	if m.vp.YOffset() == 0 {
+		t.Fatal("d did not half-page the preview while focused")
+	}
+}
+
 // TestAppLivePump proves the latest-wins broadcast reaches the model: a
 // waiter armed before a publish receives it as a live snapshot (FR-B2).
 func TestAppLivePump(t *testing.T) {

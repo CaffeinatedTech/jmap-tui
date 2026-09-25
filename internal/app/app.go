@@ -1177,6 +1177,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActPreviewBottom:
 		m.vp.GotoBottom()
 		return m, nil
+	case ui.ActPreviewPageDown:
+		m.vp.PageDown()
+		return m, nil
+	case ui.ActPreviewPageUp:
+		m.vp.PageUp()
+		return m, nil
 	}
 	m.err = ""
 	return m, nil

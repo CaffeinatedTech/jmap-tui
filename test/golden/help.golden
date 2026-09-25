@@ -1,5 +1,4 @@
 
-
                      [38;2;130;170;255mHelp — message list[m
                      
                        [38;2;130;170;255mj/down    [m  [38;2;192;202;245mnext message[m
@@ -17,6 +16,8 @@
                        [38;2;130;170;255my         [m  [38;2;192;202;245mcopy to mailbox…[m
                        [38;2;130;170;255mh         [m  [38;2;192;202;245marchive[m
                        [38;2;130;170;255m#         [m  [38;2;192;202;245mdelete (to trash)[m
+                       [38;2;130;170;255mpgdown    [m  [38;2;192;202;245mpreview page down[m
+                       [38;2;130;170;255mpgup      [m  [38;2;192;202;245mpreview page up[m
                        [38;2;130;170;255mv         [m  [38;2;192;202;245mfull-screen message[m
                        [38;2;130;170;255mn         [m  [38;2;192;202;245mcompose a message[m
                        [38;2;130;170;255mr         [m  [38;2;192;202;245mreply[m
