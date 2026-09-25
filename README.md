@@ -66,7 +66,7 @@ Archive                  │↓ more                                            
 unified  live  synced 10:00:00                                                        Old laptop: connect: auth rejected
 ```
 
-Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. Dark and light palettes are terminal-adaptive.
+Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. `z` toggles the layout: side-by-side (default) or **stacked** — the list above the preview at a 50/50 split, with the sidebar unchanged; stacked shows both panes at medium widths instead of swapping. The choice persists in `prefs.toml` (the app-managed file — `config.toml` is never rewritten). Dark and light palettes are terminal-adaptive.
 
 A footer status line reports the sync state: connection mode (`live` / `polling` / `connecting…`), last-sync time, retry count and errors, and the active mailbox's unread/total counts. With several accounts it leads with the active account's name (or `unified`), and any account in error shows a named, right-aligned error. New mail slides in at the top of the list with a brief highlight.
 
@@ -152,6 +152,7 @@ undo_delay = "5s"   # 0s submits immediately
 | Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
 | Any | `ctrl+a` | Add or edit an account (opens the wizard; the TUI restarts) |
 | Any | `[` | Show/hide sidebar |
+| Any | `z` | Toggle pane layout: list beside preview ↔ stacked (list above, 50/50) — remembered in `prefs.toml` |
 | Any | `?` | Help overlay |
 | Any | `q` | Quit (or `ctrl+c` twice — cancels in-flight work first) |
 
