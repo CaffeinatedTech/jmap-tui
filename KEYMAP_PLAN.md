@@ -233,3 +233,31 @@ scans merged rows. Behaviour when nothing unread remains: stay put
 | 2 | Sidebar `g/G`? | Yes — added (`sidebar.top`/`bottom`) |
 | 3 | `s` sort / `S` sizes? | Yes — sort picker (remembered, `o` alias), sizes on `S`, switcher moved to `A` |
 | 4 | Drop `o`? | Yes — `enter` alone toggles threads |
+
+## 10. Addendum — sidebar fold keys (2026-09-26, FR-C6)
+
+Folder folding landed the day after this map and reassigns the sidebar's
+`h`/`l` (user decision, interviewed): the ranger/lf §3 intent — `h/l`
+collapse/enter in the tree — completed as **`h`/`←` fold, `l`/`→`
+unfold**, with `sidebar.collapse` / `sidebar.expand` as the new action
+ids (aliases grouped in help as `h/left`, `l/right`).
+
+| Key | Was | Now |
+|---|---|---|
+| sidebar `h` | `sidebar.close` (hide sidebar) | `sidebar.collapse` — fold, or climb to the parent row |
+| sidebar `l` | `sidebar.open` (alias of Enter) | `sidebar.expand` — unfold only; **Enter alone opens** |
+| `left` / `right` | unbound | aliases of collapse / expand (sidebar pane) |
+| `[` | show/hide sidebar | unchanged — now the **sole** hide key |
+
+Consequences, all landing in the same change:
+
+- **`sidebar.close` ships unbound** — the action id survives for remap
+  stability (§6) with an empty default key; `Help` skips it until a
+  remap gives it one. Its focus-hand-off (hide ⇒ focus to list) moved
+  into `pane.toggle_sidebar`.
+- **FR-C2/FR-C5 amended**: "Enter/`l` opens" is now "Enter opens" — the
+  `l`-opens clause in §1.2/§5.2 above is superseded.
+- §4 decision 2's "sidebar-`h` collapse stays" is superseded too — it
+  now collapses the *tree*, which is what the help string always said.
+- `Validate()` unchanged: `left`/`right` were free everywhere, `h`/`l`
+  stay pane-scoped, and an unbound id still validates its remaps.

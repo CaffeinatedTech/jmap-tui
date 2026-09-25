@@ -153,25 +153,29 @@ func TestSidebarAccountLabel(t *testing.T) {
 			st := baseState()
 			st.Focus = PaneList
 			st.Account = tc.account
+			var rows []SidebarRow
 			if tc.unified {
 				st.Snap = fixtureUnifiedSnapshot()
 				st.Unified = true
 				st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
 				st.AccountIndex = map[string]int{"work": 0, "personal": 1}
-				st.SidebarRows = fixtureMultiSidebarRows()
+				rows = fixtureMultiSidebarRows()
 			} else {
-				st.SidebarRows = sidebarRowsFor("work", tc.account, fixtureSnapshot(), 0, true)
+				rows = sidebarRowsFor("work", tc.account, fixtureSnapshot(), 0, true)
 			}
+			st.SidebarRows = rows
 			frame := Render(w, h, st)
 			lines := strings.Split(frame, "\n")
 			if len(lines) < 3 {
 				t.Fatalf("frame has %d lines, want header + rule + label", len(lines))
 			}
 			// Line 2 leads with the sidebar: strip the pane separator to
-			// isolate the header cell.
+			// isolate the header cell. The fold slot (FR-C6) leads the
+			// name when the account has folders to fold.
 			sidebarCell := strings.SplitN(ansi.Strip(lines[2]), "│", 2)[0]
-			if got := strings.TrimSpace(sidebarCell); got != tc.account {
-				t.Errorf("label = %q, want %q", got, tc.account)
+			want := strings.TrimSpace(foldSlot(rows[0]) + tc.account)
+			if got := strings.TrimSpace(sidebarCell); got != want {
+				t.Errorf("label = %q, want %q", got, want)
 			}
 			raw := strings.SplitN(lines[2], "│", 2)[0]
 			if !strings.Contains(raw, rose) {

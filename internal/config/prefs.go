@@ -28,6 +28,17 @@ type Prefs struct {
 	// order, so a newly added account never vanishes or reshuffles the
 	// arrangement.
 	AccountOrder []string `toml:"account_order,omitempty"`
+
+	// CollapsedAccounts lists the account trees folded shut in the
+	// sidebar (FR-C6): account ids. Entries for accounts unknown to the
+	// config are dropped when the fold set is saved.
+	CollapsedAccounts []string `toml:"collapsed_accounts,omitempty"`
+
+	// CollapsedFolders maps an account id to the mailbox ids whose
+	// subtrees are folded shut (FR-C6). Ids only — never names or any
+	// other mail data (NFR-4); entries whose mailbox no longer exists
+	// are pruned at save time.
+	CollapsedFolders map[string][]string `toml:"collapsed_folders,omitempty"`
 }
 
 // Pane layout modes (FR-I10).

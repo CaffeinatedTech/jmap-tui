@@ -51,12 +51,27 @@ func topRule(w int, focused bool, th Theme) string {
 	return th.Rule.Render(strings.Repeat("─", w))
 }
 
+// foldSlot is a row's two-cell fold slot before its name (FR-C6): the
+// chevron plus its trailing space when the row has a subtree — "▸ " when
+// folded shut, "▾ " when open — and two spaces when it does not, so
+// names stay aligned across siblings either way.
+func foldSlot(row SidebarRow) string {
+	if !row.HasChildren {
+		return "  "
+	}
+	if row.Collapsed {
+		return "▸ "
+	}
+	return "▾ "
+}
+
 // sidebarLabel draws one account header in the folder column (FR-C5):
 // end-caps filled with the account's unified-inbox tint bracket the name,
 // so the line reads as chrome — it cannot be confused with a mailbox row,
 // the selection wash, or the accent-coloured open mailbox. The active
 // account's name takes the accent; every other account keeps the header
-// style.
+// style. A foldable account leads with the same chevron as a folder
+// (FR-C6), dimmed to match, so a collapsed tree reads as collapsed.
 func sidebarLabel(w int, row SidebarRow, sel bool, focus Pane, th Theme) string {
 	if w <= 0 {
 		return ""
@@ -71,7 +86,23 @@ func sidebarLabel(w int, row SidebarRow, sel bool, focus Pane, th Theme) string 
 	} else if row.Active {
 		style = th.Accent
 	}
-	return cell + style.Render(pad(" "+row.Name, w-2)) + cell
+	inner := w - 2
+	slot := foldSlot(row)
+	if sel {
+		// One style window: the wash repaints the whole line, fold
+		// slot included.
+		return cell + style.Render(pad(" "+slot+row.Name, inner)) + cell
+	}
+	// Unselected: segment per segment, because a nested escape inside a
+	// single Render would reset the name's colour at the chevron.
+	padW := max(inner-3, 0) // 1 lead cell + 2 fold-slot cells
+	out := style.Render(" ")
+	if row.HasChildren {
+		out += th.Muted.Render(slot)
+	} else {
+		out += style.Render(slot)
+	}
+	return cell + out + style.Render(pad(row.Name, padW)) + cell
 }
 
 // listTop picks the first visible row so a pane of avail rows keeps the
@@ -115,7 +146,8 @@ func renderSidebar(l Layout, h int, st State) string {
 			continue
 		}
 		indent := strings.Repeat("  ", row.Depth)
-		plain := indent + row.Name
+		slot := foldSlot(row)
+		plain := indent + slot + row.Name
 
 		count := ""
 		if row.Unread > 0 {
@@ -123,8 +155,9 @@ func renderSidebar(l Layout, h int, st State) string {
 		}
 
 		if sel {
-			// Selection wash covers the whole row; accent detail is
-			// deliberately dropped under it (minimal, not rainbow).
+			// Selection wash covers the whole row (fold slot included);
+			// accent detail is deliberately dropped under it (minimal,
+			// not rainbow).
 			line := plain
 			if count != "" {
 				line = pad(line, l.SidebarW-1-len(count)) + count
@@ -139,8 +172,15 @@ func renderSidebar(l Layout, h int, st State) string {
 			if row.Active {
 				nameStyle = th.Accent
 			}
+			// The chevron dims outside the wash (FR-C6); plain rows
+			// keep the single style window they always had.
+			var line string
+			if row.HasChildren {
+				line = nameStyle.Render(indent) + th.Muted.Render(slot) + nameStyle.Render(row.Name)
+			} else {
+				line = nameStyle.Render(plain)
+			}
 			fill := l.SidebarW - 1 - runewidth.StringWidth(plain) - runewidth.StringWidth(count)
-			line := nameStyle.Render(plain)
 			if fill > 0 {
 				line += strings.Repeat(" ", fill)
 			}

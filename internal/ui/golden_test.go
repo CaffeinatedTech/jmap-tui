@@ -47,11 +47,13 @@ func fixtureSnapshot() sync.Snapshot {
 
 	snap := sync.Snapshot{
 		Version: 7,
+		// Pre-order walk, as the sync engine emits it: parent before
+		// children (FR-C6 folding reads depth runs).
 		Mailboxes: []sync.MailboxNode{
 			{Mailbox: mail.Mailbox{ID: "mb-inbox", Name: "Inbox", Role: mail.RoleInbox, TotalEmails: 14, UnreadEmails: 3}, Depth: 0},
 			{Mailbox: mail.Mailbox{ID: "mb-sent", Name: "Sent Items", Role: mail.RoleSent}, Depth: 0},
-			{Mailbox: mail.Mailbox{ID: "mb-agent", Name: "agent-test", ParentID: "mb-archive"}, Depth: 1},
 			{Mailbox: mail.Mailbox{ID: "mb-archive", Name: "Archive", Role: mail.RoleArchive}, Depth: 0},
+			{Mailbox: mail.Mailbox{ID: "mb-agent", Name: "agent-test", ParentID: "mb-archive"}, Depth: 1},
 		},
 		Rows:          rows,
 		Cursor:        1,
@@ -82,18 +84,22 @@ type frame struct {
 }
 
 // sidebarRowsFor builds one account's sidebar rows for a fixture: the
-// account header (FR-C5) followed by the snapshot's mailbox tree.
+// account header (FR-C5) followed by the snapshot's mailbox tree, with
+// the fold flags the app derives from the pre-order walk (FR-C6).
 func sidebarRowsFor(acctID, name string, snap sync.Snapshot, tint int, active bool) []SidebarRow {
 	rows := []SidebarRow{{
 		Kind: SidebarAccount, Key: acctID, AccountID: acctID,
 		Name: name, Tint: tint, Active: active,
+		HasChildren: len(snap.Mailboxes) > 0,
 	}}
-	for _, n := range snap.Mailboxes {
+	for i, n := range snap.Mailboxes {
 		rows = append(rows, SidebarRow{
 			Kind: SidebarMailbox, Key: acctID + "\x00" + string(n.Mailbox.ID),
 			AccountID: acctID, MailboxID: n.Mailbox.ID,
 			Name: n.Mailbox.Name, Depth: n.Depth, Unread: n.Mailbox.UnreadEmails,
 			Active: active && n.Mailbox.ID == snap.ActiveMailbox,
+			HasChildren: i+1 < len(snap.Mailboxes) &&
+				snap.Mailboxes[i+1].Depth > n.Depth,
 		})
 	}
 	return rows
@@ -122,6 +128,27 @@ func fixtureMultiSidebarRows() []SidebarRow {
 		Name: "Old laptop", Tint: 2,
 	})
 	return rows
+}
+
+// fixtureFoldedSidebarRows is the fold view (FR-C6): Work's Archive
+// subtree folded shut (▸, agent-test hidden) and Personal's whole account
+// folded under its header — the two fold shapes in one column.
+func fixtureFoldedSidebarRows() []SidebarRow {
+	out := make([]SidebarRow, 0, 8)
+	for _, r := range sidebarRowsFor("work", "Work", fixtureSnapshot(), 0, true) {
+		if r.MailboxID == "mb-agent" {
+			continue // hidden under folded Archive
+		}
+		if r.MailboxID == "mb-archive" {
+			r.Collapsed = true
+		}
+		out = append(out, r)
+	}
+	out = append(out, SidebarRow{
+		Kind: SidebarAccount, Key: "personal", AccountID: "personal",
+		Name: "Personal", Tint: 1, HasChildren: true, Collapsed: true,
+	})
+	return out
 }
 
 func goldenFrames() []frame {
@@ -430,6 +457,31 @@ func goldenFrames() []frame {
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
 			st.SidebarRows = fixtureMultiSidebarRows()
 			st.SidebarSel = 5
+			st.Focus = PaneSidebar
+			return st
+		}},
+		// FR-C6 folding: Archive's subtree folded (▸, child hidden) and
+		// a whole account folded under its header — both fold shapes,
+		// with the wash parked on the folded folder.
+		{name: "folded-sidebar", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1, "laptop": 2}
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
+			st.SidebarRows = fixtureFoldedSidebarRows()
+			st.SidebarSel = 3 // folded Archive
+			st.Focus = PaneSidebar
+			return st
+		}},
+		{name: "folded-sidebar-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1, "laptop": 2}
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
+			st.SidebarRows = fixtureFoldedSidebarRows()
+			st.SidebarSel = 3
 			st.Focus = PaneSidebar
 			return st
 		}},

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -75,34 +76,236 @@ func (m *Model) accountTint(id string) int {
 // account in display order, then that account's mailbox tree. Built fresh
 // from the stored snapshots — never persisted (NFR-4) — so live mailbox
 // changes, account switches, and reorders are picked up on the next
-// frame or keypress.
+// frame or keypress. The fold set (FR-C6) is applied as a view over that
+// tree: a folded account contributes only its header, a folded folder
+// hides its whole subtree (the snapshot is a pre-order walk, so depth
+// carries the extent), and a folded folder's unread rolls up to the sum
+// of what it hides.
 func (m *Model) sidebarRows() []ui.SidebarRow {
 	rows := make([]ui.SidebarRow, 0, 16)
 	for _, info := range m.orderedAccounts() {
 		id := info.ID
-		rows = append(rows, ui.SidebarRow{
-			Kind:      ui.SidebarAccount,
-			Key:       sidebarRowKey(id, ""),
-			AccountID: id,
-			Name:      info.Name,
-			Tint:      m.accountTint(id),
-			Active:    id == m.activeID,
-		})
 		snap := m.snaps[id]
-		for _, node := range snap.Mailboxes {
+		acctKey := sidebarRowKey(id, "")
+		_, acctFolded := m.collapsed[acctKey]
+		rows = append(rows, ui.SidebarRow{
+			Kind:        ui.SidebarAccount,
+			Key:         acctKey,
+			AccountID:   id,
+			Name:        info.Name,
+			Tint:        m.accountTint(id),
+			Active:      id == m.activeID,
+			HasChildren: len(snap.Mailboxes) > 0,
+			Collapsed:   acctFolded,
+		})
+		if acctFolded {
+			continue
+		}
+		rollup := subtreeUnread(snap.Mailboxes)
+		hideBelow := -1
+		for i, node := range snap.Mailboxes {
+			if hideBelow >= 0 && node.Depth > hideBelow {
+				continue
+			}
+			hideBelow = -1
+			key := sidebarRowKey(id, node.Mailbox.ID)
+			_, folded := m.collapsed[key]
+			unread := node.Mailbox.UnreadEmails
+			if folded {
+				unread = rollup[i]
+			}
 			rows = append(rows, ui.SidebarRow{
-				Kind:      ui.SidebarMailbox,
-				Key:       sidebarRowKey(id, node.Mailbox.ID),
-				AccountID: id,
-				MailboxID: node.Mailbox.ID,
-				Name:      node.Mailbox.Name,
-				Depth:     node.Depth,
-				Unread:    node.Mailbox.UnreadEmails,
-				Active:    id == m.activeID && node.Mailbox.ID == snap.ActiveMailbox,
+				Kind:        ui.SidebarMailbox,
+				Key:         key,
+				AccountID:   id,
+				MailboxID:   node.Mailbox.ID,
+				Name:        node.Mailbox.Name,
+				Depth:       node.Depth,
+				Unread:      unread,
+				Active:      id == m.activeID && node.Mailbox.ID == snap.ActiveMailbox,
+				HasChildren: i+1 < len(snap.Mailboxes) && snap.Mailboxes[i+1].Depth > node.Depth,
+				Collapsed:   folded,
 			})
+			if folded {
+				hideBelow = node.Depth
+			}
 		}
 	}
 	return rows
+}
+
+// subtreeUnread rolls up unread counts over a pre-order mailbox list
+// (FR-C6): result[i] is that mailbox's own unread plus every descendant's
+// — what a folded folder shows instead of its own count.
+func subtreeUnread(nodes []sync.MailboxNode) []int {
+	sums := make([]int, len(nodes))
+	for i := len(nodes) - 1; i >= 0; i-- {
+		sums[i] = nodes[i].Mailbox.UnreadEmails
+		if i+1 < len(nodes) && nodes[i+1].Depth > nodes[i].Depth {
+			sums[i] += sums[i+1]
+		}
+	}
+	return sums
+}
+
+// loadCollapsed seeds the fold set from prefs (FR-C6): remembered
+// accounts and mailboxes, keyed by row key, for accounts enrolled this
+// session. Mailbox ids are validated against the tree when it loads
+// (saveFoldState prunes what has since been deleted).
+func loadCollapsed(p *config.Prefs, accounts []sync.AccountInfo) map[string]bool {
+	out := map[string]bool{}
+	if p == nil {
+		return out
+	}
+	enrolled := make(map[string]bool, len(accounts))
+	for _, a := range accounts {
+		enrolled[a.ID] = true
+	}
+	for _, id := range p.CollapsedAccounts {
+		if enrolled[id] {
+			out[sidebarRowKey(id, "")] = true
+		}
+	}
+	for acct, mbs := range p.CollapsedFolders {
+		if !enrolled[acct] {
+			continue
+		}
+		for _, mb := range mbs {
+			out[sidebarRowKey(acct, mail.ID(mb))] = true
+		}
+	}
+	return out
+}
+
+// saveFoldState serializes the fold set into prefs and writes prefs.toml
+// (FR-C6, FR-J1: the app writes only prefs). Entries for accounts not
+// enrolled are dropped, and a folded mailbox id whose mailbox has left a
+// loaded tree is pruned — a tree not yet loaded keeps its entries. Slices
+// are built fresh so the document never aliases the model's map.
+func (m *Model) saveFoldState() {
+	if m.opts.Prefs == nil || m.opts.PrefsPath == "" {
+		return
+	}
+	enrolled := make(map[string]bool, len(m.accounts))
+	for _, a := range m.accounts {
+		enrolled[a.ID] = true
+	}
+	var accts []string
+	folders := map[string][]string{}
+	for key := range m.collapsed {
+		acct, mb, isFolder := strings.Cut(key, "\x00")
+		if !enrolled[acct] {
+			continue
+		}
+		if !isFolder {
+			accts = append(accts, acct)
+			continue
+		}
+		if snap := m.snaps[acct]; len(snap.Mailboxes) > 0 && indexOfMailbox(snap.Mailboxes, mail.ID(mb)) < 0 {
+			continue
+		}
+		folders[acct] = append(folders[acct], mb)
+	}
+	sort.Strings(accts)
+	for _, ids := range folders {
+		sort.Strings(ids)
+	}
+	if len(folders) == 0 {
+		folders = nil
+	}
+	m.opts.Prefs.CollapsedAccounts = accts
+	m.opts.Prefs.CollapsedFolders = folders
+	if err := config.SavePrefs(m.opts.PrefsPath, m.opts.Prefs); err != nil {
+		m.err = "fold state not remembered: " + err.Error()
+	}
+}
+
+// setFolded flips one row's fold state (FR-C6) and remembers the set.
+func (m *Model) setFolded(key string, folded bool) {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	if folded {
+		if m.collapsed[key] {
+			return
+		}
+		m.collapsed[key] = true
+	} else {
+		if !m.collapsed[key] {
+			return
+		}
+		delete(m.collapsed, key)
+	}
+	m.saveFoldState()
+}
+
+// sidebarCollapse folds the cursor's row shut (FR-C6). A row with
+// nothing to fold — a leaf folder, an already-folded folder, a folded
+// account header — makes the cursor climb to its parent instead
+// (ranger's h): the folder's ParentID row when it exists, else the
+// account header; a folded header has nowhere to go. The cursor stays on
+// the row it folded (the row itself remains visible).
+func (m *Model) sidebarCollapse() {
+	rows := m.sidebarRows()
+	i := sidebarIndexOf(rows, m.sidebarKey)
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	row := rows[i]
+	if row.Kind == ui.SidebarAccount {
+		if row.HasChildren && !row.Collapsed {
+			m.setFolded(row.Key, true)
+		}
+		return
+	}
+	if row.HasChildren && !row.Collapsed {
+		m.setFolded(row.Key, true)
+		return
+	}
+	// Nothing to fold: climb to the parent row that actually exists —
+	// an orphan's ParentID (or a missing parent) lands on the header,
+	// never on a dangling key.
+	want := sidebarRowKey(row.AccountID, "")
+	if node := lookupMailbox(m.snaps[row.AccountID], row.MailboxID); node != nil && node.Mailbox.ParentID != "" {
+		if key := sidebarRowKey(row.AccountID, node.Mailbox.ParentID); sidebarHasRow(rows, key) {
+			want = key
+		}
+	}
+	m.sidebarKey = want
+}
+
+// sidebarExpand unfolds the row under the cursor (FR-C6) — that folder's
+// subtree or the whole account tree. It only ever expands: opening a
+// mailbox or activating an account is Enter's job alone (FR-C2, FR-C5),
+// so a row with nothing folded leaves the cursor put.
+func (m *Model) sidebarExpand() {
+	rows := m.sidebarRows()
+	i := sidebarIndexOf(rows, m.sidebarKey)
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	m.setFolded(rows[i].Key, false)
+}
+
+// lookupMailbox finds a mailbox node in a snapshot's tree (nil when
+// absent).
+func lookupMailbox(snap sync.Snapshot, id mail.ID) *sync.MailboxNode {
+	for i := range snap.Mailboxes {
+		if snap.Mailboxes[i].Mailbox.ID == id {
+			return &snap.Mailboxes[i]
+		}
+	}
+	return nil
+}
+
+// sidebarHasRow reports whether the visible row list contains the key.
+func sidebarHasRow(rows []ui.SidebarRow, key string) bool {
+	for _, r := range rows {
+		if r.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // sidebarIndexOf resolves a cursor key to a row index: exact match, else

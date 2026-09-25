@@ -100,6 +100,12 @@ type Model struct {
 	// derived from it per frame, so reorders and tree changes re-anchor
 	// instead of stranding the selection.
 	sidebarKey string
+	// collapsed is the fold set (FR-C6): row keys (sidebarRowKey) whose
+	// subtree is hidden — a bare account id folds that account's whole
+	// tree, "acct\x00mailbox" folds that folder's subtree. Seeded from
+	// prefs at startup, mutated only by the fold actions, persisted back
+	// (ids only, never mail data — NFR-4).
+	collapsed  map[string]bool
 	showSize   bool
 	helpOpen   bool
 	fullscreen bool // full-screen message view (FR-E5)
@@ -201,6 +207,7 @@ func New(opts Options) *Model {
 		hub:            hub,
 		accounts:       infos,
 		acctOrder:      config.MergeAccountOrder(base, saved),
+		collapsed:      loadCollapsed(opts.Prefs, infos),
 		activeID:       active,
 		engine:         hub.Engine(active),
 		snaps:          map[string]sync.Snapshot{},
@@ -1062,6 +1069,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ui.ActToggleSidebar:
 		m.sidebarVisible = !m.sidebarVisible
+		if !m.sidebarVisible && m.focus == ui.PaneSidebar {
+			// Focus never rides a hidden pane: hand off to the list
+			// (what sidebar.close used to do; it ships unbound now
+			// that "[" is the sole show/hide key, FR-C6).
+			m.focus = ui.PaneList
+		}
 		m.resizeViewport()
 		return m, nil
 	case ui.ActToggleLayout:
@@ -1217,6 +1230,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ui.ActOpenMailbox:
 		return m.openSidebarRow()
+	case ui.ActSidebarCollapse:
+		m.sidebarCollapse()
+		return m, nil
+	case ui.ActSidebarExpand:
+		m.sidebarExpand()
+		return m, nil
 	case ui.ActSidebarClose:
 		m.sidebarVisible = false
 		m.focus = ui.PaneList

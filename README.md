@@ -44,13 +44,15 @@ Three panes (≥100 cols) — sidebar · list · preview, one accent. Every colu
 ```text
 jmap-tui  Inbox  1432 messages · 3 unread
 ─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
-█ Work                  █│  ★   Dana Ops         Deploy pipeline is… 35m    │From: Eve Security <from@example.test>
-Inbox                   3│   ↩  Eve Security     Quarterly audit re… 3h     │To: me@example.test
-Sent Items               │      Bob Thread       ▾ Re: planning s…   1d     │Date: Mon, 21 Sep 2026 07:00
-  agent-test             │ ●    Alice Root         └ planning sync   1d     │Subject: Quarterly audit report attached
-Archive                  │↓ more                                            │──────────────────────────────────────────
+█ ▾ Work                █│  ★   Dana Ops         Deploy pipeline is… 35m    │From: Eve Security <from@example.test>
+  Inbox                 3│   ↩  Eve Security     Quarterly audit re… 3h     │To: me@example.test
+  Sent Items             │      Bob Thread       ▾ Re: planning s…   1d     │Date: Mon, 21 Sep 2026 07:00
+▾ Archive                │ ●    Alice Root         └ planning sync   1d     │Subject: Quarterly audit report attached
+    agent-test           │↓ more                                            │──────────────────────────────────────────
                          │                                                  │Hello,
 ```
+
+Trees fold: `h`/`←` shuts a folder's subtree — or a whole account's, when the cursor is on its header — and with nothing to fold it jumps to the parent row instead; `l`/`→` unfolds. Rows that have a subtree wear a dim `▸`/`▾` chevron, a folded folder's unread count rolls up over everything it hides, and `Enter` alone opens a mailbox. The fold state is remembered in `prefs.toml`.
 
 The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. The folder column is untouched by the merge: every account's tree stays under its own tinted header, in your chosen order. Actions always route to the owning account:
 
@@ -142,6 +144,9 @@ undo_delay = "5s"   # 0s submits immediately
 | List | `S` | Show/hide sizes |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
+| Folders | `Enter` | Open the mailbox (focus moves to the list); on an account header, activate that account |
+| Folders | `h` / `←` | Fold the folder's subtree (or the account's) shut; with nothing to fold, jump to the parent row |
+| Folders | `l` / `→` | Unfold — never opens (that's `Enter`); a folded folder shows its subtree's rolled-up unread |
 | Folders | `ctrl+↑` / `ctrl+↓` | Move the cursor's account block up / down — the order is remembered in `prefs.toml` |
 | Any | `PgUp` / `PgDn` | Page the preview — from any pane, focus stays put |
 | List | `n` | Compose a new message |

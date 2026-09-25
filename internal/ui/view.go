@@ -46,6 +46,11 @@ type SidebarRow struct {
 	// Active marks the open mailbox's row, or the active account's
 	// header.
 	Active bool
+	// HasChildren marks a row with a foldable subtree — a folder with
+	// subfolders, an account with folders — rendered with a chevron
+	// (FR-C6). Collapsed marks it folded shut (chevron ▸ instead of ▾).
+	HasChildren bool
+	Collapsed   bool
 }
 
 // State is everything Render needs. The app builds it each frame from its

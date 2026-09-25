@@ -47,6 +47,14 @@ func TestKeymapV2Defaults(t *testing.T) {
 		{ui.PaneList, "enter", ui.ActToggleThread},
 		{ui.PaneSidebar, "g", ui.ActSidebarTop},
 		{ui.PaneSidebar, "shift+g", ui.ActSidebarBottom},
+		{ui.PaneSidebar, "enter", ui.ActOpenMailbox},
+		// Folding (FR-C6): h/l plus the arrow keys, aliases grouped.
+		{ui.PaneSidebar, "h", ui.ActSidebarCollapse},
+		{ui.PaneSidebar, "left", ui.ActSidebarCollapse},
+		{ui.PaneSidebar, "l", ui.ActSidebarExpand},
+		{ui.PaneSidebar, "right", ui.ActSidebarExpand},
+		// "[" is the sole sidebar show/hide key (sidebar.close unbound).
+		{ui.PaneSidebar, "[", ui.ActToggleSidebar},
 		{ui.PanePreview, "ctrl+f", ui.ActPreviewPageDown},
 		{ui.PanePreview, "ctrl+b", ui.ActPreviewPageUp},
 		{ui.PaneAny, "shift+a", ui.ActAccountSwitch},
@@ -59,7 +67,7 @@ func TestKeymapV2Defaults(t *testing.T) {
 		}
 	}
 	// Archive no longer hides behind h anywhere, and the list's h is
-	// free (sidebar keeps h = collapse).
+	// free (the sidebar's h folds the tree, FR-C6).
 	if act, ok := km.Match(ui.PaneList, "h"); ok {
 		t.Errorf("list h = %v, want unbound", act)
 	}

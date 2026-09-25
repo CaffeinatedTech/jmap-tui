@@ -39,6 +39,8 @@ const (
 	ActSidebarClose    Action = "sidebar.close"
 	ActSidebarMoveUp   Action = "sidebar.move_account_up"
 	ActSidebarMoveDown Action = "sidebar.move_account_down"
+	ActSidebarCollapse Action = "sidebar.collapse"
+	ActSidebarExpand   Action = "sidebar.expand"
 	ActPreviewDown     Action = "preview.down"
 	ActPreviewUp       Action = "preview.up"
 	ActPreviewHalf     Action = "preview.half_down"
@@ -120,12 +122,24 @@ func defaultBindings() []Binding {
 		{Key: "g", Act: ActSidebarTop, Help: "first mailbox", Pane: PaneSidebar},
 		{Key: "shift+g", Act: ActSidebarBottom, Help: "last mailbox", Pane: PaneSidebar},
 		{Key: "enter", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
-		{Key: "l", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
-		{Key: "h", Act: ActSidebarClose, Help: "collapse sidebar", Pane: PaneSidebar},
+		// Folding (FR-C6): h/l are the tree's left/right (ranger/lf),
+		// arrow keys alias them. l only ever expands — Enter is the
+		// sole key that opens a mailbox or activates an account
+		// (FR-C2, FR-C5 amended).
+		{Key: "h", Act: ActSidebarCollapse, Help: "collapse tree", Pane: PaneSidebar},
+		{Key: "left", Act: ActSidebarCollapse, Help: "collapse tree", Pane: PaneSidebar},
+		{Key: "l", Act: ActSidebarExpand, Help: "expand tree", Pane: PaneSidebar},
+		{Key: "right", Act: ActSidebarExpand, Help: "expand tree", Pane: PaneSidebar},
 		// Account block reorder (FR-C5): moves the whole block of the
 		// account under the cursor; a no-op at either end.
 		{Key: "ctrl+up", Act: ActSidebarMoveUp, Help: "move account up", Pane: PaneSidebar},
 		{Key: "ctrl+down", Act: ActSidebarMoveDown, Help: "move account down", Pane: PaneSidebar},
+		// sidebar.close keeps its action id for [keys] remap stability
+		// (KEYMAP_PLAN §6) but ships unbound: "[" (pane.toggle_sidebar)
+		// is now the sole show/hide key, since h folds the tree (FR-C6).
+		// An empty key matches no keystroke; Help skips it until a
+		// remap gives it one.
+		{Key: "", Act: ActSidebarClose, Help: "hide sidebar", Pane: PaneSidebar},
 		{Key: "j", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
 		{Key: "down", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
 		{Key: "k", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
@@ -260,6 +274,11 @@ func (km *KeyMap) Help(pane Pane) HelpSection {
 	seen := map[Action]bool{}
 	for _, b := range km.keys {
 		if b.Pane != pane && b.Pane != PaneAny {
+			continue
+		}
+		if b.Key == "" {
+			// An unbound action (kept only for remap stability) has
+			// nothing to show until the user remaps it.
 			continue
 		}
 		if seen[b.Act] {

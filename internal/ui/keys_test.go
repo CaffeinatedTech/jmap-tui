@@ -32,9 +32,67 @@ func TestKeyMapDefaultsResolve(t *testing.T) {
 	if act, ok := km.Match(PaneSidebar, "ctrl+down"); !ok || act != ActSidebarMoveDown {
 		t.Fatalf("sidebar ctrl+down = %v %v", act, ok)
 	}
+	// Folding (FR-C6): h/l are the tree's left/right, arrows alias them.
+	if act, ok := km.Match(PaneSidebar, "h"); !ok || act != ActSidebarCollapse {
+		t.Fatalf("sidebar h = %v %v, want collapse", act, ok)
+	}
+	if act, ok := km.Match(PaneSidebar, "left"); !ok || act != ActSidebarCollapse {
+		t.Fatalf("sidebar left = %v %v, want collapse", act, ok)
+	}
+	if act, ok := km.Match(PaneSidebar, "l"); !ok || act != ActSidebarExpand {
+		t.Fatalf("sidebar l = %v %v, want expand", act, ok)
+	}
+	if act, ok := km.Match(PaneSidebar, "right"); !ok || act != ActSidebarExpand {
+		t.Fatalf("sidebar right = %v %v, want expand", act, ok)
+	}
+	// "[" is the only show/hide key (FR-C4, FR-C6).
+	if act, ok := km.Match(PaneSidebar, "["); !ok || act != ActToggleSidebar {
+		t.Fatalf("sidebar [ = %v %v, want toggle_sidebar", act, ok)
+	}
 	// Unbound key misses.
 	if _, ok := km.Match(PaneList, "w"); ok {
 		t.Fatal("w should be unbound in the list")
+	}
+}
+
+// TestKeyMapUnboundActionRemappable: an action that ships without a
+// default key (sidebar.close — "[" took over, FR-C6) keeps its id
+// remappable (KEYMAP_PLAN §6), stays out of the overlay until remapped,
+// and validates like any other binding.
+func TestKeyMapUnboundActionRemappable(t *testing.T) {
+	km, err := NewKeyMap(map[Action]string{ActSidebarClose: "x"})
+	if err != nil {
+		t.Fatalf("NewKeyMap remap of unbound action: %v", err)
+	}
+	if err := km.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if act, ok := km.Match(PaneSidebar, "x"); !ok || act != ActSidebarClose {
+		t.Fatalf("remapped sidebar.close = %v %v", act, ok)
+	}
+	sec := km.Help(PaneSidebar)
+	found := false
+	for _, b := range sec.Bindings {
+		if b.Key == "" {
+			t.Fatal("help lists a binding with no key")
+		}
+		if b.Act == ActSidebarClose {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("remapped sidebar.close missing from help")
+	}
+
+	// Unremapped, it contributes nothing to the overlay.
+	def, err := NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("NewKeyMap: %v", err)
+	}
+	for _, b := range def.Help(PaneSidebar).Bindings {
+		if b.Act == ActSidebarClose {
+			t.Fatal("unbound sidebar.close appears in help")
+		}
 	}
 }
 
