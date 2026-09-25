@@ -197,7 +197,8 @@ func TestSwitcherModal(t *testing.T) {
 }
 
 // TestUnifiedInterleavesByReceivedAt: the merged inbox interleaves by
-// receivedAt with per-row account badges (FR-A5).
+// receivedAt; the frame's rows carry the owner colour bar and the preview
+// names the owner (FR-A5).
 func TestUnifiedInterleavesByReceivedAt(t *testing.T) {
 	m, _, _ := newTwoAccountModel(t)
 	loadAll(t, m)
@@ -224,13 +225,18 @@ func TestUnifiedInterleavesByReceivedAt(t *testing.T) {
 		}
 	}
 
-	// The frame shows the unified header and both account badges.
-	view := stripANSI(m.View().Content)
+	// The frame shows the unified header; ownership is a colour bar on
+	// each row and a spelled-out Account line in the preview (FR-A5).
+	raw := m.View().Content
+	view := stripANSI(raw)
 	if !strings.Contains(view, "unified inbox") {
 		t.Fatalf("view missing unified header:\n%s", view)
 	}
-	if !strings.Contains(view, "Work") || !strings.Contains(view, "Personal") {
-		t.Fatalf("view missing account badges:\n%s", view)
+	if !strings.Contains(view, "Account: Work") {
+		t.Fatalf("preview missing the owner line:\n%s", view)
+	}
+	if !strings.Contains(raw, "48;2;") {
+		t.Fatal("row owner bars (background tints) not rendered")
 	}
 }
 
@@ -597,5 +603,18 @@ func TestAccountManageKey(t *testing.T) {
 	}
 	if !m.ManageRequested() {
 		t.Fatal("ManageRequested not set — the wizard would never run")
+	}
+}
+
+// TestUIStateAccountOrdinal: the owner-bar tint ordinal follows enrollment
+// order — the same order as the switcher (FR-A5).
+func TestUIStateAccountOrdinal(t *testing.T) {
+	m, _, _ := newTwoAccountModel(t)
+	st := m.uiState()
+	if st.AccountIndex["work"] != 0 || st.AccountIndex["personal"] != 1 {
+		t.Fatalf("AccountIndex = %v, want work:0 personal:1", st.AccountIndex)
+	}
+	if st.AccountNames["work"] != "Work" {
+		t.Errorf("AccountNames = %v", st.AccountNames)
 	}
 }

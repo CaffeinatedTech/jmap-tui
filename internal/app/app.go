@@ -1320,8 +1320,8 @@ func (m *Model) uiState() ui.State {
 		st.HelpOpen = true
 		st.HelpSec = m.opts.Keys.Help(m.focus)
 	}
-	// Multi-account chrome (M6): identities for the footer chip and the
-	// switcher, badges for unified rows. Single-account configs leave
+	// Multi-account chrome (M6): identities for the footer chip, the
+	// switcher, and the unified preview's owner line (FR-A5). Single-account configs leave
 	// Accounts empty-irrelevant (len 1 still renders the chip only when
 	// more than one account exists — see ui.renderFooter).
 	st.Accounts = m.accountViews()
@@ -1331,10 +1331,13 @@ func (m *Model) uiState() ui.State {
 	st.Unified = m.unified
 	if len(m.accounts) > 0 {
 		names := make(map[string]string, len(m.accounts))
-		for _, a := range m.accounts {
+		idx := make(map[string]int, len(m.accounts))
+		for i, a := range m.accounts {
 			names[a.ID] = a.Name
+			idx[a.ID] = i
 		}
 		st.AccountNames = names
+		st.AccountIndex = idx
 	}
 	if m.switcher != nil {
 		st.AccountSwitch = &ui.SwitchView{Accounts: m.accountViews(), Sel: m.switcher.sel}

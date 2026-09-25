@@ -12,7 +12,7 @@ import (
 
 // This file is the M6 multi-account surface: the switcher modal (FR-A4,
 // FR-I7), the unified inbox (FR-A5), and the account views the footer and
-// badges render (FR-I5).
+// switcher render (FR-I5).
 
 // switchState is the open switcher's selection (FR-A4).
 type switchState struct {

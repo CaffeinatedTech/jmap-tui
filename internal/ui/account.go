@@ -10,7 +10,8 @@ import (
 )
 
 // AccountView is one account's render state: the switcher rows (FR-A4),
-// the footer's per-account status (FR-I5), and the badge names (FR-A5).
+// the footer's per-account status (FR-I5), and the owner names the
+// preview prints (FR-A5).
 type AccountView struct {
 	ID        string
 	Name      string

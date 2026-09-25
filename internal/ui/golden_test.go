@@ -303,7 +303,7 @@ func goldenFrames() []frame {
 			return st
 		}},
 		// M6 multi-account: switcher modal (FR-A4) and the unified inbox
-		// with owner badges + per-account footer status (FR-A5, FR-I5).
+		// with owner colour bars + per-account footer status (FR-A5, FR-I5).
 		{name: "switcher", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.Accounts = fixtureAccounts()
@@ -325,6 +325,7 @@ func goldenFrames() []frame {
 			st.Account = "Work"
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
 			return st
 		}},
 		{name: "unified-light", w: 120, h: 40, st: func() State {
@@ -334,6 +335,7 @@ func goldenFrames() []frame {
 			st.Account = "Work"
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
 			return st
 		}},
 		{name: "unified-compact", w: 59, h: 25, st: func() State {
@@ -343,6 +345,7 @@ func goldenFrames() []frame {
 			st.Account = "Work"
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
 			return st
 		}},
 	}
@@ -361,7 +364,7 @@ func fixtureAccounts() []AccountView {
 
 // fixtureUnifiedSnapshot tags the fixture rows with owners: the thread
 // block (e2 header + e1 member) belongs to one account — threads never
-// span accounts — while e4/e3 alternate to exercise the badges.
+// span accounts — while e4/e3 alternate to exercise the tints.
 func fixtureUnifiedSnapshot() sync.Snapshot {
 	snap := fixtureSnapshot()
 	snap.Rows[0].Account = "work"     // e4

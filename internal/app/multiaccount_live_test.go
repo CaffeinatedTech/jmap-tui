@@ -233,6 +233,18 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 		subjects[sub] = true
 		waitForInboxSubject(t, m, "one", sub)
 	}
+	// Sweep the fixtures even when a mid-gate assertion aborts the run:
+	// debris would otherwise trip the leftover check in every later gate
+	// (the inline cleanup below only runs on the happy path).
+	t.Cleanup(func() {
+		for sub := range subjects {
+			for _, acct := range []string{"one", "two"} {
+				for _, role := range []mail.Role{mail.RoleInbox, mail.RoleSent} {
+					destroyBySubject(t, m, acct, role, sub)
+				}
+			}
+		}
+	})
 
 	// Gate 3: the unified inbox interleaves correctly (FR-A5).
 	_, cmd = m.handleKey(key("i"))
@@ -257,10 +269,13 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 	if !strings.Contains(view, "unified inbox") {
 		t.Fatalf("view missing unified header:\n%s", view)
 	}
-	for _, name := range []string{"One", "Two"} {
-		if !strings.Contains(view, name) {
-			t.Fatalf("view missing %s badge:\n%s", name, view)
-		}
+	// Ownership renders as the row colour bar plus the preview's text
+	// line — the old per-row name badges are gone (FR-A5, M7 gate).
+	if !strings.Contains(view, "Account: One") && !strings.Contains(view, "Account: Two") {
+		t.Fatalf("view missing the preview owner line:\n%s", view)
+	}
+	if !strings.Contains(m.View().Content, "48;2;") {
+		t.Fatal("unified rows missing owner colour bars")
 	}
 	t.Logf("gate: unified interleaved %d rows across both accounts", len(m.snap.Rows))
 

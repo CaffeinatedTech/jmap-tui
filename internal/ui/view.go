@@ -65,7 +65,7 @@ type State struct {
 	AccountSwitch *SwitchView
 
 	// Accounts lists configured accounts for multi-account chrome: the
-	// switcher rows, the footer's per-account status (FR-I5), and badge
+	// switcher rows, the footer's per-account status (FR-I5), and owner
 	// names. Empty keeps single-account rendering unchanged.
 	Accounts []AccountView
 
@@ -74,11 +74,16 @@ type State struct {
 	Account string
 
 	// Unified marks the merged-inbox view (FR-A5): rows carry their
-	// owning account (Row.Account) and render an account badge.
+	// owning account (Row.Account) and lead with its colour bar.
 	Unified bool
 
-	// AccountNames maps account id → display name for row badges (FR-A5).
+	// AccountNames maps account id → display name: the preview's owner
+	// line (FR-A5). Row ownership is drawn as the colour bar.
 	AccountNames map[string]string
+
+	// AccountIndex maps account id → ordinal in enrollment order; the
+	// unified row bar's tint comes from it (FR-A5).
+	AccountIndex map[string]int
 
 	// Fullscreen hides the sidebar and list so the preview takes the full
 	// frame (FR-E5).
@@ -165,7 +170,7 @@ func ComputeLayout(w, h int, st State) Layout {
 
 // previewChrome counts the preview's fixed lines for the given state.
 func previewChrome(st State) int {
-	n := len(previewHeader(st.Snap)) + 1 + 1 // header block + rule + strip
+	n := len(previewHeader(st)) + 1 + 1 // header block + rule + strip
 	if st.Err != "" {
 		n++
 	}

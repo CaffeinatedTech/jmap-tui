@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
@@ -137,14 +138,14 @@ func renderList(l Layout, h int, st State) string {
 		sizeW = 6
 	}
 	dateW := 7
-	// Unified rows (FR-A5) carry an account badge in front of the sender;
-	// both columns shrink so the subject keeps its room.
-	badgeW := 0
-	fromW := min(18, max(w/3, 8))
+	// Unified rows (FR-A5) lead with a one-cell owner bar instead of the
+	// old name badge: the tint says which account, the preview header
+	// spells it out, and sender/subject keep their full widths.
+	barW := 0
 	if st.Unified {
-		badgeW = min(8, max(w/6, 4)) + 1
-		fromW = min(14, max(w/4, 8))
+		barW = 1
 	}
+	fromW := min(18, max(w/3, 8))
 
 	role := activeMailboxRole(st)
 
@@ -171,10 +172,10 @@ func renderList(l Layout, h int, st State) string {
 		sel := i == cursor
 		focused := st.Focus == PaneList
 
-		// Row anatomy (FR-D1, FR-G3): selection gutter, flag cells,
-		// account badge (unified), sender, subject with thread markers,
+		// Row anatomy (FR-D1, FR-G3): owner bar (unified), selection
+		// gutter, flag cells, sender, subject with thread markers,
 		// optional size, date.
-		subjectW := w - 1 - (4 + 1) - badgeW - fromW - 1 - dateW - sizeW
+		subjectW := w - barW - 1 - (4 + 1) - fromW - 1 - dateW - sizeW
 		if subjectW < 4 {
 			subjectW = 4
 		}
@@ -220,21 +221,17 @@ func renderList(l Layout, h int, st State) string {
 		}
 
 		var line strings.Builder
+		if barW > 0 {
+			if tint, ok := st.tint(r); ok {
+				line.WriteString(tint.Render(strings.Repeat(" ", barW)))
+			} else {
+				// Unknown owner: hold the column so rows stay aligned.
+				line.WriteString(strings.Repeat(" ", barW))
+			}
+		}
 		line.WriteString(mark)
 		line.WriteString(flags(r.Summary, th))
 		line.WriteString(" ")
-		if badgeW > 0 {
-			name := st.AccountNames[r.Account]
-			if name == "" {
-				name = r.Account
-			}
-			badgeStyle := dim
-			if !sel && !fresh {
-				badgeStyle = th.Muted
-			}
-			line.WriteString(badgeStyle.Render(pad(truncate(name, badgeW-1), badgeW-1)))
-			line.WriteString(" ")
-		}
 		line.WriteString(fromStyle.Render(pad(from, fromW)))
 		line.WriteString(" ")
 		line.WriteString(subjStyle.Render(pad(subject, subjectW)))
@@ -277,9 +274,18 @@ func activeMailboxRole(st State) mail.Role {
 }
 
 // previewHeader builds the fixed header lines of the preview pane (FR-E1).
-func previewHeader(snap sync.Snapshot) []string {
+// In the unified view the owning account leads (FR-A5): the row's colour
+// bar is the glance, this is the text.
+func previewHeader(st State) []string {
 	var out []string
-	if r, ok := cursorRow(snap); ok {
+	if r, ok := cursorRow(st.Snap); ok {
+		if st.Unified && r.Account != "" {
+			name := st.AccountNames[r.Account]
+			if name == "" {
+				name = r.Account
+			}
+			out = append(out, "Account: "+name)
+		}
 		s := r.Summary
 		add := func(label, value string) {
 			if value != "" {
@@ -313,6 +319,16 @@ func cursorRow(snap sync.Snapshot) (sync.Row, bool) {
 	return sync.Row{}, false
 }
 
+// tint is the owner-bar style for a unified row (FR-A5); ok is false for
+// an account outside the frame's index — the row renders a plain gap.
+func (st State) tint(r sync.Row) (lipgloss.Style, bool) {
+	i, ok := st.AccountIndex[r.Account]
+	if !ok {
+		return lipgloss.Style{}, false
+	}
+	return st.Theme.AccountTint(i), true
+}
+
 // RowKey is the selection key for a row: account-qualified in the unified
 // view (JMAP ids are unique per account only), bare elsewhere (FR-G3,
 // FR-A5). The app builds selection keys with the same rule.
@@ -332,7 +348,7 @@ func renderPreview(l Layout, h int, st State) string {
 	used := 0
 
 	if _, ok := cursorRow(st.Snap); ok {
-		for _, line := range previewHeader(st.Snap) {
+		for _, line := range previewHeader(st) {
 			if used >= h {
 				break
 			}

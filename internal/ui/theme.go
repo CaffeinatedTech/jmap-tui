@@ -24,6 +24,11 @@ type Palette struct {
 	Rule       color.Color // hairline separators
 	HeaderFg   color.Color
 	BodyFg     color.Color
+
+	// Accounts are the unified-inbox owner-bar tints (FR-A5), consumed in
+	// order and cycled past the end. They are semantic like Danger and
+	// Success — the one deliberate widening of the single-accent palette.
+	Accounts []color.Color
 }
 
 // DarkTheme is the default palette: one restrained blue accent on dark.
@@ -39,6 +44,16 @@ func DarkTheme() Palette {
 		Rule:       lipgloss.Color("#3b4261"),
 		HeaderFg:   lipgloss.Color("#a9b1d6"),
 		BodyFg:     lipgloss.Color("#c0caf5"),
+		// Owner bars: six hues beside the blue accent, all distinguishable
+		// as single-cell background strips on dark.
+		Accounts: []color.Color{
+			lipgloss.Color("#f7768e"), // rose
+			lipgloss.Color("#9ece6a"), // green
+			lipgloss.Color("#e0af68"), // amber
+			lipgloss.Color("#bb9af7"), // violet
+			lipgloss.Color("#7dcfff"), // cyan
+			lipgloss.Color("#ff9e64"), // orange
+		},
 	}
 }
 
@@ -55,6 +70,15 @@ func LightTheme() Palette {
 		Rule:       lipgloss.Color("#d1d5db"),
 		HeaderFg:   lipgloss.Color("#374151"),
 		BodyFg:     lipgloss.Color("#1f2937"),
+		// Same six hues, deepened so the bars read on light paper.
+		Accounts: []color.Color{
+			lipgloss.Color("#c2485d"),
+			lipgloss.Color("#4e9e63"),
+			lipgloss.Color("#b87a2e"),
+			lipgloss.Color("#8457c6"),
+			lipgloss.Color("#2e8ba3"),
+			lipgloss.Color("#d1663a"),
+		},
 	}
 }
 
@@ -75,6 +99,18 @@ type Theme struct {
 	Danger     lipgloss.Style
 	Success    lipgloss.Style
 	FreshRow   lipgloss.Style
+}
+
+// AccountTint is the owner-bar style for a unified row (FR-A5): a
+// background-filled cell the selection wash cannot repaint. The index
+// wraps, so accounts past the palette cycle onto earlier tints.
+func (t Theme) AccountTint(i int) lipgloss.Style {
+	n := len(t.P.Accounts)
+	if n == 0 {
+		return lipgloss.NewStyle()
+	}
+	i = ((i % n) + n) % n
+	return lipgloss.NewStyle().Background(t.P.Accounts[i])
 }
 
 // NewTheme derives the style set from a palette.
