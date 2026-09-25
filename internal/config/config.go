@@ -36,6 +36,11 @@ type Account struct {
 	// containing the app password (FR-J2). Its use is warned about at
 	// password-resolution time.
 	PasswordFile string `toml:"password_file"`
+
+	// DefaultIdentity optionally pins the composer's From for this
+	// account (FR-A1): matched against the server's Identity/get results
+	// by email, then by id. Empty means the account's first identity.
+	DefaultIdentity string `toml:"default_identity"`
 }
 
 // Config is the parsed configuration document.

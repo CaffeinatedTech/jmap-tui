@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -32,29 +33,48 @@ const (
 	pickerIdentity // choose the From identity (FR-H1)
 )
 
-// pickerState is the modal mailbox chooser (FR-G2, FR-G4).
+// pickerState is the modal mailbox chooser (FR-G2, FR-G4). In unified
+// view one prompt is shown per owning account, in queue order — each
+// prompt lists that account's own mailbox tree (FR-A5).
 type pickerState struct {
 	mode   pickerMode
 	filter string
 	all    []ui.PickerItem
 	items  []ui.PickerItem
 	sel    int
+
+	// acct is whose tree this prompt shows; queue holds the accounts
+	// still waiting for a pick. The identity picker (compose) sets
+	// neither — its items are prebuilt.
+	acct  string
+	queue []string
 }
 
-// filepickState is the attachment-save overlay (FR-E4).
+// filepickState is the attachment-save overlay (FR-E4). acct pins the
+// owning account: downloads go through that account's session (FR-A5).
 type filepickState struct {
 	fp   filepicker.Model
 	atts []mail.Attachment
+	acct string
 }
 
 // toastState is the active action receipt with its undo affordance (FR-G5).
 type toastState struct {
-	id      int
-	text    string
-	hint    string
-	undo    *sync.TriageSpec // reversal action, nil when irreversible
-	destroy []mail.ID        // prepared delayed destroy (cancel path)
+	id   int
+	text string
+	hint string
+	// undo holds one reversal spec per owning account — a batched action
+	// in unified view spans accounts, and ctrl+z reverses all of them
+	// (FR-A5: each reversal runs on its own engine).
+	undo    []undoPart
+	destroy []mail.ID // prepared delayed destroy (cancel path)
 	until   time.Time
+}
+
+// undoPart is one account's reversal spec inside a toast.
+type undoPart struct {
+	acct string
+	spec sync.TriageSpec
 }
 
 // pendingDestroy tracks a prepared (delayed) destroy awaiting its commit.
@@ -63,9 +83,17 @@ type pendingDestroy struct {
 	ids []mail.ID
 }
 
-// triageDoneMsg carries a finished triage action back to the model.
+// triageDoneMsg carries a finished triage action back to the model: one
+// result per owning account (a unified batch spans accounts, FR-A5).
 type triageDoneMsg struct {
 	verb    string
+	results []triageResult
+	err     error // batch-level failure (account not enrolled)
+}
+
+// triageResult is one account's outcome inside a triage batch.
+type triageResult struct {
+	acct    string
 	receipt sync.Receipt
 	err     error
 }
@@ -82,34 +110,88 @@ type saveResultMsg struct {
 	err  error
 }
 
-// triageCmd wraps one Triage action as a Cmd: optimistic state lands via
-// the engine's broadcast; the receipt arrives here (FR-G3, FR-G5).
+// triageGroup is one account's slice of a batched action.
+type triageGroup struct {
+	acct string
+	spec sync.TriageSpec
+}
+
+// triageCmd runs a single-account action on the active engine — the
+// destroy path and other intrinsically single-view actions (FR-G2).
 func (m *Model) triageCmd(spec sync.TriageSpec, verb string) tea.Cmd {
+	return m.triageBatch([]triageGroup{{acct: m.activeID, spec: spec}}, verb)
+}
+
+// triageBatch runs one logical action on each owning account (FR-A5) and
+// returns a single triageDoneMsg with per-account results. Grouping
+// happens before this call, so no op ever crosses an account boundary
+// (M6 gate: actions never cross accounts).
+func (m *Model) triageBatch(groups []triageGroup, verb string) tea.Cmd {
 	return func() tea.Msg {
-		rcpt, err := m.engine.Triage(m.ctx, spec)
-		if err != nil {
-			return triageDoneMsg{verb: verb, err: err}
+		msg := triageDoneMsg{verb: verb}
+		for _, g := range groups {
+			eng, ok := m.engineFor(g.acct)
+			if !ok {
+				msg.results = append(msg.results, triageResult{
+					acct: g.acct,
+					err:  fmt.Errorf("account %q is not connected", g.acct),
+				})
+				continue
+			}
+			rcpt, err := eng.Triage(m.ctx, g.spec)
+			msg.results = append(msg.results, triageResult{acct: g.acct, receipt: rcpt, err: err})
 		}
-		return triageDoneMsg{verb: verb, receipt: rcpt}
+		return msg
 	}
 }
 
-// actionIDs resolves the target set for a triage action: the multi-select
-// set in list order (FR-G3), else the cursor row.
-func (m *Model) actionIDs() []mail.ID {
-	var ids []mail.ID
+// actionTarget is one row a triage action applies to: its owning account,
+// the message id, and the rendered summary (direction decisions read its
+// keywords).
+type actionTarget struct {
+	acct string
+	id   mail.ID
+	sum  mail.EmailSummary
+}
+
+// actionTargets resolves the target set for a triage action: the
+// multi-select set in list order (FR-G3), else the cursor row. Each
+// target carries its owner — in unified view rows interleave accounts
+// (FR-A5).
+func (m *Model) actionTargets() []actionTarget {
+	var out []actionTarget
 	for _, r := range m.snap.Rows {
-		if m.sel[r.ID] {
-			ids = append(ids, r.ID)
+		acct := r.Account
+		if acct == "" {
+			acct = m.activeID
+		}
+		if m.sel[m.rowKey(acct, r.ID)] {
+			out = append(out, actionTarget{acct: acct, id: r.ID, sum: r.Summary})
 		}
 	}
-	if len(ids) > 0 {
-		return ids
+	if len(out) > 0 {
+		return out
 	}
-	if id := m.cursorID(); id != "" {
-		return []mail.ID{id}
+	if acct, r, ok := m.cursorRef(); ok {
+		return []actionTarget{{acct: acct, id: r.ID, sum: r.Summary}}
 	}
 	return nil
+}
+
+// groupTargets splits targets by owning account, preserving list order —
+// the execution shape triageBatch expects (FR-A5).
+func groupTargets(ts []actionTarget) []triageGroup {
+	var groups []triageGroup
+	byAcct := map[string]int{}
+	for _, t := range ts {
+		if i, ok := byAcct[t.acct]; ok {
+			groups[i].spec.IDs = append(groups[i].spec.IDs, t.id)
+			continue
+		}
+		byAcct[t.acct] = len(groups)
+		groups = append(groups, triageGroup{acct: t.acct, spec: sync.TriageSpec{IDs: []mail.ID{t.id}}})
+	}
+	return groups
 }
 
 // clearSelection empties the multi-select set (actions consume it; mailbox
@@ -120,22 +202,12 @@ func (m *Model) clearSelection() {
 	}
 }
 
-// summaryFor returns the rendered summary for id (keywords included).
-func (m *Model) summaryFor(id mail.ID) (mail.EmailSummary, bool) {
-	for _, r := range m.snap.Rows {
-		if r.ID == id {
-			return r.Summary, true
-		}
-	}
-	return mail.EmailSummary{}, false
-}
-
 // keywordCmd builds the batched read/unread or star/unstar action: any id
 // missing the keyword flips the whole set toward it (batch triage
-// semantics — one action, one direction, FR-G1/G3).
+// semantics — one action, one direction, FR-G1/G3), grouped per owner.
 func (m *Model) keywordCmd(kind sync.TriageKind) tea.Cmd {
-	ids := m.actionIDs()
-	if len(ids) == 0 {
+	targets := m.actionTargets()
+	if len(targets) == 0 {
 		return nil
 	}
 	keyword := "$seen"
@@ -145,29 +217,33 @@ func (m *Model) keywordCmd(kind sync.TriageKind) tea.Cmd {
 		toward = sync.TriageStar
 	}
 	anyMissing := false
-	for _, id := range ids {
-		if s, ok := m.summaryFor(id); ok && !s.Keywords.Has(keyword) {
+	for _, t := range targets {
+		if !t.sum.Keywords.Has(keyword) {
 			anyMissing = true
 			break
 		}
 	}
-	spec := sync.TriageSpec{IDs: ids}
+	var applied sync.TriageKind
 	var verb string
 	if anyMissing {
-		spec.Kind = toward
+		applied = toward
 		verb = "Marked read"
 		if toward == sync.TriageStar {
 			verb = "Starred"
 		}
 	} else {
-		spec.Kind = sync.TriageUnread
+		applied = sync.TriageUnread
 		verb = "Marked unread"
 		if toward == sync.TriageStar {
-			spec.Kind = sync.TriageUnstar
+			applied = sync.TriageUnstar
 			verb = "Unstarred"
 		}
 	}
-	return m.triageCmd(spec, fmt.Sprintf("%s %s", verb, countN(len(ids))))
+	groups := groupTargets(targets)
+	for i := range groups {
+		groups[i].spec.Kind = applied
+	}
+	return m.triageBatch(groups, fmt.Sprintf("%s %s", verb, countN(len(targets))))
 }
 
 // countN renders "1 message" / "3 messages".
@@ -180,22 +256,56 @@ func countN(n int) string {
 
 // deleteAction routes delete (FR-G2): inside Trash it is the delayed
 // permanent destroy (FR-G5 undo-as-cancel); anywhere else it is a move to
-// the role-trash mailbox.
+// the role-trash mailbox — resolved on each row's owning account, never
+// the active account's tree (FR-A5).
 func (m *Model) deleteAction() (tea.Model, tea.Cmd) {
-	ids := m.actionIDs()
-	if len(ids) == 0 {
+	targets := m.actionTargets()
+	if len(targets) == 0 {
 		return m, nil
 	}
-	if m.activeRole() == mail.RoleTrash {
-		return m, m.prepareDestroy(ids)
+	groups := groupTargets(targets)
+
+	// Inside Trash (a single-account view — unified merges inboxes) the
+	// destroy path applies.
+	inTrash := true
+	for _, g := range groups {
+		if m.ownerRole(g.acct) != mail.RoleTrash {
+			inTrash = false
+			break
+		}
 	}
-	dest, node := m.mailboxByRole(mail.RoleTrash)
-	if dest == "" {
-		m.err = "no trash mailbox on this server"
+	if inTrash {
+		return m, m.prepareDestroy(groups[0].spec.IDs)
+	}
+
+	total := 0
+	names := []string{}
+	var move []triageGroup
+	var missing []string
+	for _, g := range groups {
+		dest, node := m.mailboxByRoleOn(g.acct, mail.RoleTrash)
+		if dest == "" {
+			missing = append(missing, m.accountName(g.acct))
+			continue
+		}
+		g.spec.Kind = sync.TriageMove
+		g.spec.Mailbox = dest
+		move = append(move, g)
+		total += len(g.spec.IDs)
+		names = append(names, node.Name)
+	}
+	if len(missing) > 0 {
+		if len(groups) == 1 {
+			m.err = "no trash mailbox on this server"
+		} else {
+			m.err = "no trash mailbox on " + strings.Join(missing, ", ")
+		}
+	}
+	if len(move) == 0 {
 		return m, nil
 	}
-	return m, m.triageCmd(sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: dest},
-		fmt.Sprintf("Deleted %s to %s", countN(len(ids)), node.Name))
+	return m, m.triageBatch(move,
+		fmt.Sprintf("Deleted %s to %s", countN(total), firstOr(names, "Trash")))
 }
 
 // prepareDestroy hides rows now and schedules the server destroy after the
@@ -215,28 +325,67 @@ func (m *Model) prepareDestroy(ids []mail.ID) tea.Cmd {
 
 // archiveAction archives (FR-G4): the role-archive mailbox wins; otherwise
 // the remembered per-account choice; otherwise a one-time picker prompt
-// that remembers in app-managed prefs (FR-J1).
+// that remembers in app-managed prefs (FR-J1). Destinations resolve on
+// each row's owning account (FR-A5); owners that have neither resolve to
+// a picker prompt queued per account.
 func (m *Model) archiveAction() (tea.Model, tea.Cmd) {
-	ids := m.actionIDs()
-	if len(ids) == 0 {
+	targets := m.actionTargets()
+	if len(targets) == 0 {
 		return m, nil
 	}
-	if dest, node := m.mailboxByRole(mail.RoleArchive); dest != "" {
-		return m, m.triageCmd(sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: dest},
-			fmt.Sprintf("Archived %d to %s", len(ids), node.Name))
-	}
-	if dest := m.opts.Prefs.ArchiveMailbox(m.opts.AccountID); dest != "" {
-		if node := m.mailboxByID(mail.ID(dest)); node != nil {
-			return m, m.triageCmd(sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: mail.ID(dest)},
-				fmt.Sprintf("Archived %d to %s", len(ids), node.Name))
+	groups := groupTargets(targets)
+
+	names := []string{}
+	var needPick []string
+	for i := range groups {
+		g := &groups[i]
+		g.spec.Kind = sync.TriageMove
+		if dest, node := m.mailboxByRoleOn(g.acct, mail.RoleArchive); dest != "" {
+			g.spec.Mailbox = dest
+			names = append(names, node.Name)
+			continue
 		}
+		if dest := m.opts.Prefs.ArchiveMailbox(g.acct); dest != "" {
+			if node := m.mailboxByIDOn(g.acct, mail.ID(dest)); node != nil {
+				g.spec.Mailbox = mail.ID(dest)
+				names = append(names, node.Name)
+				continue
+			}
+		}
+		needPick = append(needPick, g.acct)
 	}
-	m.openPicker(pickerArchive)
+
+	if len(needPick) == 0 {
+		return m, m.triageBatch(groups,
+			fmt.Sprintf("Archived %d to %s", countGroupIDs(groups), firstOr(names, "Archive")))
+	}
+	// Owners without a role or remembered destination each get a prompt
+	// over their own mailbox tree; the whole batch dispatches when the
+	// last pick lands (one toast, one undo — FR-G5).
+	m.openPickerQueued(pickerArchive, groups, needPick)
 	return m, nil
 }
 
+// countGroupIDs totals the ids across a grouped batch.
+func countGroupIDs(groups []triageGroup) int {
+	n := 0
+	for _, g := range groups {
+		n += len(g.spec.IDs)
+	}
+	return n
+}
+
+// firstOr returns the first element or a fallback.
+func firstOr(xs []string, fallback string) string {
+	if len(xs) > 0 {
+		return xs[0]
+	}
+	return fallback
+}
+
 // undoAction reverses the toast's action while its window is open (FR-G5):
-// a stored reversal spec re-runs as Triage; a prepared destroy cancels.
+// stored reversal specs re-run as Triage on their owning accounts; a
+// prepared destroy cancels.
 func (m *Model) undoAction() (tea.Model, tea.Cmd) {
 	// A held submission outranks any action receipt: ctrl+z during the
 	// undo window cancels the send outright (FR-H5).
@@ -250,23 +399,27 @@ func (m *Model) undoAction() (tea.Model, tea.Cmd) {
 	switch {
 	case t.destroy != nil:
 		ids := t.destroy
+		acct := m.activeID
 		m.toast = nil
 		m.pendingDestroy = nil
-		return m, func() tea.Msg {
-			snap := m.engine.CancelDestroy(m.ctx, ids)
-			return snapMsg{snap: snap}
-		}
-	case t.undo != nil:
-		spec := *t.undo
+		return m, m.opOn(acct, "cancel-destroy", func(_ context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			return eng.CancelDestroy(m.ctx, ids), nil
+		})
+	case len(t.undo) > 0:
+		parts := t.undo
 		m.toast = nil
-		return m, m.triageCmd(spec, "Undone")
+		groups := make([]triageGroup, 0, len(parts))
+		for _, p := range parts {
+			groups = append(groups, triageGroup(p))
+		}
+		return m, m.triageBatch(groups, "Undone")
 	}
 	m.toast = nil
 	return m, nil
 }
 
 // showToast installs the active toast and returns its expiry Cmd.
-func (m *Model) showToast(text, hint string, undo *sync.TriageSpec, destroy []mail.ID) tea.Cmd {
+func (m *Model) showToast(text, hint string, undo []undoPart, destroy []mail.ID) tea.Cmd {
 	m.toast = &toastState{
 		id:      m.seqNext(),
 		text:    text,
@@ -278,56 +431,105 @@ func (m *Model) showToast(text, hint string, undo *sync.TriageSpec, destroy []ma
 	return nil
 }
 
-// handleTriageDone applies a finished triage action: snapshot adoption,
-// selection reset, and the undo toast (FR-G5).
+// handleTriageDone applies a finished triage action: snapshot adoption
+// per owning account, selection reset, and the undo toast (FR-G5). Any
+// per-account failure surfaces as the error line and suppresses the
+// toast — the reversal of a half-applied batch would be a lie.
 func (m *Model) handleTriageDone(msg triageDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.err = truncateErr("triage", msg.err)
 		return m, nil
 	}
-	var cmd tea.Cmd
-	if msg.receipt.Snap.Version > m.snap.Version {
-		_, cmd = m.applySnapshot(msg.receipt.Snap)
+	var cmds []tea.Cmd
+	var undo []undoPart
+	var errs []string
+	applied := 0
+	for _, r := range msg.results {
+		if r.err != nil {
+			errs = append(errs, truncateErr("triage", r.err))
+			continue
+		}
+		if r.receipt.Snap.Version > m.snaps[r.acct].Version {
+			_, cmd := m.applySnapshot(r.acct, r.receipt.Snap)
+			cmds = append(cmds, cmd)
+		}
+		if len(r.receipt.Failed) > 0 {
+			errs = append(errs, r.receipt.Err)
+		}
+		applied += len(r.receipt.Applied)
+		if r.receipt.Undo != nil {
+			undo = append(undo, undoPart{acct: r.acct, spec: *r.receipt.Undo})
+		}
 	}
 	m.clearSelection()
 
-	if len(msg.receipt.Failed) > 0 {
-		m.err = msg.receipt.Err
-		return m, cmd
+	if len(errs) > 0 {
+		m.err = errs[0]
+		return m, tea.Batch(cmds...)
 	}
-	if len(msg.receipt.Applied) == 0 {
-		return m, cmd
+	if applied == 0 {
+		return m, tea.Batch(cmds...)
 	}
 	hint := ""
-	if msg.receipt.Undo != nil {
+	if len(undo) > 0 {
 		hint = "ctrl+z undo"
 	}
-	return m, tea.Batch(cmd, m.showToast(msg.verb, hint, msg.receipt.Undo, nil))
+	return m, tea.Batch(append(cmds, m.showToast(msg.verb, hint, undo, nil))...)
 }
 
 // --- mailbox picker (FR-G2, FR-G4) ---
 
-// openPicker opens the chooser in the given mode, excluding the active
-// mailbox for moves (moving onto itself is a no-op).
+// openPicker opens the chooser for the cursor/selection's owners: one
+// prompt per owning account (in unified view that is one per account,
+// FR-A5), dispatching the grouped batch when the last pick lands.
 func (m *Model) openPicker(mode pickerMode) {
-	p := &pickerState{mode: mode}
-	switch mode {
-	case pickerMove:
-		p.all = m.pickerItems(false)
-	case pickerCopy:
-		p.all = m.pickerItems(true)
-	case pickerArchive:
-		p.all = m.pickerItems(true)
+	targets := m.actionTargets()
+	if len(targets) == 0 {
+		return
 	}
-	m.picker = p
+	groups := groupTargets(targets)
+	kind := sync.TriageMove
+	if mode == pickerCopy {
+		kind = sync.TriageCopy
+	}
+	queue := make([]string, 0, len(groups))
+	for i := range groups {
+		groups[i].spec.Kind = kind
+		queue = append(queue, groups[i].acct)
+	}
+	m.openPickerQueued(mode, groups, queue)
+}
+
+// openPickerQueued opens the prompt for queue[0], remembering pending
+// grouped work; picks fill each account's Mailbox and the batch dispatches
+// when the queue empties.
+func (m *Model) openPickerQueued(mode pickerMode, pending []triageGroup, queue []string) {
+	if len(queue) == 0 {
+		return
+	}
+	m.pickPending = pending
+	m.pickLabel = ""
+	m.picker = &pickerState{
+		mode:  mode,
+		acct:  queue[0],
+		queue: append([]string(nil), queue[1:]...),
+	}
+	m.picker.all = m.pickerItemsFor(mode, queue[0])
 	m.pickerRefilter()
 }
 
-// pickerItems renders the mailbox tree into picker rows.
-func (m *Model) pickerItems(includeActive bool) []ui.PickerItem {
-	items := make([]ui.PickerItem, 0, len(m.snap.Mailboxes))
-	for _, node := range m.snap.Mailboxes {
-		if !includeActive && node.Mailbox.ID == m.snap.ActiveMailbox {
+// pickerItemsFor renders one account's mailbox tree into picker rows; a
+// move excludes that account's own open mailbox (moving onto itself is a
+// no-op) — never the active account's, which may be a different one.
+func (m *Model) pickerItemsFor(mode pickerMode, acct string) []ui.PickerItem {
+	s := m.snapFor(acct)
+	exclude := mail.ID("")
+	if mode == pickerMove {
+		exclude = s.ActiveMailbox
+	}
+	items := make([]ui.PickerItem, 0, len(s.Mailboxes))
+	for _, node := range s.Mailboxes {
+		if node.Mailbox.ID == exclude {
 			continue
 		}
 		items = append(items, ui.PickerItem{ID: node.Mailbox.ID, Label: node.Mailbox.Name, Depth: node.Depth})
@@ -371,6 +573,8 @@ func (m *Model) pickerKey(key string) (tea.Cmd, bool) {
 	switch key {
 	case "esc":
 		m.picker = nil
+		m.pickPending = nil
+		m.pickLabel = ""
 		return nil, true
 	case "j", "down":
 		if p.sel < len(p.items)-1 {
@@ -405,13 +609,18 @@ func (m *Model) pickerKey(key string) (tea.Cmd, bool) {
 	}
 }
 
-// pickerChoose dispatches the picked mailbox per mode.
+// pickerChoose records the picked mailbox for the prompting account and
+// either advances the queue (FR-A5: one prompt per owner) or dispatches
+// the accumulated batch as a single undoable action.
 func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 	p := m.picker
-	name := ""
+	if p == nil {
+		return nil
+	}
+	label := ""
 	for _, it := range p.all {
 		if it.ID == id {
-			name = it.Label
+			label = it.Label
 		}
 	}
 	m.picker = nil
@@ -419,35 +628,59 @@ func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 		m.chooseIdentity(id)
 		return nil
 	}
-	ids := m.actionIDs()
-	if len(ids) == 0 {
+	if m.pickLabel == "" {
+		m.pickLabel = label
+	}
+	for i := range m.pickPending {
+		if m.pickPending[i].acct == p.acct {
+			m.pickPending[i].spec.Mailbox = id
+		}
+	}
+	if len(p.queue) > 0 {
+		m.picker = &pickerState{
+			mode:  p.mode,
+			acct:  p.queue[0],
+			queue: append([]string(nil), p.queue[1:]...),
+		}
+		m.picker.all = m.pickerItemsFor(p.mode, p.queue[0])
+		m.pickerRefilter()
 		return nil
 	}
+
+	groups := m.pickPending
+	m.pickPending = nil
+	name := m.pickLabel
+	m.pickLabel = ""
+	if len(groups) == 0 {
+		return nil
+	}
+	total := countGroupIDs(groups)
 	switch p.mode {
 	case pickerMove:
-		return m.triageCmd(sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: id},
-			fmt.Sprintf("Moved %d to %s", len(ids), name))
+		return m.triageBatch(groups, fmt.Sprintf("Moved %d to %s", total, name))
 	case pickerCopy:
-		return m.triageCmd(sync.TriageSpec{Kind: sync.TriageCopy, IDs: ids, Mailbox: id},
-			fmt.Sprintf("Copied %d to %s", len(ids), name))
+		return m.triageBatch(groups, fmt.Sprintf("Copied %d to %s", total, name))
 	case pickerArchive:
 		if m.opts.Prefs == nil {
 			m.opts.Prefs = &config.Prefs{}
 		}
-		m.opts.Prefs.SetArchiveMailbox(m.opts.AccountID, string(id))
-		if err := savePrefs(m.opts); err != nil {
+		// Remember per owning account — archive destinations are a
+		// per-account preference (FR-J1).
+		for _, g := range groups {
+			m.opts.Prefs.SetArchiveMailbox(g.acct, string(g.spec.Mailbox))
+		}
+		if err := savePrefs(m.opts, groups[0].acct); err != nil {
 			m.err = truncateErr("prefs", err)
 		}
-		return m.triageCmd(sync.TriageSpec{Kind: sync.TriageMove, IDs: ids, Mailbox: id},
-			fmt.Sprintf("Archived %d to %s", len(ids), name))
+		return m.triageBatch(groups, fmt.Sprintf("Archived %d to %s", total, name))
 	}
 	return nil
 }
 
 // savePrefs persists app-managed preferences (FR-J1: prefs.toml only, never
 // config.toml). Sessions without an account id keep memory-only prefs.
-func savePrefs(opts Options) error {
-	if opts.PrefsPath == "" || opts.AccountID == "" || opts.Prefs == nil {
+func savePrefs(opts Options, acct string) error {
+	if opts.PrefsPath == "" || acct == "" || opts.Prefs == nil {
 		return nil
 	}
 	return config.SavePrefs(opts.PrefsPath, opts.Prefs)
@@ -470,7 +703,11 @@ func (m *Model) openFilePicker() (tea.Model, tea.Cmd) {
 	fp.CurrentDirectory = downloadsDirFn()
 	fp.SetHeight(12)
 	fp.AutoHeight = false
-	m.fp = &filepickState{fp: fp, atts: append([]mail.Attachment(nil), m.snap.Body.Attachments...)}
+	m.fp = &filepickState{
+		fp:   fp,
+		atts: append([]mail.Attachment(nil), m.snap.Body.Attachments...),
+		acct: m.ownerAccount(),
+	}
 	return m, fp.Init()
 }
 
@@ -493,15 +730,24 @@ func (m *Model) filePickKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // saveAttachmentsCmd downloads every attachment of the open message into
-// dir (FR-E4): bytes stream from the session download URL and land on disk
-// only here — the one sanctioned mail-data disk write (NFR-4).
+// dir (FR-E4): bytes stream from the owning account's session download
+// URL and land on disk only here — the one sanctioned mail-data disk
+// write (NFR-4).
 func (m *Model) saveAttachmentsCmd(dir string) tea.Cmd {
 	atts := m.fp.atts
+	acct := m.fp.acct
+	if acct == "" {
+		acct = m.activeID
+	}
 	m.fp = nil
 	return func() tea.Msg {
+		prov := m.hub.Provider(acct)
+		if prov == nil {
+			return saveResultMsg{err: fmt.Errorf("account %q is not connected", acct)}
+		}
 		var names []string
 		for _, a := range atts {
-			rc, err := m.opts.Provider.DownloadBlob(m.ctx, a.BlobID, a.Name, a.Type)
+			rc, err := prov.DownloadBlob(m.ctx, a.BlobID, a.Name, a.Type)
 			if err != nil {
 				return saveResultMsg{err: err}
 			}
@@ -566,7 +812,58 @@ func (m *Model) seqNext() int {
 	return m.seq
 }
 
-// activeRole returns the open mailbox's role.
+// snapFor returns the real (non-synthetic) snapshot of an account — the
+// tree every owner-scoped decision reads. In unified view the view
+// snapshot's tree belongs to the active account only (FR-A5).
+func (m *Model) snapFor(acct string) sync.Snapshot {
+	if m.unified {
+		if s, ok := m.snaps[acct]; ok {
+			return s
+		}
+		return m.snap
+	}
+	if acct == m.activeID {
+		return m.snap
+	}
+	if s, ok := m.snaps[acct]; ok {
+		return s
+	}
+	return m.snap
+}
+
+// ownerRole is the role of the mailbox an account currently has open.
+func (m *Model) ownerRole(acct string) mail.Role {
+	s := m.snapFor(acct)
+	for _, node := range s.Mailboxes {
+		if node.Mailbox.ID == s.ActiveMailbox {
+			return node.Mailbox.Role
+		}
+	}
+	return ""
+}
+
+// mailboxByRoleOn finds a role mailbox on one account's tree (FR-A5).
+func (m *Model) mailboxByRoleOn(acct string, role mail.Role) (mail.ID, mail.Mailbox) {
+	for _, node := range m.snapFor(acct).Mailboxes {
+		if node.Mailbox.Role == role {
+			return node.Mailbox.ID, node.Mailbox
+		}
+	}
+	return "", mail.Mailbox{}
+}
+
+// mailboxByIDOn finds a mailbox by id on one account's tree.
+func (m *Model) mailboxByIDOn(acct string, id mail.ID) *mail.Mailbox {
+	nodes := m.snapFor(acct).Mailboxes
+	for i, node := range nodes {
+		if node.Mailbox.ID == id {
+			return &nodes[i].Mailbox
+		}
+	}
+	return nil
+}
+
+// activeRole returns the open mailbox's role (active account).
 func (m *Model) activeRole() mail.Role {
 	for _, node := range m.snap.Mailboxes {
 		if node.Mailbox.ID == m.snap.ActiveMailbox {
@@ -576,22 +873,7 @@ func (m *Model) activeRole() mail.Role {
 	return ""
 }
 
-// mailboxByRole finds a role mailbox, returning its id and sidebar node.
-func (m *Model) mailboxByRole(role mail.Role) (mail.ID, mail.Mailbox) {
-	for _, node := range m.snap.Mailboxes {
-		if node.Mailbox.Role == role {
-			return node.Mailbox.ID, node.Mailbox
-		}
-	}
-	return "", mail.Mailbox{}
-}
-
 // mailboxByID finds a mailbox by id (nil when absent).
 func (m *Model) mailboxByID(id mail.ID) *mail.Mailbox {
-	for i, node := range m.snap.Mailboxes {
-		if node.Mailbox.ID == id {
-			return &m.snap.Mailboxes[i].Mailbox
-		}
-	}
-	return nil
+	return m.mailboxByIDOn(m.activeID, id)
 }

@@ -302,7 +302,76 @@ func goldenFrames() []frame {
 			}
 			return st
 		}},
+		// M6 multi-account: switcher modal (FR-A4) and the unified inbox
+		// with owner badges + per-account footer status (FR-A5, FR-I5).
+		{name: "switcher", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountSwitch = &SwitchView{Accounts: fixtureAccounts(), Sel: 1}
+			return st
+		}},
+		{name: "switcher-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountSwitch = &SwitchView{Accounts: fixtureAccounts(), Sel: 1}
+			return st
+		}},
+		{name: "unified", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Snap = fixtureUnifiedSnapshot()
+			st.Unified = true
+			st.Account = "Work"
+			st.Accounts = fixtureAccounts()
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			return st
+		}},
+		{name: "unified-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Snap = fixtureUnifiedSnapshot()
+			st.Unified = true
+			st.Account = "Work"
+			st.Accounts = fixtureAccounts()
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			return st
+		}},
+		{name: "unified-compact", w: 59, h: 25, st: func() State {
+			st := mk(true)()
+			st.Snap = fixtureUnifiedSnapshot()
+			st.Unified = true
+			st.Account = "Work"
+			st.Accounts = fixtureAccounts()
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
+			return st
+		}},
 	}
+}
+
+// fixtureAccounts is the multi-account chrome: two healthy accounts (the
+// active one first) plus one in connect-failure — the footer names every
+// non-active error (FR-I5).
+func fixtureAccounts() []AccountView {
+	return []AccountView{
+		{ID: "work", Name: "Work", Active: true, Mode: sync.ModePush, LastSync: fixtureTime, Unread: 3},
+		{ID: "personal", Name: "Personal", Mode: sync.ModePush, LastSync: fixtureTime, Unread: 12},
+		{ID: "laptop", Name: "Old laptop", Mode: sync.ModeConnecting, LastError: "connect: auth rejected"},
+	}
+}
+
+// fixtureUnifiedSnapshot tags the fixture rows with owners: the thread
+// block (e2 header + e1 member) belongs to one account — threads never
+// span accounts — while e4/e3 alternate to exercise the badges.
+func fixtureUnifiedSnapshot() sync.Snapshot {
+	snap := fixtureSnapshot()
+	snap.Rows[0].Account = "work"     // e4
+	snap.Rows[1].Account = "personal" // e3
+	snap.Rows[2].Account = "work"     // e2 (thread header)
+	snap.Rows[3].Account = "work"     // e1 (thread member)
+	snap.Total = 4
+	snap.ActiveMailbox = "" // unified is not a mailbox (header says so)
+	snap.ViewKey = "u"
+	return snap
 }
 
 // composeFixture builds a representative composer: a reply with a quoted

@@ -1,7 +1,6 @@
 
 
 
-
                      [38;2;130;170;255mHelp — message list[m
                      
                        [38;2;130;170;255mj/down    [m  [38;2;192;202;245mnext message[m
@@ -27,6 +26,8 @@
                        [38;2;130;170;255m/         [m  [38;2;192;202;245msearch[m
                        [38;2;130;170;255mctrl+s    [m  [38;2;192;202;245madvanced search[m
                        [38;2;130;170;255mesc       [m  [38;2;192;202;245mclear search[m
+                       [38;2;130;170;255mshift+s   [m  [38;2;192;202;245mswitch account[m
+                       [38;2;130;170;255mi         [m  [38;2;192;202;245munified inbox[m
                        [38;2;130;170;255mtab       [m  [38;2;192;202;245mnext pane[m
                        [38;2;130;170;255mshift+tab [m  [38;2;192;202;245mprevious pane[m
                        [38;2;130;170;255m[         [m  [38;2;192;202;245mshow/hide sidebar[m

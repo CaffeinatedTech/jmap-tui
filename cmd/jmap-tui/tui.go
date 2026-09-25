@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -60,7 +62,7 @@ func runTUI(args []string) error {
 		timeout:      *timeout,
 		logger:       logger,
 	}
-	provider, cfg, err := connectAccount(copts)
+	accounts, cfg, activeID, err := connectAccounts(copts)
 	if err != nil {
 		return err
 	}
@@ -69,7 +71,7 @@ func runTUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	pal := resolvePalette(first(*theme, cfg.Theme))
+	pal := resolvePalette(first(*theme, cfgTheme(cfg)))
 
 	// App-managed preferences (FR-J1): prefs.toml next to the config file.
 	prefsPath, err := config.DefaultPrefsPath()
@@ -82,10 +84,10 @@ func runTUI(args []string) error {
 	}
 
 	m := app.New(app.Options{
-		Provider:  provider,
+		Accounts:  accounts,
 		Keys:      keys,
 		Theme:     ui.NewTheme(pal),
-		AccountID: copts.accountID,
+		AccountID: activeID,
 		Prefs:     prefs,
 		PrefsPath: prefsPath,
 		UndoDelay: resolveUndoDelay(cfg),
@@ -122,52 +124,148 @@ type connectOpts struct {
 	logger       *slog.Logger
 }
 
-// connectAccount resolves config + keyring and returns a connected provider
-// with the config it resolved from.
-func connectAccount(opts connectOpts) (*jmapclient.Client, *config.Config, error) {
+// cfgTheme reads the configured theme, tolerating the flags-only mode
+// where no config file loaded (nil cfg).
+func cfgTheme(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Theme
+}
+
+// connectAccounts resolves every configured account and pre-flights a
+// Connect to each, in parallel (M6, FR-A1). One account's failure never
+// blocks another: failures enroll with Connected=false and the Hub
+// retries them with backoff while the rest keep running (failure
+// isolation, PLAN §4.3). When *every* account fails there is nothing to
+// render, so the full list exits as one actionable error (FR-A3).
+//
+// The returned id is the active account: --account, else default_account,
+// else the first in config order.
+func connectAccounts(opts connectOpts) ([]app.AccountOpt, *config.Config, string, error) {
 	if opts.configPath == "" {
 		p, err := config.DefaultPath()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		opts.configPath = p
 	}
 
-	var acct *config.Account
 	cfg, err := config.Load(opts.configPath)
+	type target struct {
+		id   string
+		acct *config.Account
+	}
+	var targets []target
+	var activeID string
+
 	switch {
 	case err == nil:
-		id := opts.accountID
-		if id == "" {
-			id, acct, err = cfg.PrimaryAccount()
-			if err != nil {
-				return nil, nil, err
+		// Every configured account: default_account first, then id order
+		// (config maps have no order of their own).
+		ids := make([]string, 0, len(cfg.Accounts))
+		for id := range cfg.Accounts {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		if cfg.DefaultAccount != "" {
+			ordered := []string{cfg.DefaultAccount}
+			for _, id := range ids {
+				if id != cfg.DefaultAccount {
+					ordered = append(ordered, id)
+				}
 			}
-			opts.accountID = id
-		} else {
-			var ok bool
-			if acct, ok = cfg.Account(id); !ok {
-				return nil, nil, fmt.Errorf("account %q not found in %s", id, opts.configPath)
+			ids = ordered
+		}
+		for _, id := range ids {
+			targets = append(targets, target{id: id, acct: cfg.Accounts[id]})
+		}
+		activeID = opts.accountID
+		if activeID == "" {
+			if _, _, err := cfg.PrimaryAccount(); err != nil {
+				return nil, nil, "", err
 			}
+			activeID = cfg.DefaultAccount
+			if activeID == "" && len(ids) > 0 {
+				activeID = ids[0]
+			}
+		}
+		if _, ok := cfg.Account(activeID); !ok {
+			return nil, nil, "", fmt.Errorf("account %q not found in %s", activeID, opts.configPath)
 		}
 	case errors.Is(err, os.ErrNotExist) && (opts.url != "" || opts.user != ""):
 		// Flags-only mode; config is optional there.
 		if opts.accountID == "" {
 			opts.accountID = "default"
 		}
+		activeID = opts.accountID
+		targets = append(targets, target{id: activeID})
 	default:
-		return nil, nil, fmt.Errorf("%w (or pass --url/--user for ad-hoc use)", err)
+		return nil, nil, "", fmt.Errorf("%w (or pass --url/--user for ad-hoc use)", err)
 	}
 
-	serverURL := first(opts.url, accountURL(acct))
-	username := first(opts.user, accountUsername(acct))
+	// Pre-flight every account concurrently; the flags override the
+	// active account only (they are overrides for ad-hoc use, not a
+	// blanket replacement for the whole config).
+	type result struct {
+		opt app.AccountOpt
+	}
+	results := make([]result, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = result{opt: connectOne(opts, t.id, t.acct, t.id == activeID)}
+		}()
+	}
+	wg.Wait()
+
+	out := make([]app.AccountOpt, 0, len(results))
+	var failures []string
+	for _, r := range results {
+		if r.opt.Err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", r.opt.ID, r.opt.Err))
+			// Enroll anyway: the Hub keeps retrying (its error shows in
+			// the status line) when at least one other account works.
+		}
+		out = append(out, r.opt)
+	}
+	if len(failures) == len(results) {
+		return nil, nil, "", fmt.Errorf("connect: %s", strings.Join(failures, "; "))
+	}
+	return out, cfg, activeID, nil
+}
+
+// connectOne resolves one account's credentials (flags win for the active
+// account) and pre-flights Connect. A failure is reported through
+// Connected=false + Err — never fatal on its own (M6 failure isolation).
+func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool) app.AccountOpt {
+	out := app.AccountOpt{ID: id, Name: id}
+	if acct != nil && acct.DisplayName != "" {
+		out.Name = acct.DisplayName
+	}
+	if acct != nil {
+		out.DefaultIdentity = acct.DefaultIdentity
+	}
+
+	serverURL := accountURL(acct)
+	username := accountUsername(acct)
+	pwFile := accountPasswordFile(acct)
+	if isActive {
+		serverURL = first(opts.url, serverURL)
+		username = first(opts.user, username)
+		pwFile = first(opts.passwordFile, pwFile)
+	}
 	if serverURL == "" || username == "" {
-		return nil, nil, errors.New("both --url and --user (or a configured account) are required")
+		out.Err = errors.New("both --url and --user (or a configured account) are required")
+		return out
 	}
 
-	secret, warnings, err := keyring.Password(opts.accountID, first(opts.passwordFile, accountPasswordFile(acct)), nil)
+	secret, warnings, err := keyring.Password(id, pwFile, nil)
 	if err != nil {
-		return nil, nil, err
+		out.Err = err
+		return out
 	}
 	for _, w := range warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
@@ -181,12 +279,15 @@ func connectAccount(opts connectOpts) (*jmapclient.Client, *config.Config, error
 		Timeout:    opts.timeout,
 		Logger:     opts.logger,
 	})
+	out.Provider = client
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	if err := client.Connect(ctx); err != nil {
-		return nil, nil, fmt.Errorf("connect to %s: %w", serverURL, err)
+		out.Err = fmt.Errorf("connect to %s: %w", serverURL, err)
+		return out
 	}
-	return client, cfg, nil
+	out.Connected = true
+	return out
 }
 
 // resolveUndoDelay reads [compose].undo_delay (FR-H5), defaulting to the

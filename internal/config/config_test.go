@@ -30,6 +30,7 @@ username = "me@example.com"
 url = "https://work.example.com"
 username = "me@work.example.com"
 password_file = "/run/secrets/work"
+default_identity = "me@work.example.com"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -48,6 +49,14 @@ password_file = "/run/secrets/work"
 	// password_keyring defaults to true when unset.
 	if a.PasswordKeyring != nil && !*a.PasswordKeyring {
 		t.Errorf("PasswordKeyring should default to true (nil), got %v", *a.PasswordKeyring)
+	}
+	// FR-A1: optional per-account default identity (M6).
+	w, ok := cfg.Account("work")
+	if !ok {
+		t.Fatal("account work missing")
+	}
+	if w.DefaultIdentity != "me@work.example.com" {
+		t.Errorf("work DefaultIdentity = %q, want me@work.example.com", w.DefaultIdentity)
 	}
 }
 

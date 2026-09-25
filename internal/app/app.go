@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
@@ -19,13 +20,19 @@ import (
 
 // Options configure the app model.
 type Options struct {
-	Provider mail.Provider
-	Keys     *ui.KeyMap
-	Theme    ui.Theme // resolved dark/light at startup (FR-I2)
+	// Keys/Theme as before.
+	Keys  *ui.KeyMap
+	Theme ui.Theme // resolved dark/light at startup (FR-I2)
 
-	// AccountID is the config account id in use; app-managed preferences
-	// (prefs.toml, FR-J1) key off it. Empty disables preference writes.
+	// Provider/AccountID describe the single account of pre-M6 call
+	// sites; when Accounts is set it wins (M6, FR-A1).
+	Provider  mail.Provider
 	AccountID string
+
+	// Accounts is the enrolled set (M6): one entry per configured
+	// account, in config order. ID keys app-managed preferences
+	// (prefs.toml, FR-J1); empty disables preference writes.
+	Accounts []AccountOpt
 
 	// Prefs is the app-managed preference store (FR-J1) and PrefsPath
 	// where it persists; either may be empty (session-only memory).
@@ -37,12 +44,44 @@ type Options struct {
 	UndoDelay time.Duration
 }
 
+// AccountOpt is one account to enroll (M6): its identity for the
+// switcher, the provider driving it, and whether the TUI pre-flight
+// Connect succeeded (false ⇒ the Hub retries with backoff while every
+// other account keeps running — failure isolation, PLAN §4.3).
+type AccountOpt struct {
+	ID        string
+	Name      string
+	Provider  mail.Provider
+	Connected bool
+	// DefaultIdentity optionally pins the composer's From for this
+	// account (FR-A1): matched by email, then by id.
+	DefaultIdentity string
+	// Err is the pre-flight failure (bad credentials, unreachable
+	// server). Non-nil with a nil Provider means the account cannot
+	// recover without a config fix; the Hub surfaces it on the status
+	// line and the other accounts keep running (failure isolation).
+	Err error
+}
+
 // Model is the Bubble Tea model for the reader.
 type Model struct {
-	opts   Options
-	engine *sync.Engine
-	snap   sync.Snapshot
+	opts Options
+	hub  *sync.Hub
+	// accounts is the enrollment order (switcher order); activeID is the
+	// account the sidebar/preview/binding default to (FR-A4). engine is
+	// activeID's engine, cached for the hot path.
+	accounts    []sync.AccountInfo
+	activeID    string
+	engine      *sync.Engine
+	snaps       map[string]sync.Snapshot // last snapshot per account
+	unified     bool                     // merged-inbox view (FR-A5)
+	uCursorID   mail.ID                  // unified cursor id; "" = top
+	cursorOwner string                   // account owning the unified cursor row
+	bodyReq     mail.ID                  // in-flight unified body load (row key)
+	prevBox     map[string]mail.ID       // unified enter/exit mailbox restore
+	switcher    *switchState             // non-nil while the switcher is open
 
+	snap   sync.Snapshot
 	width  int
 	height int
 
@@ -66,13 +105,16 @@ type Model struct {
 	search *searchState
 
 	// Triage state (M3): multi-select set, modal overlays, toast, and the
-	// prepared (delayed) destroy (FR-G2..G5).
+	// prepared (delayed) destroy (FR-G2..G5). pickPending/pickLabel hold
+	// a queued multi-account picker batch (M6, FR-A5).
 	sel            map[mail.ID]bool
 	picker         *pickerState
 	fp             *filepickState
 	toast          *toastState
 	pendingDestroy *pendingDestroy
 	seq            int
+	pickPending    []triageGroup
+	pickLabel      string
 
 	// Compose state (M5): nil when the composer is closed (FR-H1..H5).
 	compose     *composeState
@@ -83,15 +125,44 @@ type Model struct {
 	cancel context.CancelFunc
 }
 
-// New returns the root model.
+// New returns the root model. With no Accounts enrolled it falls back to
+// the single Provider/AccountID pair (pre-M6 call sites).
 func New(opts Options) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	if opts.UndoDelay == 0 {
 		opts.UndoDelay = 5 * time.Second
 	}
-	return &Model{
+	accs := opts.Accounts
+	if len(accs) == 0 && opts.Provider != nil {
+		id := opts.AccountID
+		if id == "" {
+			id = "default"
+		}
+		// A pre-M6 provider is always handed over connected.
+		accs = []AccountOpt{{ID: id, Name: id, Provider: opts.Provider, Connected: true}}
+	}
+	hub := sync.NewHub()
+	for _, a := range accs {
+		hub.Enroll(a.ID, a.Name, a.Provider, a.Connected, sync.Config{})
+		if a.Err != nil {
+			// Show the pre-flight failure immediately; Hub.Start keeps
+			// retrying whatever provider exists (failure isolation).
+			hub.NoteError(a.ID, a.Err)
+		}
+	}
+	infos := hub.Accounts()
+	active := opts.AccountID
+	if hub.Engine(active) == nil && len(infos) > 0 {
+		active = infos[0].ID
+	}
+	m := &Model{
 		opts:           opts,
-		engine:         sync.NewEngine(opts.Provider, sync.Config{}),
+		hub:            hub,
+		accounts:       infos,
+		activeID:       active,
+		engine:         hub.Engine(active),
+		snaps:          map[string]sync.Snapshot{},
+		prevBox:        map[string]mail.ID{},
 		focus:          ui.PaneList,
 		sidebarVisible: true,
 		sidebarSel:     0,
@@ -99,72 +170,154 @@ func New(opts Options) *Model {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	for _, a := range infos {
+		// Every account starts as an unloaded view: the unified merge
+		// excludes Total<0 rows and the switcher shows the skeleton until
+		// the account's first snapshot lands.
+		m.snaps[a.ID] = sync.Snapshot{Total: -1}
+	}
+	if opts.AccountID == "" && len(accs) == 1 {
+		m.opts.AccountID = accs[0].ID
+	}
+	return m
 }
 
-// snapMsg carries a fresh engine snapshot. live marks snapshots delivered
-// by the sync loop's broadcast (as opposed to an operation's return), which
-// re-arm the waiter.
+// snapMsg carries a fresh engine snapshot from one account. live marks
+// snapshots delivered by the sync loop's broadcast (as opposed to an
+// operation's return), which re-arm the waiter. An empty acct means the
+// active account (single-account paths).
 type snapMsg struct {
+	acct string
 	snap sync.Snapshot
 	live bool
 }
 
-// errMsg carries a failed engine operation.
+// errMsg carries a failed engine operation (acct empty ⇒ active).
 type errMsg struct {
-	op  string
-	err error
+	acct string
+	op   string
+	err  error
 }
 
-// engineOp wraps a blocking engine call as a Cmd.
-func (m *Model) engineOp(op string, f func(ctx context.Context) (sync.Snapshot, error)) tea.Cmd {
+// resolve fills the account of a message that omitted it.
+func (m *Model) resolve(acct string) string {
+	if acct == "" {
+		return m.activeID
+	}
+	return acct
+}
+
+// opOn wraps a blocking call on a specific account's engine as a Cmd. The
+// target engine is captured at creation on the UI thread, so a mid-flight
+// account switch can never redirect the op — actions never cross accounts
+// (M6 gate). Accounts without a working provider (enrollment or credential
+// failure) fail gracefully instead of touching a nil engine.
+func (m *Model) opOn(acct, op string, f func(context.Context, *sync.Engine) (sync.Snapshot, error)) tea.Cmd {
+	eng, ok := m.engineFor(acct)
 	return func() tea.Msg {
-		snap, err := f(m.ctx)
-		if err != nil {
-			return errMsg{op: op, err: err}
+		if !ok {
+			return errMsg{acct: acct, op: op, err: fmt.Errorf("account %q is not connected", acct)}
 		}
-		return snapMsg{snap: snap}
+		snap, err := f(m.ctx, eng)
+		if err != nil {
+			return errMsg{acct: acct, op: op, err: err}
+		}
+		return snapMsg{acct: acct, snap: snap}
 	}
 }
 
-// waitUpdates consumes the engine's latest-wins broadcast; each delivery
-// re-arms itself so exactly one waiter is outstanding at a time (FR-B2:
-// live changes repaint with no user action).
-func (m *Model) waitUpdates() tea.Cmd {
+// engineFor returns the account's engine when it can actually talk to a
+// server; unenrolled or credential-less accounts route to a graceful
+// error (failure isolation, PLAN §4.3).
+func (m *Model) engineFor(acct string) (*sync.Engine, bool) {
+	eng := m.hub.Engine(acct)
+	if eng == nil || m.hub.Provider(acct) == nil {
+		return nil, false
+	}
+	return eng, true
+}
+
+// engineOp wraps a blocking call on the active account's engine (FR-B2
+// plumbing). Multi-account routing goes through opOn, which captures the
+// owner engine up front.
+func (m *Model) engineOp(op string, f func(ctx context.Context) (sync.Snapshot, error)) tea.Cmd {
+	acct := m.activeID
+	return m.opOn(acct, op, func(ctx context.Context, _ *sync.Engine) (sync.Snapshot, error) {
+		return f(ctx)
+	})
+}
+
+// waitUpdates consumes one account's latest-wins broadcast; each delivery
+// re-arms itself so exactly one waiter per account is outstanding at a
+// time (FR-B2: live changes repaint with no user action).
+func (m *Model) waitUpdates() tea.Cmd { return m.waitUpdatesFor(m.activeID) }
+
+// waitUpdatesFor is waitUpdates for one account; Init arms one per
+// enrolled account so every engine repaints (status, switcher, unified).
+func (m *Model) waitUpdatesFor(acct string) tea.Cmd {
+	eng := m.hub.Engine(acct)
+	if eng == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		snap, ok := <-m.engine.Updates()
+		snap, ok := <-eng.Updates()
 		if !ok {
 			return nil
 		}
-		return snapMsg{snap: snap, live: true}
+		return snapMsg{acct: acct, snap: snap, live: true}
 	}
 }
 
 // freshFade is the timer that clears the new-mail highlight (the slide-in
-// fades, PLAN §4.1 case 3).
+// fades, PLAN §4.1 case 3). Clearing is local and hits every account —
+// each engine republishes, so the waiters fold the result back in.
 func (m *Model) freshFade() tea.Cmd {
 	return tea.Tick(sync.FreshTTL, func(time.Time) tea.Msg {
-		snap := m.engine.ClearFresh()
-		return snapMsg{snap: snap}
+		m.clearFresh()
+		return nil
 	})
 }
 
-// Init starts the sync loop, loads identities + the mailbox tree, and arms
-// the live-update waiter; the first mailbox snapshot then opens the inbox.
-func (m *Model) Init() tea.Cmd {
-	m.engine.Start(m.ctx)
-	return tea.Batch(m.waitUpdates(), m.loadAccountCmd())
+// clearFresh drops the new-mail highlight on every account that has one.
+func (m *Model) clearFresh() {
+	for _, a := range m.accounts {
+		eng := m.hub.Engine(a.ID)
+		if eng == nil {
+			continue
+		}
+		if len(m.snaps[a.ID].Fresh) > 0 {
+			eng.ClearFresh()
+		}
+	}
 }
 
-// loadAccountCmd fetches identities and the mailbox tree (FR-B1).
+// Init starts every account's sync loop (connect-with-retry through the
+// Hub, PLAN §4.3) and arms one live-update waiter per account; each
+// account's first snapshot then opens its own inbox (FR-B1) — that warm
+// window is what makes switching instant (FR-A4).
+func (m *Model) Init() tea.Cmd {
+	var cmds []tea.Cmd
+	for _, a := range m.accounts {
+		if c := m.waitUpdatesFor(a.ID); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	m.hub.StartAll(m.ctx)
+	return tea.Batch(cmds...)
+}
+
+// loadAccountCmd fetches identities and the mailbox tree for the active
+// account (FR-B1). Production loading is driven by Hub.StartAll at Init;
+// tests drive it directly to keep the Update loop synchronous.
 func (m *Model) loadAccountCmd() tea.Cmd {
-	return m.engineOp("load-account", func(ctx context.Context) (sync.Snapshot, error) {
+	return m.opOn(m.activeID, "load-account", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
 		// Identity absence or failure never blocks reading (FR-A6):
 		// compose needs identities in M5, the reader does not.
-		_ = m.engine.LoadIdentities(ctx)
-		if err := m.engine.LoadMailboxes(ctx); err != nil {
+		_ = eng.LoadIdentities(ctx)
+		if err := eng.LoadMailboxes(ctx); err != nil {
 			return sync.Snapshot{}, err
 		}
-		return m.engine.Snapshot(), nil
+		return eng.Snapshot(), nil
 	})
 }
 
@@ -180,17 +333,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Snapshots are immutable per version: stale deliveries (a
 		// broadcast racing an op's direct return) apply nothing but still
 		// re-arm the waiter for live deliveries.
+		acct := m.resolve(msg.acct)
 		var cmd tea.Cmd
-		if msg.snap.Version > m.snap.Version {
-			_, cmd = m.applySnapshot(msg.snap)
+		if msg.snap.Version > m.snaps[acct].Version {
+			_, cmd = m.applySnapshot(acct, msg.snap)
 		}
 		if msg.live {
-			return m, tea.Batch(cmd, m.waitUpdates())
+			return m, tea.Batch(cmd, m.waitUpdatesFor(acct))
 		}
 		return m, cmd
 
 	case errMsg:
-		m.err = truncateErr(msg.op, msg.err)
+		acct := m.resolve(msg.acct)
+		if msg.op == "load-body" {
+			// A failed body load must re-issue on the next rebuild, not
+			// wedge the unified preview behind its request key.
+			m.bodyReq = ""
+		}
+		if acct != m.activeID && len(m.accounts) > 1 {
+			m.err = truncateErr(m.accountName(acct)+": "+msg.op, msg.err)
+		} else {
+			m.err = truncateErr(msg.op, msg.err)
+		}
 		return m, nil
 
 	case searchDebounceMsg:
@@ -272,10 +436,52 @@ func truncateErr(op string, err error) string {
 	return op + ": " + s
 }
 
-// applySnapshot stores a new snapshot and schedules follow-up work:
-// first-open of the inbox, prefetch at window edges, lazy body loads, and
-// the fresh-row fade timer.
-func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
+// applySnapshot stores one account's snapshot and schedules follow-up
+// work: the first mailbox snapshot opens that account's inbox (every
+// account gets a warm window — instant switch and the unified merge both
+// need it, FR-A4/A5), then either the active view's pipeline or the
+// unified rebuild.
+func (m *Model) applySnapshot(acct string, snap sync.Snapshot) (tea.Model, tea.Cmd) {
+	m.snaps[acct] = snap
+
+	// First load: open the inbox (FR-B1 initial window). ViewKey "" means
+	// no view is open yet — mailbox or search.
+	if snap.ViewKey == "" && len(snap.Mailboxes) > 0 {
+		for _, node := range snap.Mailboxes {
+			if node.Mailbox.Role == mail.RoleInbox {
+				if acct == m.activeID {
+					m.sidebarSel = indexOfMailbox(snap.Mailboxes, node.Mailbox.ID)
+				}
+				return m, m.openMailboxOn(acct, node.Mailbox.ID)
+			}
+		}
+		return m, nil
+	}
+
+	if m.unified {
+		return m.applyUnified()
+	}
+	if acct != m.activeID {
+		return m, nil // stored for the switcher, footer, and unified merge
+	}
+	return m.applyView(snap)
+}
+
+// indexOfMailbox is the sidebar row index of a mailbox id (-1 when
+// absent).
+func indexOfMailbox(nodes []sync.MailboxNode, id mail.ID) int {
+	for i, node := range nodes {
+		if node.Mailbox.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyView runs the render pipeline over the active account's snapshot:
+// selection reset, fresh-row fade, sidebar sync, lazy body load, and edge
+// prefetch (FR-B2, FR-D3, FR-D4).
+func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	m.snap = snap
 	m.err = ""
 
@@ -297,19 +503,6 @@ func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 		}
 	} else {
 		m.freshArmed = false
-	}
-
-	// First load: open the inbox (FR-B1 initial window). ViewKey "" means
-	// no view is open yet — mailbox or search.
-	if m.viewKey == "" && len(snap.Mailboxes) > 0 {
-		for i, node := range snap.Mailboxes {
-			if node.Mailbox.Role == mail.RoleInbox {
-				m.sidebarSel = i
-				cmds = append(cmds, m.openMailbox(node.Mailbox.ID))
-				break
-			}
-		}
-		return m, tea.Batch(cmds...)
 	}
 
 	// Keep the sidebar selection on the active mailbox.
@@ -342,40 +535,344 @@ func (m *Model) applySnapshot(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	// Edge prefetch (FR-D3): the engine coalesces via outstanding-request
 	// bookkeeping, so firing eagerly is safe.
 	if snap.LoadForward || snap.LoadBackward {
-		cmds = append(cmds, m.engineOp("prefetch", func(ctx context.Context) (sync.Snapshot, error) {
-			if err := m.engine.Prefetch(ctx); err != nil {
+		cmds = append(cmds, m.opOn(m.activeID, "prefetch", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			if err := eng.Prefetch(ctx); err != nil {
 				return sync.Snapshot{}, err
 			}
-			return m.engine.Snapshot(), nil
+			return eng.Snapshot(), nil
 		}))
 	}
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) cursorID() mail.ID {
-	if m.snap.Cursor < 0 || m.snap.Cursor >= len(m.snap.Rows) {
-		return ""
+// applyUnified rebuilds the merged view (FR-A5) from every account's
+// latest snapshot and runs the render pipeline over it. The sidebar keeps
+// tracking the active account's tree; the cursor's body comes from the
+// row's owning account.
+func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
+	snap := m.mergeUnified()
+	m.snap = snap
+	m.err = ""
+
+	var cmds []tea.Cmd
+
+	if snap.ViewKey != m.viewKey {
+		m.sel = map[mail.ID]bool{}
 	}
-	return m.snap.Rows[m.snap.Cursor].ID
+	m.viewKey = snap.ViewKey
+
+	if len(snap.Fresh) > 0 {
+		if !m.freshArmed {
+			m.freshArmed = true
+			cmds = append(cmds, m.freshFade())
+		}
+	} else {
+		m.freshArmed = false
+	}
+
+	act := m.snaps[m.activeID]
+	for i, node := range act.Mailboxes {
+		if node.Mailbox.ID == act.ActiveMailbox {
+			m.sidebarSel = i
+			break
+		}
+	}
+
+	// Body of the cursor row loads from its owning account (FR-A5) and
+	// renders under the account-qualified key. bodyReq tracks the
+	// in-flight load: the owner's BodyLoading flag describes its own
+	// cursor, not ours, so the app does not trust it here.
+	if acct, row, ok := m.cursorRef(); ok {
+		key := m.rowKey(acct, row.ID)
+		owner := m.snaps[acct]
+		switch {
+		case key == m.vpBodyID:
+			// already showing it
+		case owner.Body != nil && owner.Body.ID == row.ID:
+			m.vp.SetContent(owner.Body.Text)
+			m.vp.GotoTop()
+			m.vpBodyID = key
+			m.bodyReq = ""
+		case m.bodyReq != key:
+			cmds = append(cmds, m.loadBodyOn(acct, row.ID))
+		}
+	}
+
+	m.resizeViewport()
+
+	// Edge prefetch fans out to every account: each engine coalesces its
+	// own outstanding request and no-ops when its window has room, so the
+	// merge keeps extending as the cursor nears either edge (FR-D3).
+	if snap.LoadForward || snap.LoadBackward {
+		for _, a := range m.accounts {
+			acct := a.ID
+			cmds = append(cmds, m.opOn(acct, "prefetch", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+				if err := eng.Prefetch(ctx); err != nil {
+					return sync.Snapshot{}, err
+				}
+				return eng.Snapshot(), nil
+			}))
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) openMailbox(id mail.ID) tea.Cmd {
-	return m.engineOp("open-mailbox", func(ctx context.Context) (sync.Snapshot, error) {
-		if err := m.engine.OpenMailbox(ctx, id); err != nil {
+// mergeUnified interleaves every enrolled account's open window by
+// receivedAt descending (FR-A5). Thread blocks (header + members) stay
+// contiguous — they merge as one unit keyed by the header's date — and
+// every row is stamped with its owning account. The cursor tracks its id
+// across rebuilds (PLAN §4.1 invariant: ids, not indexes).
+func (m *Model) mergeUnified() sync.Snapshot {
+	type ublock struct {
+		acct string
+		rows []sync.Row
+		recv time.Time
+	}
+	type queue struct {
+		acct    string
+		blocks  []ublock
+		total   int
+		hasTot  bool
+		loadFwd bool
+		loadBwd bool
+	}
+
+	queues := make([]queue, 0, len(m.accounts))
+	for _, a := range m.accounts {
+		s := m.snaps[a.ID]
+		q := queue{acct: a.ID, total: s.Total, hasTot: s.Total >= 0, loadFwd: s.LoadForward, loadBwd: s.LoadBackward}
+		for i := 0; i < len(s.Rows); {
+			b := ublock{acct: a.ID, recv: s.Rows[i].Summary.ReceivedAt}
+			row := s.Rows[i]
+			row.Account = a.ID
+			b.rows = append(b.rows, row)
+			i++
+			if row.ThreadHeader {
+				for i < len(s.Rows) && s.Rows[i].ThreadMember {
+					mrow := s.Rows[i]
+					mrow.Account = a.ID
+					b.rows = append(b.rows, mrow)
+					i++
+				}
+			}
+			q.blocks = append(q.blocks, b)
+		}
+		queues = append(queues, q)
+	}
+
+	var merged []sync.Row
+	idx := make([]int, len(queues))
+	for {
+		best := -1
+		var bestRecv time.Time
+		for i, q := range queues {
+			if idx[i] >= len(q.blocks) {
+				continue
+			}
+			recv := q.blocks[idx[i]].recv
+			// Strictly newer wins; ties keep account order (stable).
+			if best < 0 || recv.After(bestRecv) {
+				best, bestRecv = i, recv
+			}
+		}
+		if best < 0 {
+			break
+		}
+		merged = append(merged, queues[best].blocks[idx[best]].rows...)
+		idx[best]++
+	}
+
+	out := sync.Snapshot{
+		Version:       m.mergeVersion(),
+		Rows:          merged,
+		Cursor:        0,
+		Total:         -1,
+		ViewKey:       "u",
+		ActiveMailbox: "",
+	}
+	total, any := 0, false
+	out.LoadForward, out.LoadBackward = false, false
+	for _, q := range queues {
+		if q.hasTot {
+			total += q.total
+			any = true
+		}
+		out.LoadForward = out.LoadForward || q.loadFwd
+		out.LoadBackward = out.LoadBackward || q.loadBwd
+	}
+	if any {
+		out.Total = total
+	}
+
+	// The active account drives the sidebar and the footer's status; its
+	// mailbox tree renders unchanged next to the merged list.
+	if act, ok := m.snaps[m.activeID]; ok {
+		out.Mailboxes = act.Mailboxes
+		out.Status = act.Status
+		out.NewAbove = act.NewAbove
+	}
+
+	var fresh []mail.ID
+	var scan *sync.ScanProgress
+	for _, a := range m.accounts {
+		s := m.snaps[a.ID]
+		fresh = append(fresh, s.Fresh...)
+		if s.NewAbove {
+			out.NewAbove = true
+		}
+		if s.SearchActive {
+			out.SearchActive = true
+			out.ViewKey = "u:" + s.ViewKey
+		}
+		if s.Scan != nil && s.Scan.Active {
+			if scan == nil {
+				scan = &sync.ScanProgress{}
+			}
+			scan.Active = true
+			scan.Scanned += s.Scan.Scanned
+			scan.Total += s.Scan.Total
+		}
+	}
+	out.Fresh = fresh
+	out.Scan = scan
+
+	// Cursor by id, falling back to the previous index when the row is
+	// gone (destroyed under the cursor, PLAN §4.1); a fresh unified view
+	// starts at the top.
+	found := false
+	for i, r := range merged {
+		if r.ID == m.uCursorID && (r.Account == m.cursorOwner || m.cursorOwner == "") {
+			out.Cursor = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		if m.uCursorID == "" {
+			out.Cursor = 0
+		} else {
+			out.Cursor = min(max(m.snap.Cursor, 0), max(len(merged)-1, 0))
+		}
+	}
+	if len(merged) > 0 {
+		m.uCursorID = merged[out.Cursor].ID
+		m.cursorOwner = merged[out.Cursor].Account
+	}
+
+	// The cursor row's body, when its owner already has it.
+	if len(merged) > 0 {
+		r := merged[out.Cursor]
+		if owner, ok := m.snaps[r.Account]; ok && owner.Body != nil && owner.Body.ID == r.ID {
+			out.Body = owner.Body
+		}
+		key := m.rowKey(r.Account, r.ID)
+		out.BodyLoading = m.bodyReq == key
+	}
+	return out
+}
+
+// mergeVersion is a monotonic stamp for the synthetic unified snapshot —
+// the engines' versions are per-account and incomparable here.
+func (m *Model) mergeVersion() uint64 {
+	var v uint64
+	for _, a := range m.accounts {
+		if s := m.snaps[a.ID]; s.Version > v {
+			v = s.Version
+		}
+	}
+	// Version 0 would stall against the zero-value previous snapshot; the
+	// synthetic view has no version war of its own (application is
+	// unconditional in the unified path).
+	if v == 0 {
+		return 1
+	}
+	return v
+}
+
+// cursorRef resolves the cursor row and the account that owns it: the
+// row's own account in unified view, the active account otherwise.
+func (m *Model) cursorRef() (string, sync.Row, bool) {
+	if m.snap.Cursor < 0 || m.snap.Cursor >= len(m.snap.Rows) {
+		return "", sync.Row{}, false
+	}
+	r := m.snap.Rows[m.snap.Cursor]
+	acct := r.Account
+	if acct == "" {
+		acct = m.activeID
+	}
+	return acct, r, true
+}
+
+// rowKey qualifies a message id with its account in unified view — JMAP
+// ids are unique per account only, so selection and body tracking must
+// not collide across accounts (FR-A5). The ui layer applies the same
+// rule (ui.State.RowKey).
+func (m *Model) rowKey(acct string, id mail.ID) mail.ID {
+	if m.unified && acct != "" {
+		return mail.ID(acct + "\x00" + string(id))
+	}
+	return id
+}
+
+func (m *Model) cursorID() mail.ID {
+	if _, r, ok := m.cursorRef(); ok {
+		return r.ID
+	}
+	return ""
+}
+
+// cursorKey is the selection/body key of the cursor row (rowKey of the
+// cursor's owner + id).
+func (m *Model) cursorKey() mail.ID {
+	if acct, r, ok := m.cursorRef(); ok {
+		return m.rowKey(acct, r.ID)
+	}
+	return ""
+}
+
+// ownerAccount is the account every cursor action targets: the row's
+// owner in unified view, the active account otherwise (FR-A5 — actions
+// never cross accounts).
+func (m *Model) ownerAccount() string {
+	if acct, _, ok := m.cursorRef(); ok && m.unified && acct != "" {
+		return acct
+	}
+	return m.activeID
+}
+
+// openMailbox opens a mailbox on the active account (FR-C1).
+func (m *Model) openMailbox(id mail.ID) tea.Cmd { return m.openMailboxOn(m.activeID, id) }
+
+// openMailboxOn opens a mailbox on one account; only the active account's
+// open resets the preview body.
+func (m *Model) openMailboxOn(acct string, id mail.ID) tea.Cmd {
+	return m.opOn(acct, "open-mailbox", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+		if err := eng.OpenMailbox(ctx, id); err != nil {
 			return sync.Snapshot{}, err
 		}
-		m.vpBodyID = ""
-		m.vp.SetContent("")
-		return m.engine.Snapshot(), nil
+		if acct == m.activeID {
+			m.vpBodyID = ""
+			m.vp.SetContent("")
+		}
+		return eng.Snapshot(), nil
 	})
 }
 
-func (m *Model) loadBody(id mail.ID) tea.Cmd {
-	return m.engineOp("load-body", func(ctx context.Context) (sync.Snapshot, error) {
-		if err := m.engine.LoadBody(ctx, id); err != nil {
+// loadBody loads the cursor message's body on the active account (FR-D4).
+func (m *Model) loadBody(id mail.ID) tea.Cmd { return m.loadBodyOn(m.activeID, id) }
+
+// loadBodyOn loads a message body from one account. In unified view the
+// in-flight request is tracked by qualified key so the rebuild does not
+// re-issue it every snapshot.
+func (m *Model) loadBodyOn(acct string, id mail.ID) tea.Cmd {
+	if m.unified {
+		m.bodyReq = m.rowKey(acct, id)
+	}
+	return m.opOn(acct, "load-body", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+		if err := eng.LoadBody(ctx, id); err != nil {
 			return sync.Snapshot{}, err
 		}
-		return m.engine.Snapshot(), nil
+		return eng.Snapshot(), nil
 	})
 }
 
@@ -403,6 +900,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+	}
+
+	// The switcher is a modal over everything but help (FR-A4, FR-I7).
+	if m.switcher != nil {
+		return m.switcherKey(msg)
 	}
 
 	// Modal overlays swallow keys while open (move/copy/archive picker,
@@ -450,6 +952,13 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		m.helpOpen = true
 		return m, nil
 
+	// --- accounts (M6, FR-A4/A5, FR-I7) ---
+	case ui.ActAccountSwitch:
+		m.openSwitcher()
+		return m, nil
+	case ui.ActUnified:
+		return m.toggleUnified()
+
 	case ui.ActCyclePane:
 		m.focus = m.nextPane(1)
 		return m, nil
@@ -481,11 +990,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 			_, cmd := m.openCompose(composeDraft)
 			return m, cmd
 		}
-		return m, m.engineOp("toggle-thread", func(ctx context.Context) (sync.Snapshot, error) {
-			if err := m.engine.ToggleThread(ctx); err != nil {
+		owner := m.ownerAccount()
+		return m, m.opOn(owner, "toggle-thread", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			if err := eng.ToggleThread(ctx); err != nil {
 				return sync.Snapshot{}, err
 			}
-			return m.engine.Snapshot(), nil
+			return eng.Snapshot(), nil
 		})
 	case ui.ActToggleSize:
 		m.showSize = !m.showSize
@@ -497,14 +1007,14 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActToggleStar:
 		return m, m.keywordCmd(sync.TriageStar)
 	case ui.ActToggleSelect:
-		if id := m.cursorID(); id != "" {
+		if key := m.cursorKey(); key != "" {
 			if m.sel == nil {
 				m.sel = map[mail.ID]bool{}
 			}
-			if m.sel[id] {
-				delete(m.sel, id)
+			if m.sel[key] {
+				delete(m.sel, key)
 			} else {
-				m.sel[id] = true
+				m.sel[key] = true
 			}
 		}
 		return m, nil
@@ -587,6 +1097,13 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActOpenMailbox:
 		if m.sidebarSel < len(m.snap.Mailboxes) {
 			id := m.snap.Mailboxes[m.sidebarSel].Mailbox.ID
+			// Opening a concrete mailbox leaves the unified view (FR-A5:
+			// unified is a view; the sidebar is always the active
+			// account's tree).
+			if m.unified {
+				_, cmd := m.leaveUnified()
+				return m, tea.Batch(cmd, m.openMailbox(id))
+			}
 			return m, m.openMailbox(id)
 		}
 		return m, nil
@@ -656,18 +1173,44 @@ func (m *Model) nextPane(dir int) ui.Pane {
 func (m *Model) moveCursor(delta int) (tea.Model, tea.Cmd) {
 	// Touching the list acknowledges fresh arrivals: drop the highlight.
 	if len(m.snap.Fresh) > 0 {
-		m.engine.ClearFresh()
+		m.clearFresh()
+	}
+	if m.unified {
+		// The unified cursor is app-side: rows interleave across
+		// accounts, so no engine cursor moves (PLAN §4.3).
+		rows := m.snap.Rows
+		if len(rows) == 0 {
+			return m, nil
+		}
+		idx := min(max(m.snap.Cursor+delta, 0), len(rows)-1)
+		m.uCursorID = rows[idx].ID
+		m.cursorOwner = rows[idx].Account
+		return m.applyUnified()
 	}
 	m.snap = m.engine.MoveCursor(delta)
-	return m.applySnapshot(m.snap)
+	return m.applySnapshot(m.activeID, m.snap)
 }
 
 func (m *Model) jump(t sync.JumpTarget) tea.Cmd {
-	return m.engineOp("jump", func(ctx context.Context) (sync.Snapshot, error) {
-		if err := m.engine.Jump(ctx, t); err != nil {
+	if m.unified {
+		rows := m.snap.Rows
+		if len(rows) == 0 {
+			return nil
+		}
+		idx := 0
+		if t == sync.JumpEnd {
+			idx = len(rows) - 1
+		}
+		m.uCursorID = rows[idx].ID
+		m.cursorOwner = rows[idx].Account
+		_, cmd := m.applyUnified()
+		return cmd
+	}
+	return m.opOn(m.activeID, "jump", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+		if err := eng.Jump(ctx, t); err != nil {
 			return sync.Snapshot{}, err
 		}
-		return m.engine.Snapshot(), nil
+		return eng.Snapshot(), nil
 	})
 }
 
@@ -741,13 +1284,32 @@ func (m *Model) uiState() ui.State {
 		st.HelpOpen = true
 		st.HelpSec = m.opts.Keys.Help(m.focus)
 	}
+	// Multi-account chrome (M6): identities for the footer chip and the
+	// switcher, badges for unified rows. Single-account configs leave
+	// Accounts empty-irrelevant (len 1 still renders the chip only when
+	// more than one account exists — see ui.renderFooter).
+	st.Accounts = m.accountViews()
+	if len(m.accounts) > 0 {
+		st.Account = m.accountName(m.activeID)
+	}
+	st.Unified = m.unified
+	if len(m.accounts) > 0 {
+		names := make(map[string]string, len(m.accounts))
+		for _, a := range m.accounts {
+			names[a.ID] = a.Name
+		}
+		st.AccountNames = names
+	}
+	if m.switcher != nil {
+		st.AccountSwitch = &ui.SwitchView{Accounts: m.accountViews(), Sel: m.switcher.sel}
+	}
 	return st
 }
 
 // View renders the frame.
 func (m *Model) View() tea.View {
 	st := m.uiState()
-	if l, ok := m.layout(); ok && l.PreviewW > 0 && m.vpBodyID == m.cursorID() {
+	if l, ok := m.layout(); ok && l.PreviewW > 0 && m.vpBodyID == m.cursorKey() {
 		st.VpView = m.vp.View()
 	}
 	if m.err != "" && st.Err == "" {

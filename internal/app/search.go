@@ -20,6 +20,11 @@ var searchDebounce = 300 * time.Millisecond
 // advDateLayout is the date-field format of the advanced modal.
 const advDateLayout = "2006-01-02"
 
+// unifiedScope is the search scope sentinel in unified view (FR-F3):
+// "each account's own inbox". The issue path resolves it per account —
+// mailbox ids are per-account, so one id cannot express the scope.
+const unifiedScope = mail.ID("\x00inboxes")
+
 // searchState owns the query bar and the advanced modal (FR-F1, FR-F2).
 // spec accumulates the fields of the open search; Text mirrors the input.
 // editing is the bar's focus: while true it owns the keyboard; once a
@@ -58,14 +63,18 @@ type searchDebounceMsg struct{ seq int }
 
 // openSearch enters the search view (FR-F1): the query bar takes the
 // header with the keyboard, scoped to the open mailbox (FR-F3; all
-// mailboxes when none is open).
+// mailboxes when none is open; every account's inbox in unified view).
 func (m *Model) openSearch() tea.Cmd {
 	ti := textinput.New()
 	ti.Placeholder = "type to search…"
 	ti.Prompt = ""
 	ti.SetWidth(32)
-	m.search = &searchState{input: ti, baseScope: m.snap.ActiveMailbox, editing: true}
-	m.search.spec.ScopeMailbox = m.snap.ActiveMailbox
+	scope := m.snap.ActiveMailbox
+	if m.unified {
+		scope = unifiedScope
+	}
+	m.search = &searchState{input: ti, baseScope: scope, editing: true}
+	m.search.spec.ScopeMailbox = scope
 	// Focus after the state lands: textinput.Focus has a pointer
 	// receiver, so this must reach the stored model, not a local copy.
 	return m.search.input.Focus()
@@ -137,17 +146,39 @@ func (m *Model) toggleSearchScope() tea.Cmd {
 	return m.issueSearch()
 }
 
-// issueSearch runs the current spec through the engine. The mailbox view
-// is parked inside the engine until Esc (FR-F1).
+// issueSearch runs the current spec through the engine(s). The mailbox
+// view is parked inside each engine until Esc (FR-F1). In unified view
+// the same spec fans out to every account in parallel and the results
+// merge by receivedAt — the FR-F3 unified-account search, deferred at the
+// M4 gate until this Hub existed.
 func (m *Model) issueSearch() tea.Cmd {
 	spec := m.search.spec
 	m.search.issued = spec.Text
 	m.search.issuedSpec = spec
-	return m.engineOp("search", func(ctx context.Context) (sync.Snapshot, error) {
-		if err := m.engine.SearchOpen(ctx, spec); err != nil {
+	if m.unified {
+		var cmds []tea.Cmd
+		for _, a := range m.accounts {
+			s := spec
+			if s.ScopeMailbox == unifiedScope {
+				// "my inbox" resolves per account; an account whose
+				// inbox has not loaded degrades to all-mailbox scope.
+				s.ScopeMailbox = inboxID(m.snaps[a.ID].Mailboxes)
+			}
+			acct := a.ID
+			cmds = append(cmds, m.opOn(acct, "search", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+				if err := eng.SearchOpen(ctx, s); err != nil {
+					return sync.Snapshot{}, err
+				}
+				return eng.Snapshot(), nil
+			}))
+		}
+		return tea.Batch(cmds...)
+	}
+	return m.opOn(m.activeID, "search", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+		if err := eng.SearchOpen(ctx, spec); err != nil {
 			return sync.Snapshot{}, err
 		}
-		return m.engine.Snapshot(), nil
+		return eng.Snapshot(), nil
 	})
 }
 
@@ -155,14 +186,28 @@ func (m *Model) issueSearch() tea.Cmd {
 // mailbox window (position preserved, FR-F1) and the same op re-anchors
 // it around the cursor id, folding in live changes that landed while the
 // search was open (FR-B5). A failed re-anchor is not a failed close —
-// Esc never surfaces an error; the next prefetch retries.
+// Esc never surfaces an error; the next prefetch retries. Unified search
+// closes on every account that has one open (FR-F3).
 func (m *Model) closeSearch() tea.Cmd {
 	m.search = nil
-	return m.engineOp("search-close", func(ctx context.Context) (sync.Snapshot, error) {
-		m.engine.SearchClose()
-		_ = m.engine.Prefetch(ctx)
-		return m.engine.Snapshot(), nil
-	})
+	var cmds []tea.Cmd
+	for _, a := range m.accounts {
+		if !m.unified {
+			// Single-account view: only the active engine has a search.
+			if a.ID != m.activeID {
+				continue
+			}
+		} else if !m.snaps[a.ID].SearchActive {
+			continue
+		}
+		acct := a.ID
+		cmds = append(cmds, m.opOn(acct, "search-close", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			eng.SearchClose()
+			_ = eng.Prefetch(ctx)
+			return eng.Snapshot(), nil
+		}))
+	}
+	return tea.Batch(cmds...)
 }
 
 // --- advanced modal (FR-F2) ---
@@ -333,7 +378,11 @@ func (m *Model) searchView() *ui.SearchView {
 		v.Tokens = tok
 	}
 	v.Scope = "all mailboxes"
-	if s.spec.ScopeMailbox != "" {
+	switch s.spec.ScopeMailbox {
+	case unifiedScope:
+		v.Scope = "inboxes"
+	case "":
+	default:
 		if node := m.mailboxByID(s.spec.ScopeMailbox); node != nil {
 			v.Scope = node.Name
 		} else {

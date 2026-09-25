@@ -95,6 +95,10 @@ type Row struct {
 	ThreadHeader bool // has an expanded thread beneath it
 	ThreadMember bool // rendered inside an expanded thread
 	Fresh        bool // arrived via live sync; highlighted until cleared
+	// Account is the owning account id, stamped only on unified-view rows
+	// (FR-A5); empty in single-account views. JMAP ids are unique per
+	// account, so actions route by (account, id).
+	Account string
 }
 
 // MailboxNode is one sidebar entry with its rendered tree depth.

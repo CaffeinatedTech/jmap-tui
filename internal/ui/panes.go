@@ -135,7 +135,14 @@ func renderList(l Layout, h int, st State) string {
 		sizeW = 6
 	}
 	dateW := 7
+	// Unified rows (FR-A5) carry an account badge in front of the sender;
+	// both columns shrink so the subject keeps its room.
+	badgeW := 0
 	fromW := min(18, max(w/3, 8))
+	if st.Unified {
+		badgeW = min(8, max(w/6, 4)) + 1
+		fromW = min(14, max(w/4, 8))
+	}
 
 	role := activeMailboxRole(st)
 
@@ -163,8 +170,9 @@ func renderList(l Layout, h int, st State) string {
 		focused := st.Focus == PaneList
 
 		// Row anatomy (FR-D1, FR-G3): selection gutter, flag cells,
-		// sender, subject with thread markers, optional size, date.
-		subjectW := w - 1 - (4 + 1) - fromW - 1 - dateW - sizeW
+		// account badge (unified), sender, subject with thread markers,
+		// optional size, date.
+		subjectW := w - 1 - (4 + 1) - badgeW - fromW - 1 - dateW - sizeW
 		if subjectW < 4 {
 			subjectW = 4
 		}
@@ -181,7 +189,7 @@ func renderList(l Layout, h int, st State) string {
 		date := pad(RelativeDate(r.Summary.ReceivedAt, st.Now), dateW)
 
 		mark := " "
-		if st.Selected != nil && st.Selected[r.ID] {
+		if st.Selected != nil && st.Selected[st.RowKey(r)] {
 			mark = th.Accent.Render("×")
 		}
 
@@ -213,6 +221,18 @@ func renderList(l Layout, h int, st State) string {
 		line.WriteString(mark)
 		line.WriteString(flags(r.Summary, th))
 		line.WriteString(" ")
+		if badgeW > 0 {
+			name := st.AccountNames[r.Account]
+			if name == "" {
+				name = r.Account
+			}
+			badgeStyle := dim
+			if !sel && !fresh {
+				badgeStyle = th.Muted
+			}
+			line.WriteString(badgeStyle.Render(pad(truncate(name, badgeW-1), badgeW-1)))
+			line.WriteString(" ")
+		}
 		line.WriteString(fromStyle.Render(pad(from, fromW)))
 		line.WriteString(" ")
 		line.WriteString(subjStyle.Render(pad(subject, subjectW)))
@@ -289,6 +309,16 @@ func cursorRow(snap sync.Snapshot) (sync.Row, bool) {
 		return snap.Rows[snap.Cursor], true
 	}
 	return sync.Row{}, false
+}
+
+// RowKey is the selection key for a row: account-qualified in the unified
+// view (JMAP ids are unique per account only), bare elsewhere (FR-G3,
+// FR-A5). The app builds selection keys with the same rule.
+func (st State) RowKey(r sync.Row) mail.ID {
+	if st.Unified && r.Account != "" {
+		return mail.ID(r.Account + "\x00" + string(r.ID))
+	}
+	return r.ID
 }
 
 // renderPreview draws headers, the body viewport, and the attachments

@@ -60,6 +60,26 @@ type State struct {
 	// owns the frame, so it takes precedence over the other overlays.
 	Compose *ComposeView
 
+	// AccountSwitch is the account switcher modal (FR-A4, FR-I7);
+	// non-nil while open. It takes the frame like the picker.
+	AccountSwitch *SwitchView
+
+	// Accounts lists configured accounts for multi-account chrome: the
+	// switcher rows, the footer's per-account status (FR-I5), and badge
+	// names. Empty keeps single-account rendering unchanged.
+	Accounts []AccountView
+
+	// Account is the active account's display name — the footer chip
+	// shown when more than one account is configured.
+	Account string
+
+	// Unified marks the merged-inbox view (FR-A5): rows carry their
+	// owning account (Row.Account) and render an account badge.
+	Unified bool
+
+	// AccountNames maps account id → display name for row badges (FR-A5).
+	AccountNames map[string]string
+
 	// Fullscreen hides the sidebar and list so the preview takes the full
 	// frame (FR-E5).
 	Fullscreen bool
@@ -157,6 +177,9 @@ func Render(w, h int, st State) string {
 	if st.HelpOpen {
 		return renderHelp(w, h, st)
 	}
+	if st.AccountSwitch != nil {
+		return renderSwitch(w, h, st)
+	}
 	if st.Picker != nil {
 		return renderPicker(w, h, st)
 	}
@@ -209,10 +232,14 @@ func frameContentHeight(h int, st State) int {
 }
 
 // renderFooter draws the status line (FR-I5): connection state, last-sync
-// time, sync errors, and the active mailbox's counts.
+// time, sync errors, and the active mailbox's counts. With several
+// accounts it leads with the account identity chip (or "unified") and
+// names every other account's error — the active account's own error
+// keeps its right-aligned never-truncate treatment.
 func renderFooter(w int, st State) string {
 	th := st.Theme
 	stt := st.Snap.Status
+	multi := len(st.Accounts) > 1
 
 	var mode string
 	var modeStyle lipgloss.Style
@@ -224,7 +251,17 @@ func renderFooter(w int, st State) string {
 	default:
 		mode, modeStyle = "connecting…", th.Muted
 	}
-	parts := []string{modeStyle.Render(mode)}
+	var parts []string
+	if multi {
+		chip := st.Account
+		if st.Unified {
+			chip = "unified"
+		}
+		if chip != "" {
+			parts = append(parts, th.Header.Render(chip))
+		}
+	}
+	parts = append(parts, modeStyle.Render(mode))
 
 	if !stt.LastSync.IsZero() {
 		parts = append(parts, th.Muted.Render("synced "+stt.LastSync.Format("15:04:05")))
@@ -241,10 +278,29 @@ func renderFooter(w int, st State) string {
 	}
 	line := strings.Join(parts, "  ")
 
-	// A sync error is the one footer element that must never truncate away.
-	if stt.LastError != "" {
+	// Errors form the one segment that must never truncate away. With
+	// several accounts each is named (unified names all; a normal view
+	// names the others and keeps the active account's error nameless),
+	// so a failing neighbour is always attributable (FR-I5).
+	var errSegs []string
+	switch {
+	case multi:
+		for _, a := range st.Accounts {
+			if a.LastError == "" {
+				continue
+			}
+			if a.Active && !st.Unified {
+				errSegs = append(errSegs, a.LastError)
+			} else {
+				errSegs = append(errSegs, a.Name+": "+a.LastError)
+			}
+		}
+	case stt.LastError != "":
+		errSegs = append(errSegs, stt.LastError)
+	}
+	if len(errSegs) > 0 {
 		budget := max(w-lipgloss.Width(line)-2, 0)
-		errLine := th.Danger.Render(truncate(stt.LastError, budget))
+		errLine := th.Danger.Render(truncate(strings.Join(errSegs, " · "), budget))
 		pad := w - lipgloss.Width(line) - lipgloss.Width(errLine)
 		if pad > 0 {
 			return line + strings.Repeat(" ", pad) + errLine
@@ -347,7 +403,9 @@ func renderHeader(w int, st State) string {
 		}
 	} else {
 		parts = append(parts, th.Accent.Render("jmap-tui"))
-		if name := activeMailboxName(st); name != "" {
+		if st.Unified {
+			parts = append(parts, th.Header.Render("unified inbox"))
+		} else if name := activeMailboxName(st); name != "" {
 			parts = append(parts, th.Header.Render(name))
 		}
 	}

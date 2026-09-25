@@ -104,6 +104,11 @@ type composeState struct {
 	identity   mail.Identity
 	identities []mail.Identity
 
+	// acct pins the account this composer writes to: reply/forward take
+	// the cursor row's owner, a fresh draft takes the active account
+	// (FR-A5 — a unified-row reply never crosses accounts).
+	acct string
+
 	to, cc, bcc, subject textinput.Model
 	body                 textarea.Model
 	focus                ui.ComposeZone
@@ -162,6 +167,7 @@ type draftSavedMsg struct {
 	seq  int
 	fp   string
 	id   mail.ID
+	acct string
 	snap sync.Snapshot
 	err  error
 }
@@ -170,6 +176,7 @@ type draftSavedMsg struct {
 // start.
 type sendArmedMsg struct {
 	id   mail.ID
+	acct string
 	snap sync.Snapshot
 	err  error
 }
@@ -180,6 +187,7 @@ type sendCommitMsg struct{ seq int }
 // sendDoneMsg is the submission result.
 type sendDoneMsg struct {
 	seq     int
+	acct    string
 	receipt mail.SendReceipt
 	snap    sync.Snapshot
 	err     error
@@ -209,13 +217,24 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 		m.err = "a send is pending — ctrl+z to cancel it first"
 		return m, nil
 	}
+	// A fresh draft writes to the active account; reply/forward/draft
+	// derive from the cursor row's owner (FR-A5).
+	acct := m.activeID
+	if mode != composeNew {
+		acct = m.ownerAccount()
+	}
+	var idents []mail.Identity
+	if eng, ok := m.engineFor(acct); ok {
+		idents = eng.Identities()
+	}
 	c := &composeState{
 		mode:       mode,
-		identities: m.engine.Identities(),
+		acct:       acct,
+		identities: idents,
 		focus:      ui.ZoneTo,
 	}
 	if len(c.identities) > 0 {
-		c.identity = c.identities[0]
+		c.identity = pickIdentity(c.identities, m.defaultIdentity(acct))
 	} else {
 		c.status = "no sending identity on this account"
 	}
@@ -238,6 +257,31 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 	}
 }
 
+// defaultIdentity is the account's configured default_identity (FR-A1),
+// empty when unset.
+func (m *Model) defaultIdentity(acct string) string {
+	for _, a := range m.opts.Accounts {
+		if a.ID == acct {
+			return a.DefaultIdentity
+		}
+	}
+	return ""
+}
+
+// pickIdentity honours the account's default_identity (FR-A1): matched
+// against the server's identities by email, then by id; the first
+// identity wins when unset or unmatched.
+func pickIdentity(idents []mail.Identity, want string) mail.Identity {
+	if want != "" {
+		for _, id := range idents {
+			if id.Email == want || string(id.ID) == want {
+				return id
+			}
+		}
+	}
+	return idents[0]
+}
+
 // newHeaderInput builds one header field, sized to the current width.
 func (m *Model) newHeaderInput(placeholder string) textinput.Model {
 	in := textinput.New()
@@ -248,14 +292,23 @@ func (m *Model) newHeaderInput(placeholder string) textinput.Model {
 }
 
 // composePrepCmd fetches the message the composer is derived from: its
-// addressing, threading headers, and body (FR-H2).
+// addressing, threading headers, and body (FR-H2). The fetch runs on the
+// composer's owning account — the message lives there (FR-A5).
 func (m *Model) composePrepCmd(mode composeMode) tea.Cmd {
 	id := m.cursorID()
+	acct := m.activeID
+	if m.compose != nil {
+		acct = m.compose.acct
+	}
+	eng := m.hub.Engine(acct)
 	return func() tea.Msg {
 		if id == "" {
 			return composePrepMsg{mode: mode, err: fmt.Errorf("no message selected")}
 		}
-		body, err := m.engine.ReplyContext(m.ctx, id)
+		if eng == nil {
+			return composePrepMsg{mode: mode, err: fmt.Errorf("account %q is not connected", acct)}
+		}
+		body, err := eng.ReplyContext(m.ctx, id)
 		if err != nil {
 			return composePrepMsg{mode: mode, err: err}
 		}
@@ -712,17 +765,25 @@ func (m *Model) saveDraftCmd() tea.Cmd {
 	c.dirty = false
 	c.status = "saving…"
 	seq := c.saveSeq
+	acct := c.acct
+	eng, ok := m.engineFor(acct)
 	return func() tea.Msg {
-		id, snap, err := m.engine.SaveDraft(m.ctx, d)
-		return draftSavedMsg{seq: seq, fp: fp, id: id, snap: snap, err: err}
+		if !ok {
+			return draftSavedMsg{seq: seq, fp: fp, acct: acct, err: fmt.Errorf("account %q is not connected", acct)}
+		}
+		id, snap, err := eng.SaveDraft(m.ctx, d)
+		return draftSavedMsg{seq: seq, fp: fp, id: id, acct: acct, snap: snap, err: err}
 	}
 }
 
 // handleDraftSaved adopts the result of one save.
 func (m *Model) handleDraftSaved(msg draftSavedMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if msg.snap.Version > m.snap.Version {
-		_, cmd = m.applySnapshot(msg.snap)
+	if msg.acct == "" {
+		msg.acct = m.activeID
+	}
+	if msg.snap.Version > m.snaps[msg.acct].Version {
+		_, cmd = m.applySnapshot(msg.acct, msg.snap)
 	}
 	c := m.compose
 	if c == nil {
@@ -809,17 +870,22 @@ func (m *Model) startSend() tea.Cmd {
 	}
 	c.status = "preparing…"
 	needsFlush := c.dirty || c.draftID == ""
+	acct := c.acct
+	eng, ok := m.engineFor(acct)
 	return func() tea.Msg {
+		if !ok {
+			return sendArmedMsg{acct: acct, err: fmt.Errorf("account %q is not connected", acct)}
+		}
 		id := c.draftID
-		snap := m.engine.Snapshot()
+		snap := eng.Snapshot()
 		if needsFlush {
 			var err error
-			id, snap, err = m.engine.SaveDraft(m.ctx, d)
+			id, snap, err = eng.SaveDraft(m.ctx, d)
 			if err != nil {
-				return sendArmedMsg{err: err}
+				return sendArmedMsg{acct: acct, err: err}
 			}
 		}
-		return sendArmedMsg{id: id, snap: snap}
+		return sendArmedMsg{id: id, acct: acct, snap: snap}
 	}
 }
 
@@ -830,8 +896,11 @@ func (c *composeState) sending() bool { return c.status == "preparing…" }
 // the delay is zero).
 func (m *Model) handleSendArmed(msg sendArmedMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if msg.snap.Version > m.snap.Version {
-		_, cmd = m.applySnapshot(msg.snap)
+	if msg.acct == "" {
+		msg.acct = m.activeID
+	}
+	if msg.snap.Version > m.snaps[msg.acct].Version {
+		_, cmd = m.applySnapshot(msg.acct, msg.snap)
 	}
 	c := m.compose
 	if c == nil {
@@ -859,11 +928,19 @@ func (m *Model) handleSendArmed(msg sendArmedMsg) (tea.Model, tea.Cmd) {
 	)
 }
 
-// commitSend performs the submission.
+// commitSend performs the submission on the composer's owning account.
 func (m *Model) commitSend(ps *pendingSend) tea.Cmd {
+	acct := ""
+	if ps.compose != nil {
+		acct = ps.compose.acct
+	}
+	eng, ok := m.engineFor(acct)
 	return func() tea.Msg {
-		receipt, snap, err := m.engine.Send(m.ctx, ps.draft)
-		return sendDoneMsg{seq: ps.seq, receipt: receipt, snap: snap, err: err}
+		if !ok {
+			return sendDoneMsg{seq: ps.seq, acct: acct, err: fmt.Errorf("account %q is not connected", acct)}
+		}
+		receipt, snap, err := eng.Send(m.ctx, ps.draft)
+		return sendDoneMsg{seq: ps.seq, acct: acct, receipt: receipt, snap: snap, err: err}
 	}
 }
 
@@ -878,8 +955,11 @@ func (m *Model) handleSendDone(msg sendDoneMsg) (tea.Model, tea.Cmd) {
 	m.toast = nil
 
 	var cmd tea.Cmd
-	if msg.snap.Version > m.snap.Version {
-		_, cmd = m.applySnapshot(msg.snap)
+	if msg.acct == "" {
+		msg.acct = m.activeID
+	}
+	if msg.snap.Version > m.snaps[msg.acct].Version {
+		_, cmd = m.applySnapshot(msg.acct, msg.snap)
 	}
 	if msg.err != nil {
 		m.compose = ps.compose
@@ -1001,14 +1081,19 @@ func (m *Model) closeComposer(destroy bool) tea.Cmd {
 		return nil
 	}
 	id := c.draftID
+	acct := c.acct
+	eng, ok := m.engineFor(acct)
 	return func() tea.Msg {
-		if _, err := m.engine.Triage(m.ctx, sync.TriageSpec{
+		if !ok {
+			return errMsg{acct: acct, op: "discard draft", err: fmt.Errorf("account %q is not connected", acct)}
+		}
+		if _, err := eng.Triage(m.ctx, sync.TriageSpec{
 			Kind: sync.TriageDestroy,
 			IDs:  []mail.ID{id},
 		}); err != nil {
-			return errMsg{op: "discard draft", err: err}
+			return errMsg{acct: acct, op: "discard draft", err: err}
 		}
-		return snapMsg{snap: m.engine.Snapshot()}
+		return snapMsg{acct: acct, snap: eng.Snapshot()}
 	}
 }
 
@@ -1122,7 +1207,12 @@ func (m *Model) uploadAttachmentCmd(path string) tea.Cmd {
 
 	return tea.Batch(m.uploadProgressCmd(), func() tea.Msg {
 		defer func() { _ = f.Close() }()
-		att, err := m.opts.Provider.UploadBlob(ctx, name, mediaType, fi.Size(),
+		prov := m.hub.Provider(c.acct)
+		if prov == nil {
+			cancel()
+			return uploadDoneMsg{index: idx, err: fmt.Errorf("account %q is not connected", c.acct)}
+		}
+		att, err := prov.UploadBlob(ctx, name, mediaType, fi.Size(),
 			&countingReader{r: f, n: sent})
 		cancel()
 		return uploadDoneMsg{index: idx, att: att, err: err}

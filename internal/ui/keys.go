@@ -44,6 +44,8 @@ const (
 	ActSearch        Action = "ui.search"
 	ActSearchAdv     Action = "ui.search_advanced"
 	ActSearchClear   Action = "ui.search_clear"
+	ActAccountSwitch Action = "account.switch"
+	ActUnified       Action = "unified.toggle"
 	ActFullscreen    Action = "preview.fullscreen"
 	ActCyclePane     Action = "pane.cycle"
 	ActCyclePaneRev  Action = "pane.cycle_reverse"
@@ -118,6 +120,8 @@ func defaultBindings() []Binding {
 		{Key: "/", Act: ActSearch, Help: "search", Pane: PaneAny},
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
 		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},
+		{Key: "shift+s", Act: ActAccountSwitch, Help: "switch account", Pane: PaneAny},
+		{Key: "i", Act: ActUnified, Help: "unified inbox", Pane: PaneAny},
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
 		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
 		{Key: "[", Act: ActToggleSidebar, Help: "show/hide sidebar", Pane: PaneAny},
