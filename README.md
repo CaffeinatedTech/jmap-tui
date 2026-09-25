@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M5 landed (reader, live sync, triage, search, and now the composer: `n` to compose, `r`/`a`/`f` to reply/reply-all/forward, server-side drafts with debounced autosave and a discard confirmation, attachment upload with progress and cancel, and send behind a `ctrl+z`-cancellable undo window that files the message into Sent; verified against Stalwart with server-side checks).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M6 landed (reader, live sync, triage, search, composer, and now multi-account: an `S` switcher with per-account status, an `i` unified inbox that interleaves every account's mail by date with owner badges and routes every action back to the owning account, per-account failure isolation with connect retry, and search merged across accounts; verified against two live Stalwart accounts).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -21,7 +21,7 @@ IMAP support is a **future roadmap item**, designed for from day one via a provi
 
 ## Features (v1 target)
 
-- Multi-account (JMAP servers: Stalwart, Fastmail, Cyrus, Apache James)
+- Multi-account — instant switcher, unified inbox, per-account status and failure isolation (JMAP servers: Stalwart, Fastmail, Cyrus, Apache James)
 - Three-pane layout: mailbox sidebar · message list · reading pane
 - Threaded view with collapse/expand
 - Rolling-window message list — endless scroll, bounded memory
@@ -53,9 +53,21 @@ Archive               │ ●     Alice Root     └ planning sync   1d  │ Sub
                       │                                            │ 1 attachment: audit-q3.pdf (242.5K)
 ```
 
+The unified inbox (`i`) interleaves every account's mail by date, each row badged with its owner — actions always route to the owning account:
+
+```text
+jmap-tui  unified inbox  13 messages
+Inbox               3 │ ●   Work      Dana Ops      Deploy pipeline is … 35m │ From: Eve Security <eve@example.test>
+Sent Items            │     Personal  Eve Security  Quarterly audit r… 3h   │ Subject: Quarterly audit report attached
+  agent-test          │     Work      Bob Thread    ▾ Re: planning sync  1d  │ Date: Mon, 21 Sep 2026 07:00
+Archive               │ ●   Work      Alice Root     └ planning sync    1d  │ ↑ new mail
+                      │ ↓ more                                              │ Hello,
+unified  live  synced 10:00:00   Personal: push stream lost, reconnecting
+```
+
 Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. Dark and light palettes are terminal-adaptive.
 
-A footer status line reports the sync state: connection mode (`live` / `polling` / `connecting…`), last-sync time, retry count and errors, and the active mailbox's unread/total counts. New mail slides in at the top of the list with a brief highlight.
+A footer status line reports the sync state: connection mode (`live` / `polling` / `connecting…`), last-sync time, retry count and errors, and the active mailbox's unread/total counts. With several accounts it leads with the active account's name (or `unified`), and any account in error shows a named, right-aligned error. New mail slides in at the top of the list with a brief highlight.
 
 ## Install
 
@@ -77,9 +89,22 @@ Username:    you@example.com
 Password:    → stored in your OS keyring, never on disk
 ```
 
-Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-k-configuration--credentials). The composer's undo window is set there:
+Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-k-configuration--credentials). Several `[accounts.*]` tables configure every account (`default_account` picks the one that opens first; `S` switches, `i` toggles the unified inbox):
 
 ```toml
+default_account = "work"
+
+[accounts.work]
+display_name  = "Work"
+url           = "https://mail.example.com"
+username      = "you@work.example.com"
+default_identity = "you@work.example.com"   # optional: the composer's From
+
+[accounts.personal]
+display_name = "Personal"
+url          = "https://mail.example.com"
+username     = "you@example.com"
+
 [compose]
 undo_delay = "5s"   # 0s submits immediately
 ```
@@ -110,7 +135,8 @@ undo_delay = "5s"   # 0s submits immediately
 | Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
-| Any | `S` | Switch account *(M6)* |
+| Any | `S` | Switch account (instant — every account stays warm) |
+| Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
 | Any | `?` | Help overlay |
 | Any | `q` | Quit |
 
