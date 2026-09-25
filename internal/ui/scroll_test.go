@@ -93,18 +93,24 @@ func TestListScrollsToCursor(t *testing.T) {
 }
 
 // TestSidebarScrollsToSelection: a folder tree taller than the panel keeps
-// the selected mailbox in view (same rule as the list).
+// the selected row in view (same rule as the list) — account header
+// included, since it is row 0 of the list (FR-C5).
 func TestSidebarScrollsToSelection(t *testing.T) {
 	st := baseState()
 	st.Focus = PaneSidebar
-	st.SidebarSel = 50
 	st.Snap = manyRowSnapshot(1, 0)
-	st.Snap.Mailboxes = nil
+	rows := sidebarRowsFor("work", "Work", sync.Snapshot{}, 0, true)
 	for i := 0; i < 60; i++ {
-		st.Snap.Mailboxes = append(st.Snap.Mailboxes, sync.MailboxNode{
-			Mailbox: mail.Mailbox{ID: mail.ID(fmt.Sprintf("mb%03d", i)), Name: fmt.Sprintf("Box %03d", i)},
+		rows = append(rows, SidebarRow{
+			Kind:      SidebarMailbox,
+			Key:       fmt.Sprintf("work\x00mb%03d", i),
+			AccountID: "work",
+			MailboxID: mail.ID(fmt.Sprintf("mb%03d", i)),
+			Name:      fmt.Sprintf("Box %03d", i),
 		})
 	}
+	st.SidebarRows = rows
+	st.SidebarSel = 51 // Box 050, one below its header
 
 	text := ansi.Strip(Render(120, 40, st))
 	if !strings.Contains(text, "Box 050") {
@@ -113,7 +119,7 @@ func TestSidebarScrollsToSelection(t *testing.T) {
 	if !strings.Contains(text, "Box 059") {
 		t.Error("tree did not scroll to the bottom of the panel")
 	}
-	if strings.Contains(text, "Box 023") {
+	if strings.Contains(text, "Box 010") {
 		t.Error("rows above the window rendered")
 	}
 }

@@ -20,11 +20,12 @@ type switchState struct {
 }
 
 // accountViews assembles per-account render state from the stored
-// snapshots: sync status (FR-I5) plus the inbox unread count for the
-// switcher rows.
+// snapshots in display order (FR-C5): sync status (FR-I5) plus the inbox
+// unread count for the switcher rows.
 func (m *Model) accountViews() []ui.AccountView {
-	out := make([]ui.AccountView, 0, len(m.accounts))
-	for _, a := range m.accounts {
+	ordered := m.orderedAccounts()
+	out := make([]ui.AccountView, 0, len(ordered))
+	for _, a := range ordered {
 		s := m.snaps[a.ID]
 		v := ui.AccountView{
 			ID:        a.ID,
@@ -76,13 +77,15 @@ func inboxID(nodes []sync.MailboxNode) mail.ID {
 }
 
 // openSwitcher shows the switcher modal (FR-A4). It needs at least two
-// accounts to mean anything.
+// accounts to mean anything; rows follow the display order (FR-C5), same
+// as the sidebar blocks.
 func (m *Model) openSwitcher() {
 	if len(m.accounts) < 2 {
 		return
 	}
+	ordered := m.orderedAccounts()
 	sel := 0
-	for i, a := range m.accounts {
+	for i, a := range ordered {
 		if a.ID == m.activeID {
 			sel = i
 			break
@@ -97,12 +100,13 @@ func (m *Model) switcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if sw == nil {
 		return m, nil
 	}
+	ordered := m.orderedAccounts()
 	switch msg.Keystroke() {
 	case "esc":
 		m.switcher = nil
 		return m, nil
 	case "j", "down":
-		if sw.sel < len(m.accounts)-1 {
+		if sw.sel < len(ordered)-1 {
 			sw.sel++
 		}
 		return m, nil
@@ -112,20 +116,28 @@ func (m *Model) switcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter", "l":
-		return m.switchAccount(m.accounts[sw.sel].ID)
+		if sw.sel < 0 || sw.sel >= len(ordered) {
+			return m, nil
+		}
+		return m.switchAccount(ordered[sw.sel].ID)
 	}
 	return m, nil
 }
 
-// switchAccount makes id the active account (FR-A4). Every engine is
+// switchAccount makes id the active account (FR-A4), as an Update return.
+func (m *Model) switchAccount(id string) (tea.Model, tea.Cmd) {
+	return m, m.activateAccount(id)
+}
+
+// activateAccount makes id the active account in place. Every engine is
 // already warm, so the switch is instant: the stored snapshot renders
 // immediately and each account keeps its own cursor, window, and search
 // state. Switching out of unified view first restores every account's
-// pre-unified mailbox.
-func (m *Model) switchAccount(id string) (tea.Model, tea.Cmd) {
+// pre-unified mailbox. Returns nil when nothing changed.
+func (m *Model) activateAccount(id string) tea.Cmd {
 	m.switcher = nil
 	if id == m.activeID || m.hub.Engine(id) == nil {
-		return m, nil
+		return nil
 	}
 
 	var cmds []tea.Cmd
@@ -165,7 +177,7 @@ func (m *Model) switchAccount(id string) (tea.Model, tea.Cmd) {
 		_, cmd := m.applySnapshot(id, eng.Snapshot())
 		cmds = append(cmds, cmd)
 	}
-	return m, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // toggleUnified flips the merged-inbox view (FR-I7).

@@ -197,7 +197,7 @@ func TestOpenMailboxMovesFocusToList(t *testing.T) {
 	pump(t, m, m.loadAccountCmd())
 
 	m.focus = ui.PaneSidebar
-	m.sidebarSel = 1 // Trash
+	m.sidebarKey = sidebarRowKey(m.activeID, "mb-trash")
 	_, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	pump(t, m, cmd)
 

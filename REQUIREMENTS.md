@@ -2,7 +2,7 @@
 
 **This document is the source of truth for scope.** PLAN.md describes *how*; this describes *what*. Changes to scope go here first.
 
-Status markers: **[M1]…[M7]** = milestone in which the requirement lands (see PLAN.md), **[Release]** = the post-M7 release milestone (Fastmail gate, packaging, tag), **[FUTURE]** = explicitly out of v1.
+Status markers: **[M1]…[M8]** = milestone in which the requirement lands (see PLAN.md), **[Release]** = the post-M7 release milestone (Fastmail gate, packaging, tag), **[FUTURE]** = explicitly out of v1.
 
 ---
 
@@ -58,7 +58,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-A2] [M0]** Authentication via **app password / API token over HTTP Basic** for all endpoints (API, upload, download, EventSource). No cookies, no browser.
 - **[FR-A3] [M1]** Every request and push connection carries a timeout, retry with exponential backoff (cap ~30s), and jitter. 401/403 surfaces a re-auth prompt, not a crash.
 - **[FR-A4] [M6]** Account switcher (`S`): instant switch between accounts; each account has independent sync state.
-- **[FR-A5] [M6]** **Unified view** merging the inboxes of selected accounts, interleaved by `receivedAt`. Unified mode is a view; actions route back to the owning account. Each row is led by a one-cell **colour bar** identifying its owning account (tints assigned in account order, cycling past the palette) and the preview header names that account in text. *(`colour bar` wording added at the M7 gate 2026-09-25 — the original name-badge column was replaced per user proposal; the attribution requirement is unchanged.)*
+- **[FR-A5] [M6]** **Unified view** merging the inboxes of selected accounts, interleaved by `receivedAt`. Unified mode is a view; actions route back to the owning account. Each row is led by a one-cell **colour bar** identifying its owning account (tints assigned in account order, cycling past the palette) and the preview header names that account in text. *(`colour bar` wording added at the M7 gate 2026-09-25 — the original name-badge column was replaced per user proposal; the attribution requirement is unchanged. Tint = account **identity**, not position: it is keyed to enrollment order and never moves when the sidebar display order changes — FR-C5.)*
 - **[FR-A6] [M1]** Per-account capability detection: features degrade gracefully (no push → poll; no submission → read-only banner). Unknown capabilities are ignored, never fatal.
 
 ## FR-B — Sync & state
@@ -77,6 +77,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-C2] [M1]** Selecting a mailbox issues a fresh `Email/query` for that mailbox and resets the list window, and **moves focus to the list** — Enter/`l` on a folder means reading starts there. *(Focus hand-off added post-M7 2026-09-25: the folder had opened but the cursor stayed in the sidebar.)*
 - **[FR-C3] [M1]** Special semantics: opening **Drafts** opens in edit-aware mode (Enter on a `$draft` row edits it in the composer — the composer itself lands in M5); deleting from **Trash** offers permanent delete (server `/set` destroy); **Sent** shows recipients in the "from" column.
 - **[FR-C4] [M1]** Sidebar collapsible (`[`) to give the list/preview more room.
+- **[FR-C5] [M8]** **Multi-account folder column**: the sidebar shows **every** connected account as one flow — an account header (display name bracketed by end-caps in that account's colour tint, FR-A5) followed by its tree, in display order. Headers are cursor rows: `Enter`/`l` on a header activates that account and keeps the cursor in the column; `Enter`/`l` on another account's folder switches to that account, opens the folder, and moves focus to the list (FR-C2 unchanged). `ctrl+up`/`ctrl+down` moves the cursor's whole account block one place — persisted as `account_order` in `prefs.toml` (FR-J1), restored at startup, and governing the switcher's order too. Colour is identity: tints stay keyed to enrollment order, never moved by reorders. The cursor tracks row keys (account / account+mailbox), never indexes, so reorders and live tree changes re-anchor instead of stranding the selection. *(Added M8 2026-09-26 per user request. Folding an account's tree open/closed is a designed-for follow-up — the header is already a row — not delivered in M8.)*
 
 ## FR-D — Message list & rolling window
 
@@ -132,13 +133,13 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-I7] [M6]** Account switcher UI + unified view toggle.
 - **[FR-I8] [M7]** First-run wizard: add account, test connection, store secret, pick initial mailbox. Re-runnable via `jmap-tui login` **or from the running TUI (`ctrl+a`)** — the TUI exits, runs the wizard, and relaunches with the change applied. When accounts already exist the wizard opens on an account picker: selecting one **edits that account in place** (re-test, rotate the secret, re-pick the opening mailbox) while preserving hand-written config fields (`session_url`, `default_identity`, comments) and the existing secret when the password field is left empty. *(`ctrl+a` and in-place editing added at the M7 gate 2026-09-25 after user testing: there was no way to reach the wizard, or to fix a mistake, from inside the app.)*
 
-- **[FR-I9] [M7]** Column chrome: every visible column leads with a top rule — **heavy accent rule under the focused column, hairline under the others**, so focus is visible for all three panes (including the cursor-less preview) and survives terminals without colour. The sidebar's first row is an **account label**: the display name of the account whose folder tree is shown (always — in the unified view the tree is still the active account's), bracketed by accent-filled end cells so it cannot be mistaken for a mailbox row. *(Added post-M7 2026-09-25: the sidebar had no indication of whose folders it listed — most confusing in the unified view — and focus was only inferable from the selection wash, which the preview never has.)*
+- **[FR-I9] [M7]** Column chrome: every visible column leads with a top rule — **heavy accent rule under the focused column, hairline under the others**, so focus is visible for all three panes (including the cursor-less preview) and survives terminals without colour. Sidebar rows are bracketed by **account headers** so chrome can never be mistaken for a mailbox row (FR-C5). *(Added post-M7 2026-09-25: the sidebar had no indication of whose folders it listed — most confusing in the unified view — and focus was only inferable from the selection wash, which the preview never has. Superseded at M8 2026-09-26: the single fixed top label became one header row per account — always emitted, tinted, and cursor-selectable — so the "tree is the active account's" clause above is retired with FR-C5.)*
 
 - **[FR-I10] [M7]** Pane layout toggle (`z`): side-by-side (default) ↔ **stacked**, where the message list sits above the preview at a 50/50 height split (the preview never drops below its chrome plus one body row). The sidebar stays left at full height in both modes; at 60–99 cols stacked shows the list and preview together instead of swapping by focus (FR-I1's swap still applies side-by-side); below 60 cols the single-pane stack is unchanged, and full-screen view (`v`) is unaffected. The choice persists in `prefs.toml` (FR-J1) and is restored at startup. *(Added post-M7 2026-09-25: a top/bottom alternative for reading mail.)*
 
 ## FR-J — Configuration & credentials
 
-- **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app. App-managed preferences (remembered in-app choices, e.g. the archive destination per account) live in `prefs.toml` next to the config file; the app owns and writes only that file, never `config.toml`.
+- **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app. App-managed preferences (remembered in-app choices, e.g. the archive destination per account, the sidebar/switcher account order, FR-C5) live in `prefs.toml` next to the config file; the app owns and writes only that file, never `config.toml`.
 - **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless use. Plaintext-in-config is a config-error, not a fallback.
 - **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors.
 
@@ -174,6 +175,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **M5** — compose → attach → send → appears in Sent; undo cancels a send; draft survives restart (because it lives on the server).
 - **M6** — two accounts configured; switch is instant; unified inbox interleaves correctly; actions never cross accounts.
 - **M7** — wizard, themes, help, keymap, docs complete.
+- **M8** — every configured account's folder tree visible in one sidebar under its tinted header; Enter opens another account's folder (switching to it); `ctrl+up`/`ctrl+down` reorders an account block and a fresh client restores the order from `prefs.toml`; reordering never changes an account's tint.
 - **Release v0.1** **[Release]** — every gate above passes on Fastmail as well as Stalwart (PLAN §7), NFR-6 artifacts built, tag v0.1.0. *(Split out of M7 at the M7 scoping 2026-09-25: Fastmail verification, goreleaser, and the tag ride their own milestone so M7 stays polish.)*
 
 ## 8. Open questions

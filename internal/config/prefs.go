@@ -20,6 +20,14 @@ type Prefs struct {
 	// Layout is the pane layout mode: "" or LayoutSide (default) shows the
 	// list beside the preview; LayoutStacked shows the list above it.
 	Layout string `toml:"layout,omitempty"`
+
+	// AccountOrder is the user's display order for the sidebar's account
+	// blocks and the account switcher (FR-C5): account ids, first listed
+	// first. Ids unknown to the config are dropped at merge time;
+	// configured accounts missing from the list follow in their base
+	// order, so a newly added account never vanishes or reshuffles the
+	// arrangement.
+	AccountOrder []string `toml:"account_order,omitempty"`
 }
 
 // Pane layout modes (FR-I10).
@@ -127,4 +135,40 @@ func (p *Prefs) SetSort(accountID, order string) {
 	a := p.Accounts[accountID]
 	a.Sort = order
 	p.Accounts[accountID] = a
+}
+
+// SetAccountOrder remembers the account display order (FR-C5). The slice
+// is copied: the model keeps mutating its own order, which must not alias
+// the prefs document.
+func (p *Prefs) SetAccountOrder(ids []string) {
+	p.AccountOrder = append([]string(nil), ids...)
+}
+
+// MergeAccountOrder overlays the saved display order (FR-C5) on the base
+// sequence — the enrollment order: default_account first, then id (config
+// maps have no order of their own). Saved ids that no longer exist are
+// dropped; base ids absent from the saved list keep their relative order
+// after the listed ones.
+func MergeAccountOrder(base, saved []string) []string {
+	if len(saved) == 0 {
+		return append([]string(nil), base...)
+	}
+	known := make(map[string]bool, len(base))
+	for _, id := range base {
+		known[id] = true
+	}
+	seen := make(map[string]bool, len(base))
+	out := make([]string, 0, len(base))
+	for _, id := range saved {
+		if known[id] && !seen[id] {
+			out = append(out, id)
+			seen[id] = true
+		}
+	}
+	for _, id := range base {
+		if !seen[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }

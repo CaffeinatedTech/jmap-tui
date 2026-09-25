@@ -51,18 +51,27 @@ func topRule(w int, focused bool, th Theme) string {
 	return th.Rule.Render(strings.Repeat("─", w))
 }
 
-// sidebarLabel draws the account label at the top of the folder column:
-// accent-filled cells at both ends bracket the account name, so the line
-// reads as chrome — it cannot be confused with a mailbox row, the
-// selection wash, or the accent-coloured active mailbox (FR-A5 companion).
-// The row is always emitted, even with an empty name, so the tree below
-// never shifts between frames.
-func sidebarLabel(w int, name string, th Theme) string {
+// sidebarLabel draws one account header in the folder column (FR-C5):
+// end-caps filled with the account's unified-inbox tint bracket the name,
+// so the line reads as chrome — it cannot be confused with a mailbox row,
+// the selection wash, or the accent-coloured open mailbox. The active
+// account's name takes the accent; every other account keeps the header
+// style.
+func sidebarLabel(w int, row SidebarRow, sel bool, focus Pane, th Theme) string {
 	if w <= 0 {
 		return ""
 	}
-	cell := lipgloss.NewStyle().Background(th.P.Accent).Render(" ")
-	return cell + pad(th.SidebarLabel.Render(" "+name), w-2) + cell
+	cell := th.AccountTint(row.Tint).Render(" ")
+	style := th.SidebarLabel
+	if sel {
+		style = th.RowSelDim
+		if focus == PaneSidebar {
+			style = th.RowSel
+		}
+	} else if row.Active {
+		style = th.Accent
+	}
+	return cell + style.Render(pad(" "+row.Name, w-2)) + cell
 }
 
 // listTop picks the first visible row so a pane of avail rows keeps the
@@ -76,9 +85,11 @@ func listTop(rowCount, cursor, avail int) int {
 	return max(0, min(cursor-avail/2, rowCount-avail))
 }
 
-// renderSidebar draws the mailbox tree (FR-C1): top rule, account label,
-// then hierarchy indentation, unread counts, one accent on the active
-// mailbox. The tree scrolls to keep the selected mailbox in view.
+// renderSidebar draws the folder column (FR-C1, FR-C5): top rule, then
+// the flat row list — one account header per connected account followed
+// by that account's tree, in display order. Indentation, unread counts,
+// one accent on the open mailbox. The tree scrolls to keep the selected
+// row in view.
 func renderSidebar(l Layout, h int, st State) string {
 	th := st.Theme
 	w := max(l.SidebarW-1, 0)
@@ -89,28 +100,28 @@ func renderSidebar(l Layout, h int, st State) string {
 		b.WriteString("\n")
 		used++
 	}
-	if used < h {
-		b.WriteString(sidebarLabel(w, st.Account, th))
-		b.WriteString("\n")
-		used++
-	}
-	// Rule + label consumed two rows; the tree gets whatever is left.
-	top := listTop(len(st.Snap.Mailboxes), st.SidebarSel, h-used)
-	for i := top; i < len(st.Snap.Mailboxes); i++ {
+	rows := st.SidebarRows
+	top := listTop(len(rows), st.SidebarSel, h-used)
+	for i := top; i < len(rows); i++ {
 		if used >= h {
 			break
 		}
-		node := st.Snap.Mailboxes[i]
-		indent := strings.Repeat("  ", node.Depth)
-		name := node.Mailbox.Name
-		plain := indent + name
+		row := rows[i]
+		sel := i == st.SidebarSel
+		if row.Kind == SidebarAccount {
+			b.WriteString(sidebarLabel(w, row, sel, st.Focus, th))
+			b.WriteString("\n")
+			used++
+			continue
+		}
+		indent := strings.Repeat("  ", row.Depth)
+		plain := indent + row.Name
 
 		count := ""
-		if node.Mailbox.UnreadEmails > 0 {
-			count = fmtInt(node.Mailbox.UnreadEmails)
+		if row.Unread > 0 {
+			count = fmtInt(row.Unread)
 		}
 
-		sel := i == st.SidebarSel
 		if sel {
 			// Selection wash covers the whole row; accent detail is
 			// deliberately dropped under it (minimal, not rainbow).
@@ -125,7 +136,7 @@ func renderSidebar(l Layout, h int, st State) string {
 			b.WriteString(style.Render(pad(line, l.SidebarW-1)))
 		} else {
 			nameStyle := th.Row
-			if node.Mailbox.ID == st.Snap.ActiveMailbox {
+			if row.Active {
 				nameStyle = th.Accent
 			}
 			fill := l.SidebarW - 1 - runewidth.StringWidth(plain) - runewidth.StringWidth(count)

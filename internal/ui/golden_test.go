@@ -81,6 +81,49 @@ type frame struct {
 	st   func() State
 }
 
+// sidebarRowsFor builds one account's sidebar rows for a fixture: the
+// account header (FR-C5) followed by the snapshot's mailbox tree.
+func sidebarRowsFor(acctID, name string, snap sync.Snapshot, tint int, active bool) []SidebarRow {
+	rows := []SidebarRow{{
+		Kind: SidebarAccount, Key: acctID, AccountID: acctID,
+		Name: name, Tint: tint, Active: active,
+	}}
+	for _, n := range snap.Mailboxes {
+		rows = append(rows, SidebarRow{
+			Kind: SidebarMailbox, Key: acctID + "\x00" + string(n.Mailbox.ID),
+			AccountID: acctID, MailboxID: n.Mailbox.ID,
+			Name: n.Mailbox.Name, Depth: n.Depth, Unread: n.Mailbox.UnreadEmails,
+			Active: active && n.Mailbox.ID == snap.ActiveMailbox,
+		})
+	}
+	return rows
+}
+
+// fixtureSidebarRows is the single-account column: Work's tree, active.
+func fixtureSidebarRows() []SidebarRow {
+	return sidebarRowsFor("work", "Work", fixtureSnapshot(), 0, true)
+}
+
+// fixtureMultiSidebarRows is the M8 column (FR-C5): every account in
+// display order — Work's tree, Personal's, and a still-connecting account
+// that has a header but no tree yet.
+func fixtureMultiSidebarRows() []SidebarRow {
+	rows := sidebarRowsFor("work", "Work", fixtureSnapshot(), 0, true)
+	personal := sync.Snapshot{
+		Mailboxes: []sync.MailboxNode{
+			{Mailbox: mail.Mailbox{ID: "mb-p-inbox", Name: "Inbox", Role: mail.RoleInbox, UnreadEmails: 12}, Depth: 0},
+			{Mailbox: mail.Mailbox{ID: "mb-p-arch", Name: "Archive", Role: mail.RoleArchive}, Depth: 0},
+		},
+		ActiveMailbox: "mb-p-inbox",
+	}
+	rows = append(rows, sidebarRowsFor("personal", "Personal", personal, 1, false)...)
+	rows = append(rows, SidebarRow{
+		Kind: SidebarAccount, Key: "laptop", AccountID: "laptop",
+		Name: "Old laptop", Tint: 2,
+	})
+	return rows
+}
+
 func goldenFrames() []frame {
 	mk := func(dark bool) func() State {
 		pal := DarkTheme()
@@ -95,6 +138,8 @@ func goldenFrames() []frame {
 				Focus:          uiFocus,
 				SidebarVisible: sidebarOn,
 				Account:        "Work",
+				SidebarRows:    fixtureSidebarRows(),
+				SidebarSel:     1, // the open Inbox, under Work's header (FR-C5)
 				Now:            time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC),
 				ShowSize:       showSize,
 				VpView:         vpBody,
@@ -121,6 +166,8 @@ func goldenFrames() []frame {
 		{name: "loading", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.Snap = sync.Snapshot{Total: -1}
+			// No tree yet — the account header still holds its place.
+			st.SidebarRows = sidebarRowsFor("work", "Work", sync.Snapshot{}, 0, true)
 			return st
 		}},
 		{name: "status-polling", w: 120, h: 40, st: func() State {
@@ -330,6 +377,9 @@ func goldenFrames() []frame {
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
 			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
+			// The folder column lists every account in unified mode too
+			// (FR-C5 — the merge changes the list, not the tree).
+			st.SidebarRows = fixtureMultiSidebarRows()
 			return st
 		}},
 		{name: "unified-light", w: 120, h: 40, st: func() State {
@@ -340,6 +390,9 @@ func goldenFrames() []frame {
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
 			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
+			// The folder column lists every account in unified mode too
+			// (FR-C5 — the merge changes the list, not the tree).
+			st.SidebarRows = fixtureMultiSidebarRows()
 			return st
 		}},
 		{name: "unified-compact", w: 59, h: 25, st: func() State {
@@ -350,6 +403,34 @@ func goldenFrames() []frame {
 			st.Accounts = fixtureAccounts()
 			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal"}
 			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
+			// The folder column lists every account in unified mode too
+			// (FR-C5 — the merge changes the list, not the tree).
+			st.SidebarRows = fixtureMultiSidebarRows()
+			return st
+		}},
+		// M8 multi-account folder column (FR-C5): every account's tree
+		// under its tinted header, cursor parked on the second account's
+		// header to show the selection wash over chrome.
+		{name: "multi-sidebar", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1, "laptop": 2}
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
+			st.SidebarRows = fixtureMultiSidebarRows()
+			st.SidebarSel = 5 // Personal's header
+			st.Focus = PaneSidebar
+			return st
+		}},
+		{name: "multi-sidebar-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Accounts = fixtureAccounts()
+			st.Account = "Work"
+			st.AccountIndex = map[string]int{"work": 0, "personal": 1, "laptop": 2}
+			st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
+			st.SidebarRows = fixtureMultiSidebarRows()
+			st.SidebarSel = 5
+			st.Focus = PaneSidebar
 			return st
 		}},
 		// FR-I10 stacked layout: list above preview, sidebar unchanged.

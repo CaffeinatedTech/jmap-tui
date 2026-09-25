@@ -11,6 +11,43 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 )
 
+// SidebarRowKind discriminates the two sidebar row shapes (FR-C5): an
+// account header (chrome) or a mailbox line.
+type SidebarRowKind int
+
+// Sidebar row kinds.
+const (
+	// SidebarMailbox is a folder row: indented by Depth with its unread
+	// count right-aligned.
+	SidebarMailbox SidebarRowKind = iota
+	// SidebarAccount is the account header above its block: bracketed by
+	// tinted end-caps so it cannot read as a folder (FR-I9).
+	SidebarAccount
+)
+
+// SidebarRow is one rendered sidebar line. The app builds the list each
+// frame from the stored snapshots — header, then that account's tree, per
+// account in display order (FR-C5). The cursor tracks Key (account id for
+// headers, account-qualified id for mailboxes), never an index, so
+// reorders and live tree changes cannot strand the selection (the window
+// manager's id-tracking rule applied to the folder column).
+type SidebarRow struct {
+	Kind      SidebarRowKind
+	Key       string
+	AccountID string
+	MailboxID mail.ID
+	Name      string
+	Depth     int
+	Unread    int
+	// Tint is the account's enrollment ordinal — the same tint the
+	// unified row bar uses (FR-A5). It is identity, not position:
+	// reordering the sidebar never recolours an account.
+	Tint int
+	// Active marks the open mailbox's row, or the active account's
+	// header.
+	Active bool
+}
+
 // State is everything Render needs. The app builds it each frame from its
 // model; golden tests build it from fixtures.
 type State struct {
@@ -21,7 +58,12 @@ type State struct {
 	SidebarVisible bool
 	ShowSize       bool
 	HelpOpen       bool
-	SidebarSel     int // sidebar cursor row index
+	// SidebarRows is the flat multi-account folder list (FR-C5); the
+	// header of every account is a row of it.
+	SidebarRows []SidebarRow
+	// SidebarSel is the cursor's index into SidebarRows, derived by the
+	// app from its key each frame (-1 when there is no row to select).
+	SidebarSel int
 
 	// VpView is the pre-rendered preview viewport (sized by the app via
 	// ComputeLayout).
@@ -82,7 +124,8 @@ type State struct {
 	AccountNames map[string]string
 
 	// AccountIndex maps account id → ordinal in enrollment order; the
-	// unified row bar's tint comes from it (FR-A5).
+	// unified row bar's tint and the sidebar header's end-caps come from
+	// it (FR-A5, FR-C5). Enrollment order never moves with reorders.
 	AccountIndex map[string]int
 
 	// Fullscreen hides the sidebar and list so the preview takes the full

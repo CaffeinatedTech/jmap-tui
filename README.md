@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts — and M8 now flows every account's folder tree into one sidebar under tinted headers, with `ctrl+↑`/`ctrl+↓` reordering the account blocks). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -39,7 +39,7 @@ IMAP support is a **future roadmap item**, designed for from day one via a provi
 
 > Rendered output from the golden test suite (real UI frames, ANSI colours in the terminal):
 
-Three panes (≥100 cols) — sidebar · list · preview, one accent. Every column leads with a top rule: heavy and accent-coloured under the focused column, a hairline under the others — the focus indicator, readable even without colour. The sidebar's first row names the account whose folders it shows, bracketed by accent-filled cells so it can't be mistaken for a mailbox:
+Three panes (≥100 cols) — sidebar · list · preview, one accent. Every column leads with a top rule: heavy and accent-coloured under the focused column, a hairline under the others — the focus indicator, readable even without colour. The sidebar flows every connected account as one column — a header per account, bracketed by end-cells in that account's colour tint (the same tint its rows wear in the unified view), so a header can't be mistaken for a mailbox:
 
 ```text
 jmap-tui  Inbox  1432 messages · 3 unread
@@ -52,7 +52,7 @@ Archive                  │↓ more                                            
                          │                                                  │Hello,
 ```
 
-The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. The folder tree stays the active account's — the sidebar label says whose. Actions always route to the owning account:
+The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. The folder column is untouched by the merge: every account's tree stays under its own tinted header, in your chosen order. Actions always route to the owning account:
 
 ```text
 jmap-tui  unified inbox  4 messages
@@ -62,7 +62,7 @@ Inbox                   3│▓   ↩  Eve Security     Quarterly audit r… 3h 
 Sent Items               │█      Bob Thread       ▾ Re: planning …   1d     │To: me@example.test
   agent-test             │█ ●    Alice Root         └ planning sync  1d     │Date: Mon, 21 Sep 2026 07:00
 Archive                  │↓ more                                            │Subject: Quarterly audit report attached
-                         │                                                  │──────────────────────────────────────────
+▓ Personal              ▓│                                                  │──────────────────────────────────────────
 unified  live  synced 10:00:00                                                        Old laptop: connect: auth rejected
 ```
 
@@ -142,6 +142,7 @@ undo_delay = "5s"   # 0s submits immediately
 | List | `S` | Show/hide sizes |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
+| Folders | `ctrl+↑` / `ctrl+↓` | Move the cursor's account block up / down — the order is remembered in `prefs.toml` |
 | Any | `PgUp` / `PgDn` | Page the preview — from any pane, focus stays put |
 | List | `n` | Compose a new message |
 | List | `r` | Reply |

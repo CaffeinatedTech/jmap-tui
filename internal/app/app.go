@@ -72,10 +72,13 @@ type AccountOpt struct {
 type Model struct {
 	opts Options
 	hub  *sync.Hub
-	// accounts is the enrollment order (switcher order); activeID is the
-	// account the sidebar/preview/binding default to (FR-A4). engine is
-	// activeID's engine, cached for the hot path.
+	// accounts is the enrollment order (tint identity, FR-A5); acctOrder
+	// is the display order of the sidebar blocks and switcher (FR-C5,
+	// prefs.toml). activeID is the account the list/preview/bindings
+	// default to (FR-A4); engine is activeID's engine, cached for the hot
+	// path.
 	accounts    []sync.AccountInfo
+	acctOrder   []string
 	activeID    string
 	engine      *sync.Engine
 	snaps       map[string]sync.Snapshot // last snapshot per account
@@ -92,11 +95,15 @@ type Model struct {
 
 	focus          ui.Pane
 	sidebarVisible bool
-	sidebarSel     int
-	showSize       bool
-	helpOpen       bool
-	fullscreen     bool // full-screen message view (FR-E5)
-	stacked        bool // list above preview (FR-I10), remembered in prefs
+	// sidebarKey is the sidebar cursor's identity (FR-C5): a bare account
+	// id for a header, "acct\x00mailbox" for a folder. The row index is
+	// derived from it per frame, so reorders and tree changes re-anchor
+	// instead of stranding the selection.
+	sidebarKey string
+	showSize   bool
+	helpOpen   bool
+	fullscreen bool // full-screen message view (FR-E5)
+	stacked    bool // list above preview (FR-I10), remembered in prefs
 	// sortByID remembers each account's current list order for the
 	// picker's preselect (FR-D8); prefs persist it across runs.
 	sortByID map[string]string
@@ -179,17 +186,27 @@ func New(opts Options) *Model {
 	if hub.Engine(active) == nil && len(infos) > 0 {
 		active = infos[0].ID
 	}
+	// Display order (FR-C5): enrollment order overlaid with the user's
+	// saved arrangement; tints stay keyed to enrollment (accountTint).
+	base := make([]string, 0, len(infos))
+	for _, a := range infos {
+		base = append(base, a.ID)
+	}
+	var saved []string
+	if opts.Prefs != nil {
+		saved = opts.Prefs.AccountOrder
+	}
 	m := &Model{
 		opts:           opts,
 		hub:            hub,
 		accounts:       infos,
+		acctOrder:      config.MergeAccountOrder(base, saved),
 		activeID:       active,
 		engine:         hub.Engine(active),
 		snaps:          map[string]sync.Snapshot{},
 		prevBox:        map[string]mail.ID{},
 		focus:          ui.PaneList,
 		sidebarVisible: true,
-		sidebarSel:     0,
 		vp:             viewport.New(),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -496,7 +513,7 @@ func (m *Model) applySnapshot(acct string, snap sync.Snapshot) (tea.Model, tea.C
 	if snap.ViewKey == "" && len(snap.Mailboxes) > 0 {
 		if node := firstMailboxNode(m.opts.Accounts, acct, snap.Mailboxes); node != nil {
 			if acct == m.activeID {
-				m.sidebarSel = indexOfMailbox(snap.Mailboxes, node.Mailbox.ID)
+				m.sidebarKey = sidebarRowKey(acct, node.Mailbox.ID)
 			}
 			return m, m.openMailboxOn(acct, node.Mailbox.ID)
 		}
@@ -577,12 +594,11 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 		m.freshArmed = false
 	}
 
-	// Keep the sidebar selection on the active mailbox.
-	for i, node := range snap.Mailboxes {
-		if node.Mailbox.ID == snap.ActiveMailbox {
-			m.sidebarSel = i
-			break
-		}
+	// Keep the sidebar cursor on the open mailbox (FR-C5). Only a folder
+	// that exists re-anchors: an empty ActiveMailbox (all-mailbox search)
+	// or a vanished id leaves the cursor where the user put it.
+	if snap.ActiveMailbox != "" && indexOfMailbox(snap.Mailboxes, snap.ActiveMailbox) >= 0 {
+		m.sidebarKey = sidebarRowKey(m.activeID, snap.ActiveMailbox)
 	}
 
 	// Body for the cursor message (FR-D4 lazy load).
@@ -618,9 +634,9 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 }
 
 // applyUnified rebuilds the merged view (FR-A5) from every account's
-// latest snapshot and runs the render pipeline over it. The sidebar keeps
-// tracking the active account's tree; the cursor's body comes from the
-// row's owning account.
+// latest snapshot and runs the render pipeline over it. The sidebar lists
+// every account's tree (FR-C5); the cursor's body comes from the row's
+// owning account.
 func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 	snap := m.mergeUnified()
 	m.snap = snap
@@ -642,12 +658,12 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 		m.freshArmed = false
 	}
 
+	// The sidebar follows the active account's open mailbox, same as the
+	// single-account path (the folder column itself lists every account,
+	// FR-C5 — the merge changes the list, not the tree).
 	act := m.snaps[m.activeID]
-	for i, node := range act.Mailboxes {
-		if node.Mailbox.ID == act.ActiveMailbox {
-			m.sidebarSel = i
-			break
-		}
+	if act.ActiveMailbox != "" && indexOfMailbox(act.Mailboxes, act.ActiveMailbox) >= 0 {
+		m.sidebarKey = sidebarRowKey(m.activeID, act.ActiveMailbox)
 	}
 
 	// Body of the cursor row loads from its owning account (FR-A5) and
@@ -776,8 +792,9 @@ func (m *Model) mergeUnified() sync.Snapshot {
 		out.Total = total
 	}
 
-	// The active account drives the sidebar and the footer's status; its
-	// mailbox tree renders unchanged next to the merged list.
+	// The active account drives the footer's status and counts; its
+	// mailbox tree rides along for them (the sidebar builds its own
+	// per-account rows, FR-C5).
 	if act, ok := m.snaps[m.activeID]; ok {
 		out.Mailboxes = act.Mailboxes
 		out.Status = act.Status
@@ -1179,42 +1196,27 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		m.toggleFullscreen()
 		return m, nil
 
-	// --- sidebar pane ---
+	// --- sidebar pane (FR-C1, FR-C5) ---
 	case ui.ActSidebarDown:
-		if m.sidebarSel < len(m.snap.Mailboxes)-1 {
-			m.sidebarSel++
-		}
+		m.sidebarMove(1)
 		return m, nil
 	case ui.ActSidebarUp:
-		if m.sidebarSel > 0 {
-			m.sidebarSel--
-		}
+		m.sidebarMove(-1)
 		return m, nil
 	case ui.ActSidebarTop:
-		m.sidebarSel = 0
+		m.sidebarSelect(0)
 		return m, nil
 	case ui.ActSidebarBottom:
-		if n := len(m.snap.Mailboxes); n > 0 {
-			m.sidebarSel = n - 1
-		}
+		m.sidebarSelect(len(m.sidebarRows()) - 1)
+		return m, nil
+	case ui.ActSidebarMoveUp:
+		m.moveAccountBlock(-1)
+		return m, nil
+	case ui.ActSidebarMoveDown:
+		m.moveAccountBlock(1)
 		return m, nil
 	case ui.ActOpenMailbox:
-		if m.sidebarSel < len(m.snap.Mailboxes) {
-			id := m.snap.Mailboxes[m.sidebarSel].Mailbox.ID
-			// Opening a folder means "show me these messages": the
-			// cursor moves to the list with the folder (at compact
-			// widths the list replaces the sidebar anyway).
-			m.focus = ui.PaneList
-			// Opening a concrete mailbox leaves the unified view (FR-A5:
-			// unified is a view; the sidebar is always the active
-			// account's tree).
-			if m.unified {
-				_, cmd := m.leaveUnified()
-				return m, tea.Batch(cmd, m.openMailbox(id))
-			}
-			return m, m.openMailbox(id)
-		}
-		return m, nil
+		return m.openSidebarRow()
 	case ui.ActSidebarClose:
 		m.sidebarVisible = false
 		m.focus = ui.PaneList
@@ -1379,10 +1381,13 @@ func (m *Model) uiState() ui.State {
 		Focus:          m.focus,
 		SidebarVisible: m.sidebarVisible,
 		ShowSize:       m.showSize,
-		SidebarSel:     m.sidebarSel,
 		Now:            time.Now(),
 		Selected:       m.sel,
 	}
+	// The folder column is the flat multi-account list (FR-C5); the
+	// cursor index derives from its key for this frame only.
+	st.SidebarRows = m.sidebarRows()
+	st.SidebarSel = sidebarIndexOf(st.SidebarRows, m.sidebarKey)
 	if m.picker != nil {
 		st.Picker = m.pickerView()
 	}

@@ -87,3 +87,66 @@ func TestDefaultPrefsPathSitsNextToConfig(t *testing.T) {
 		t.Fatalf("prefs path = %q, want sibling of %q", p, cfg)
 	}
 }
+
+func TestAccountOrderRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prefs.toml")
+	p := &Prefs{}
+	p.SetAccountOrder([]string{"work", "personal"})
+	if err := SavePrefs(path, p); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+	got, err := LoadPrefs(path)
+	if err != nil {
+		t.Fatalf("LoadPrefs: %v", err)
+	}
+	if len(got.AccountOrder) != 2 || got.AccountOrder[0] != "work" || got.AccountOrder[1] != "personal" {
+		t.Fatalf("account_order round trip = %v", got.AccountOrder)
+	}
+	// The setter copies: mutating the caller's slice later must not
+	// rewrite the prefs document in place.
+	ids := []string{"a", "b"}
+	p.SetAccountOrder(ids)
+	ids[0] = "mutated"
+	if p.AccountOrder[0] != "a" {
+		t.Fatalf("SetAccountOrder aliased the caller's slice: %v", p.AccountOrder)
+	}
+}
+
+func TestMergeAccountOrder(t *testing.T) {
+	base := []string{"default", "alpha", "zeta"} // default first, then id
+	cases := []struct {
+		name  string
+		saved []string
+		want  []string
+	}{
+		{name: "empty keeps base", saved: nil, want: []string{"default", "alpha", "zeta"}},
+		{name: "saved wins", saved: []string{"zeta", "default", "alpha"}, want: []string{"zeta", "default", "alpha"}},
+		{name: "partial overlay", saved: []string{"alpha"}, want: []string{"alpha", "default", "zeta"}},
+		{name: "unknown dropped", saved: []string{"gone", "zeta"}, want: []string{"zeta", "default", "alpha"}},
+		{name: "duplicates collapse", saved: []string{"zeta", "zeta"}, want: []string{"zeta", "default", "alpha"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MergeAccountOrder(base, tc.saved)
+			if len(got) != len(tc.want) {
+				t.Fatalf("merge = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("merge = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+	// A newly added account (in base, not in saved) never vanishes.
+	got := MergeAccountOrder([]string{"default", "alpha", "zeta", "newborn"}, []string{"zeta"})
+	found := false
+	for _, id := range got {
+		if id == "newborn" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("new account dropped: %v", got)
+	}
+}

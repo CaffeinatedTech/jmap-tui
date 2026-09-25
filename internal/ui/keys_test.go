@@ -25,6 +25,13 @@ func TestKeyMapDefaultsResolve(t *testing.T) {
 	if act, ok := km.Match(PaneSidebar, "?"); !ok || act != ActHelp {
 		t.Fatalf("sidebar ? = %v %v", act, ok)
 	}
+	// Account-block reorder lives on ctrl+arrows in the sidebar (FR-C5).
+	if act, ok := km.Match(PaneSidebar, "ctrl+up"); !ok || act != ActSidebarMoveUp {
+		t.Fatalf("sidebar ctrl+up = %v %v", act, ok)
+	}
+	if act, ok := km.Match(PaneSidebar, "ctrl+down"); !ok || act != ActSidebarMoveDown {
+		t.Fatalf("sidebar ctrl+down = %v %v", act, ok)
+	}
 	// Unbound key misses.
 	if _, ok := km.Match(PaneList, "w"); ok {
 		t.Fatal("w should be unbound in the list")

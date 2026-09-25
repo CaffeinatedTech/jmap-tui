@@ -25,9 +25,11 @@ type Palette struct {
 	HeaderFg   color.Color
 	BodyFg     color.Color
 
-	// Accounts are the unified-inbox owner-bar tints (FR-A5), consumed in
-	// order and cycled past the end. They are semantic like Danger and
-	// Success — the one deliberate widening of the single-accent palette.
+	// Accounts are the account-identity tints: the unified-inbox owner
+	// bar (FR-A5) and the sidebar account-header end-caps (FR-C5). They
+	// are consumed in enrollment order and cycled past the end — semantic
+	// like Danger and Success, the one deliberate widening of the
+	// single-accent palette.
 	Accounts []color.Color
 }
 
@@ -96,8 +98,9 @@ type Theme struct {
 	// RuleActive is the top rule of the focused column: heavy glyph plus
 	// the accent, so focus reads without relying on colour alone.
 	RuleActive lipgloss.Style
-	// SidebarLabel styles the sidebar's account label — bold header text;
-	// the accent end-caps are painted as background-filled cells.
+	// SidebarLabel styles an account header in the folder column — bold
+	// header text; the end-caps are the account's own tint (FR-C5,
+	// painted as background-filled cells by sidebarLabel).
 	SidebarLabel lipgloss.Style
 	HelpKey      lipgloss.Style
 	HelpDesc     lipgloss.Style

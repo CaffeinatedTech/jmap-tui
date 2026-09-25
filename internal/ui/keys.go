@@ -37,6 +37,8 @@ const (
 	ActSidebarBottom   Action = "sidebar.bottom"
 	ActOpenMailbox     Action = "sidebar.open"
 	ActSidebarClose    Action = "sidebar.close"
+	ActSidebarMoveUp   Action = "sidebar.move_account_up"
+	ActSidebarMoveDown Action = "sidebar.move_account_down"
 	ActPreviewDown     Action = "preview.down"
 	ActPreviewUp       Action = "preview.up"
 	ActPreviewHalf     Action = "preview.half_down"
@@ -120,6 +122,10 @@ func defaultBindings() []Binding {
 		{Key: "enter", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
 		{Key: "l", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
 		{Key: "h", Act: ActSidebarClose, Help: "collapse sidebar", Pane: PaneSidebar},
+		// Account block reorder (FR-C5): moves the whole block of the
+		// account under the cursor; a no-op at either end.
+		{Key: "ctrl+up", Act: ActSidebarMoveUp, Help: "move account up", Pane: PaneSidebar},
+		{Key: "ctrl+down", Act: ActSidebarMoveDown, Help: "move account down", Pane: PaneSidebar},
 		{Key: "j", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
 		{Key: "down", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
 		{Key: "k", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},

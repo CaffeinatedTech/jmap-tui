@@ -300,19 +300,21 @@ func TestSortFlow(t *testing.T) {
 	}
 }
 
-// TestSidebarTreeJump: g/shift+g slam the folder tree to its ends.
+// TestSidebarTreeJump: g/shift+g slam the folder list to its ends (the
+// last row is the last account's last mailbox, under its header, FR-C5).
 func TestSidebarTreeJump(t *testing.T) {
 	m, _ := newTestModel(t)
 	pump(t, m, m.loadAccountCmd())
 	m.focus = ui.PaneSidebar
 
 	_, _ = m.handleKey(keyShift('g'))
-	if want := len(m.snap.Mailboxes) - 1; m.sidebarSel != want {
-		t.Errorf("shift+g sel = %d, want %d", m.sidebarSel, want)
+	rows := m.sidebarRows()
+	if want := len(rows) - 1; m.sidebarIndex() != want {
+		t.Errorf("shift+g sel = %d, want %d", m.sidebarIndex(), want)
 	}
 	_, _ = m.handleKey(key("g"))
-	if m.sidebarSel != 0 {
-		t.Errorf("g sel = %d, want 0", m.sidebarSel)
+	if m.sidebarIndex() != 0 {
+		t.Errorf("g sel = %d, want 0 (first account header)", m.sidebarIndex())
 	}
 }
 
