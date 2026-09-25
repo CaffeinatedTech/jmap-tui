@@ -74,7 +74,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 ## FR-C — Mailbox browsing
 
 - **[FR-C1] [M1]** Sidebar mailbox tree: hierarchy, per-mailbox unread count, special mailboxes identified by role (`inbox`, `drafts`, `sent`, `trash`, `archive`, `junk`).
-- **[FR-C2] [M1]** Selecting a mailbox issues a fresh `Email/query` for that mailbox and resets the list window.
+- **[FR-C2] [M1]** Selecting a mailbox issues a fresh `Email/query` for that mailbox and resets the list window, and **moves focus to the list** — Enter/`l` on a folder means reading starts there. *(Focus hand-off added post-M7 2026-09-25: the folder had opened but the cursor stayed in the sidebar.)*
 - **[FR-C3] [M1]** Special semantics: opening **Drafts** opens in edit-aware mode (Enter on a `$draft` row edits it in the composer — the composer itself lands in M5); deleting from **Trash** offers permanent delete (server `/set` destroy); **Sent** shows recipients in the "from" column.
 - **[FR-C4] [M1]** Sidebar collapsible (`[`) to give the list/preview more room.
 

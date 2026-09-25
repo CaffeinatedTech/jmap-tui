@@ -182,6 +182,30 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 	}
 }
 
+// TestOpenMailboxMovesFocusToList: Enter on a folder opens it and hands
+// the cursor to the list — the folder panel's job is done, reading starts
+// (FR-C2).
+func TestOpenMailboxMovesFocusToList(t *testing.T) {
+	m, _ := newTestModel(t)
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		pump(t, m, cmd)
+	}
+	pump(t, m, m.loadAccountCmd())
+
+	m.focus = ui.PaneSidebar
+	m.sidebarSel = 1 // Trash
+	_, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	pump(t, m, cmd)
+
+	if m.focus != ui.PaneList {
+		t.Errorf("focus = %v, want list", m.focus)
+	}
+	if m.snap.ActiveMailbox != "mb-trash" {
+		t.Errorf("active mailbox = %q, want mb-trash", m.snap.ActiveMailbox)
+	}
+}
+
 // TestAppLivePump proves the latest-wins broadcast reaches the model: a
 // waiter armed before a publish receives it as a live snapshot (FR-B2).
 func TestAppLivePump(t *testing.T) {

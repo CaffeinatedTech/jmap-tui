@@ -1133,6 +1133,10 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActOpenMailbox:
 		if m.sidebarSel < len(m.snap.Mailboxes) {
 			id := m.snap.Mailboxes[m.sidebarSel].Mailbox.ID
+			// Opening a folder means "show me these messages": the
+			// cursor moves to the list with the folder (at compact
+			// widths the list replaces the sidebar anyway).
+			m.focus = ui.PaneList
 			// Opening a concrete mailbox leaves the unified view (FR-A5:
 			// unified is a view; the sidebar is always the active
 			// account's tree).
