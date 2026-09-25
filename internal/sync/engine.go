@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,7 +26,15 @@ type Engine struct {
 	mailboxes []mail.Mailbox
 	mboxOrder []MailboxNode
 	window    *Window
-	cursorRow int // index into rendered rows (incl. thread members)
+	// sort is the mailbox view's server-side order (FR-D8); thread and
+	// search queries keep their own.
+	sort []mail.SortCriterion
+	// cursorRow is the index into rendered rows (incl. thread members);
+	// cursorID is the selected message it tracks by id — row-set changes
+	// (extensions, live patches, slide-ins) move rows under a raw index,
+	// so snapshotLocked re-anchors cursorRow from cursorID (FR-D5).
+	cursorRow int
+	cursorID  mail.ID
 	// saved holds the mailbox view while a search view is open (FR-F1):
 	// Esc restores it with cursor position intact.
 	saved *savedView
@@ -72,6 +81,11 @@ type Config struct {
 	// PushRetries is how many failed push attempts are tolerated before
 	// falling back to polling (FR-B3); 3 when zero.
 	PushRetries int
+
+	// Sort is the mailbox view's server-side order (FR-D8); nil means
+	// receivedAt descending. Applied to every mailbox query until
+	// Engine.SetSort changes it.
+	Sort []mail.SortCriterion
 }
 
 func (c Config) withDefaults() Config {
@@ -174,6 +188,7 @@ func NewEngine(p mail.Provider, cfg Config) *Engine {
 	return &Engine{
 		p:         p,
 		cfg:       c,
+		sort:      c.Sort,
 		summaries: map[mail.ID]mail.EmailSummary{},
 		threads:   map[mail.ID][]mail.ID{},
 		expanded:  map[mail.ID]bool{},
@@ -278,11 +293,40 @@ func (e *Engine) rebuildMailboxTreeLocked() {
 // discards the search (choosing a mailbox is an explicit exit).
 func (e *Engine) OpenMailbox(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
+	sort := e.sort
+	e.mu.Unlock()
+	return e.openView(ctx, Query{Filter: FilterSpec{MailboxID: id}, Sort: sort})
+}
+
+// SetSort re-queries the open mailbox view under a new server-side order
+// (FR-D8): same filter, fresh window, cursor at the top — the same
+// one-outstanding-query path OpenMailbox takes. The order sticks for
+// every later mailbox open on this account. It is a no-op while no view
+// is open; the app keeps it out of search views (their sort stays
+// receivedAt descending).
+func (e *Engine) SetSort(ctx context.Context, sort []mail.SortCriterion) error {
+	e.mu.Lock()
+	e.sort = sort
+	if e.window == nil {
+		e.mu.Unlock()
+		return nil
+	}
+	q := e.window.query
+	e.mu.Unlock()
+	q.Sort = sort
+	return e.openView(ctx, q)
+}
+
+// openView (re)opens a mailbox-shaped query: fresh window, reset cursor
+// and transient state, first page fetched, snapshot published.
+func (e *Engine) openView(ctx context.Context, q Query) error {
+	e.mu.Lock()
 	e.saved = nil
 	e.cancelScanLocked()
-	e.window = NewWindow(Query{Filter: FilterSpec{MailboxID: id}}, e.cfg.Window)
+	e.window = NewWindow(q, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
+	e.cursorID = ""
 	e.bodyLoading = ""
 	e.body = nil
 	e.fresh = map[mail.ID]time.Time{}
@@ -327,6 +371,7 @@ type SearchSpec struct {
 type savedView struct {
 	win       *Window
 	cursorRow int
+	cursorID  mail.ID
 }
 
 // Equal reports whether two specs describe the same query. The app uses
@@ -368,12 +413,13 @@ func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
 
 	e.mu.Lock()
 	if e.saved == nil {
-		e.saved = &savedView{win: e.window, cursorRow: e.cursorRow}
+		e.saved = &savedView{win: e.window, cursorRow: e.cursorRow, cursorID: e.cursorID}
 	}
 	e.cancelScanLocked()
 	e.window = NewWindow(Query{Filter: fs}, e.cfg.Window)
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
+	e.cursorID = ""
 	e.bodyLoading = ""
 	e.body = nil
 	e.fresh = map[mail.ID]time.Time{}
@@ -420,6 +466,7 @@ func (e *Engine) SearchClose() Snapshot {
 	}
 	e.window = e.saved.win
 	e.cursorRow = e.saved.cursorRow
+	e.cursorID = e.saved.cursorID
 	e.saved = nil
 	e.cancelScanLocked()
 	e.expanded = map[mail.ID]bool{}
@@ -442,6 +489,7 @@ func (e *Engine) MoveCursor(delta int) Snapshot {
 	rows := e.renderedRowsLocked()
 	if len(rows) > 0 {
 		e.cursorRow = min(max(e.cursorRow+delta, 0), len(rows)-1)
+		e.cursorID = rows[e.cursorRow].ID
 		e.syncWindowCursorLocked(rows)
 	}
 	e.publishLocked()
@@ -474,6 +522,7 @@ func (e *Engine) SeekCursor(id mail.ID) Snapshot {
 	for i, r := range rows {
 		if r.ID == id {
 			e.cursorRow = i
+			e.cursorID = id
 			e.syncWindowCursorLocked(rows)
 			break
 		}
@@ -491,6 +540,98 @@ func (e *Engine) CursorID() mail.ID {
 		return ""
 	}
 	return rows[e.cursorRow].ID
+}
+
+// ErrNoUnread reports that a jump-unread scan reached the end of what it
+// can load without finding a message (FR-D7).
+var ErrNoUnread = errors.New("no more unread")
+
+// maxUnreadScanHops bounds one jump-unread press: chunk fetches inside a
+// single call (25 × 50 = 1,250 rows), so a fully-read mailbox makes a
+// bounded, sequential number of round trips (FR-K4).
+const maxUnreadScanHops = 25
+
+// FindUnread returns the index of the first unread row scanning from
+// `from` inclusive in dir (+1/−1); ok is false when the range holds none.
+// Shared by the engine scan and the app's merged (unified) view.
+func FindUnread(rows []Row, from, dir int) (int, bool) {
+	if dir > 0 {
+		for i := max(from, 0); i < len(rows); i++ {
+			if !rows[i].Summary.Keywords.Has("$seen") {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	for i := min(from, len(rows)-1); i >= 0; i-- {
+		if !rows[i].Summary.Keywords.Has("$seen") {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// JumpUnread moves the cursor to the next/prev unread message (FR-D7).
+// The scan runs engine-side so it can extend the window while it looks:
+// unlike Prefetch it ignores the cursor-proximity threshold (the cursor
+// deliberately stays put until something unread is found) via
+// NextNeedForce. Returns ErrNoUnread when the reachable window holds
+// nothing — the app surfaces that as the non-fatal notice.
+func (e *Engine) JumpUnread(ctx context.Context, dir int) error {
+	if dir == 0 {
+		return nil
+	}
+	scanDir := 1
+	if dir < 0 {
+		scanDir = -1
+	}
+	for hop := 0; ; hop++ {
+		e.mu.Lock()
+		if e.window == nil {
+			e.mu.Unlock()
+			return nil
+		}
+		rows := e.renderedRowsLocked()
+		if i, ok := FindUnread(rows, e.cursorRow+dir, dir); ok {
+			e.cursorRow = i
+			e.cursorID = rows[i].ID
+			e.syncWindowCursorLocked(rows)
+			e.publishLocked()
+			e.mu.Unlock()
+			return nil
+		}
+		if e.scan != nil || hop >= maxUnreadScanHops {
+			e.mu.Unlock()
+			return ErrNoUnread
+		}
+		r, pos, limit, ok := e.window.NextNeedForce(scanDir)
+		if !ok {
+			e.mu.Unlock()
+			return ErrNoUnread // no more results in that direction
+		}
+		spec := e.querySpecLocked(pos, limit)
+		e.mu.Unlock()
+
+		handle, sums, err := e.p.OpenQuery(ctx, spec)
+		if err != nil {
+			return err
+		}
+
+		e.mu.Lock()
+		if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
+			e.mu.Unlock()
+			if err == ErrStaleRequest {
+				continue // live change mid-scan: rescan the merged rows
+			}
+			return err
+		}
+		e.absorbSummariesLocked(sums)
+		// The merge may have prepended rows under the cursor index —
+		// re-anchor before the next scan pass.
+		e.repairCursorLocked(e.renderedRowsLocked())
+		e.publishLocked()
+		e.mu.Unlock()
+	}
 }
 
 // Prefetch satisfies any pending edge extension the window wants (FR-D3).
@@ -611,8 +752,37 @@ func (e *Engine) Jump(ctx context.Context, t JumpTarget) error {
 	return nil
 }
 
+// repairCursorLocked re-anchors cursorRow from the tracked message id
+// after the row set changed (FR-D5). When the tracked message is gone
+// (destroyed), the window's own neighbour choice takes over; as a last
+// resort the raw index clamps. Caller holds mu.
+func (e *Engine) repairCursorLocked(rows []Row) {
+	if len(rows) == 0 {
+		e.cursorRow = 0
+		return
+	}
+	find := func(id mail.ID) bool {
+		for i, r := range rows {
+			if r.ID == id {
+				e.cursorRow = i
+				return true
+			}
+		}
+		return false
+	}
+	if e.cursorID != "" && find(e.cursorID) {
+		return
+	}
+	if id := e.window.CursorID(); id != "" && find(id) {
+		e.cursorID = id
+		return
+	}
+	e.cursorRow = min(max(e.cursorRow, 0), len(rows)-1)
+}
+
 // alignCursorWithWindowLocked moves the rendered cursor to the row of the
-// window cursor id (after jumps/re-anchors). Caller holds mu.
+// window cursor id (after jumps/re-anchors) and tracks it by id. Caller
+// holds mu.
 func (e *Engine) alignCursorWithWindowLocked() {
 	id := e.window.CursorID()
 	if id == "" {
@@ -622,6 +792,7 @@ func (e *Engine) alignCursorWithWindowLocked() {
 	for i, r := range rows {
 		if r.ID == id {
 			e.cursorRow = i
+			e.cursorID = id
 			return
 		}
 	}
@@ -955,6 +1126,9 @@ func (e *Engine) snapshotLocked() Snapshot {
 	snap.Start = e.window.Start()
 
 	rows := e.renderedRowsLocked()
+	// FR-D5 id repair: extensions, live patches, and slide-ins move rows
+	// under a raw index — re-anchor the selection on its tracked message.
+	e.repairCursorLocked(rows)
 	snap.Cursor = min(max(e.cursorRow, 0), max(len(rows)-1, 0))
 	snap.Rows = rows
 

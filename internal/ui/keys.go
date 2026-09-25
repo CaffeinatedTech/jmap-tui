@@ -17,6 +17,11 @@ const (
 	ActListBottom      Action = "list.bottom"
 	ActListPageDown    Action = "list.page_down"
 	ActListPageUp      Action = "list.page_up"
+	ActListHalfDown    Action = "list.half_down"
+	ActListHalfUp      Action = "list.half_up"
+	ActListNextUnread  Action = "list.next_unread"
+	ActListPrevUnread  Action = "list.prev_unread"
+	ActSort            Action = "list.sort"
 	ActToggleThread    Action = "list.toggle_thread"
 	ActToggleSize      Action = "list.toggle_size"
 	ActToggleRead      Action = "list.toggle_read"
@@ -28,6 +33,8 @@ const (
 	ActArchive         Action = "list.archive"
 	ActSidebarDown     Action = "sidebar.down"
 	ActSidebarUp       Action = "sidebar.up"
+	ActSidebarTop      Action = "sidebar.top"
+	ActSidebarBottom   Action = "sidebar.bottom"
 	ActOpenMailbox     Action = "sidebar.open"
 	ActSidebarClose    Action = "sidebar.close"
 	ActPreviewDown     Action = "preview.down"
@@ -87,21 +94,29 @@ func defaultBindings() []Binding {
 		{Key: "shift+g", Act: ActListBottom, Help: "last message", Pane: PaneList},
 		{Key: "ctrl+f", Act: ActListPageDown, Help: "page down", Pane: PaneList},
 		{Key: "ctrl+b", Act: ActListPageUp, Help: "page up", Pane: PaneList},
+		{Key: "ctrl+d", Act: ActListHalfDown, Help: "half page down", Pane: PaneList},
+		{Key: "ctrl+u", Act: ActListHalfUp, Help: "half page up", Pane: PaneList},
+		{Key: "space", Act: ActListPageDown, Help: "page down", Pane: PaneList},
+		{Key: "shift+j", Act: ActListNextUnread, Help: "next unread", Pane: PaneList},
+		{Key: "shift+k", Act: ActListPrevUnread, Help: "previous unread", Pane: PaneList},
 		{Key: "enter", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
-		{Key: "o", Act: ActToggleThread, Help: "expand/collapse thread", Pane: PaneList},
-		{Key: "s", Act: ActToggleSize, Help: "show/hide sizes", Pane: PaneList},
-		{Key: "space", Act: ActToggleRead, Help: "toggle read/unread", Pane: PaneList},
+		{Key: "shift+s", Act: ActToggleSize, Help: "show/hide sizes", Pane: PaneList},
 		{Key: "u", Act: ActToggleRead, Help: "toggle read/unread", Pane: PaneList},
 		{Key: "*", Act: ActToggleStar, Help: "toggle star", Pane: PaneList},
 		{Key: "x", Act: ActToggleSelect, Help: "select for batch action", Pane: PaneList},
 		{Key: "m", Act: ActMove, Help: "move to mailbox…", Pane: PaneList},
 		{Key: "y", Act: ActCopy, Help: "copy to mailbox…", Pane: PaneList},
-		{Key: "h", Act: ActArchive, Help: "archive", Pane: PaneList},
+		{Key: "e", Act: ActArchive, Help: "archive", Pane: PaneList},
+		{Key: "d", Act: ActDelete, Help: "delete (to trash)", Pane: PaneList},
 		{Key: "#", Act: ActDelete, Help: "delete (to trash)", Pane: PaneList},
+		{Key: "s", Act: ActSort, Help: "sort by…", Pane: PaneList},
+		{Key: "o", Act: ActSort, Help: "sort by…", Pane: PaneList},
 		{Key: "j", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
 		{Key: "down", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
 		{Key: "k", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
 		{Key: "up", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
+		{Key: "g", Act: ActSidebarTop, Help: "first mailbox", Pane: PaneSidebar},
+		{Key: "shift+g", Act: ActSidebarBottom, Help: "last mailbox", Pane: PaneSidebar},
 		{Key: "enter", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
 		{Key: "l", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
 		{Key: "h", Act: ActSidebarClose, Help: "collapse sidebar", Pane: PaneSidebar},
@@ -111,8 +126,8 @@ func defaultBindings() []Binding {
 		{Key: "up", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
 		{Key: "d", Act: ActPreviewHalf, Help: "half page down", Pane: PanePreview},
 		{Key: "u", Act: ActPreviewHalfUp, Help: "half page up", Pane: PanePreview},
-		{Key: "ctrl+f", Act: ActPreviewDown, Help: "page down", Pane: PanePreview},
-		{Key: "ctrl+b", Act: ActPreviewUp, Help: "page up", Pane: PanePreview},
+		{Key: "ctrl+f", Act: ActPreviewPageDown, Help: "page down", Pane: PanePreview},
+		{Key: "ctrl+b", Act: ActPreviewPageUp, Help: "page up", Pane: PanePreview},
 		{Key: "g", Act: ActPreviewTop, Help: "top of message", Pane: PanePreview},
 		{Key: "shift+g", Act: ActPreviewBottom, Help: "bottom of message", Pane: PanePreview},
 		{Key: "s", Act: ActSaveAttach, Help: "save attachments…", Pane: PanePreview},
@@ -128,7 +143,7 @@ func defaultBindings() []Binding {
 		{Key: "/", Act: ActSearch, Help: "search", Pane: PaneAny},
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
 		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},
-		{Key: "shift+s", Act: ActAccountSwitch, Help: "switch account", Pane: PaneAny},
+		{Key: "shift+a", Act: ActAccountSwitch, Help: "switch account", Pane: PaneAny},
 		{Key: "ctrl+a", Act: ActAccountManage, Help: "add or edit an account", Pane: PaneAny},
 		{Key: "i", Act: ActUnified, Help: "unified inbox", Pane: PaneAny},
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},

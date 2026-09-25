@@ -1,21 +1,25 @@
-
                      [38;2;130;170;255mHelp — message list[m
                      
                        [38;2;130;170;255mj/down    [m  [38;2;192;202;245mnext message[m
                        [38;2;130;170;255mk/up      [m  [38;2;192;202;245mprevious message[m
                        [38;2;130;170;255mg         [m  [38;2;192;202;245mfirst message[m
                        [38;2;130;170;255mshift+g   [m  [38;2;192;202;245mlast message[m
-                       [38;2;130;170;255mctrl+f    [m  [38;2;192;202;245mpage down[m
+                       [38;2;130;170;255mctrl+f/space[m  [38;2;192;202;245mpage down[m
                        [38;2;130;170;255mctrl+b    [m  [38;2;192;202;245mpage up[m
-                       [38;2;130;170;255menter/o   [m  [38;2;192;202;245mexpand/collapse thread[m
-                       [38;2;130;170;255ms         [m  [38;2;192;202;245mshow/hide sizes[m
-                       [38;2;130;170;255mspace/u   [m  [38;2;192;202;245mtoggle read/unread[m
+                       [38;2;130;170;255mctrl+d    [m  [38;2;192;202;245mhalf page down[m
+                       [38;2;130;170;255mctrl+u    [m  [38;2;192;202;245mhalf page up[m
+                       [38;2;130;170;255mshift+j   [m  [38;2;192;202;245mnext unread[m
+                       [38;2;130;170;255mshift+k   [m  [38;2;192;202;245mprevious unread[m
+                       [38;2;130;170;255menter     [m  [38;2;192;202;245mexpand/collapse thread[m
+                       [38;2;130;170;255mshift+s   [m  [38;2;192;202;245mshow/hide sizes[m
+                       [38;2;130;170;255mu         [m  [38;2;192;202;245mtoggle read/unread[m
                        [38;2;130;170;255m*         [m  [38;2;192;202;245mtoggle star[m
                        [38;2;130;170;255mx         [m  [38;2;192;202;245mselect for batch action[m
                        [38;2;130;170;255mm         [m  [38;2;192;202;245mmove to mailbox…[m
                        [38;2;130;170;255my         [m  [38;2;192;202;245mcopy to mailbox…[m
-                       [38;2;130;170;255mh         [m  [38;2;192;202;245marchive[m
-                       [38;2;130;170;255m#         [m  [38;2;192;202;245mdelete (to trash)[m
+                       [38;2;130;170;255me         [m  [38;2;192;202;245marchive[m
+                       [38;2;130;170;255md/#       [m  [38;2;192;202;245mdelete (to trash)[m
+                       [38;2;130;170;255ms/o       [m  [38;2;192;202;245msort by…[m
                        [38;2;130;170;255mpgdown    [m  [38;2;192;202;245mpreview page down[m
                        [38;2;130;170;255mpgup      [m  [38;2;192;202;245mpreview page up[m
                        [38;2;130;170;255mv         [m  [38;2;192;202;245mfull-screen message[m
@@ -26,7 +30,7 @@
                        [38;2;130;170;255m/         [m  [38;2;192;202;245msearch[m
                        [38;2;130;170;255mctrl+s    [m  [38;2;192;202;245madvanced search[m
                        [38;2;130;170;255mesc       [m  [38;2;192;202;245mclear search[m
-                       [38;2;130;170;255mshift+s   [m  [38;2;192;202;245mswitch account[m
+                       [38;2;130;170;255mshift+a   [m  [38;2;192;202;245mswitch account[m
                        [38;2;130;170;255mctrl+a    [m  [38;2;192;202;245madd or edit an account[m
                        [38;2;130;170;255mi         [m  [38;2;192;202;245munified inbox[m
                        [38;2;130;170;255mtab       [m  [38;2;192;202;245mnext pane[m
@@ -34,6 +38,3 @@
                        [38;2;130;170;255m[         [m  [38;2;192;202;245mshow/hide sidebar[m
                        [38;2;130;170;255mz         [m  [38;2;192;202;245mstack/side-by-side layout[m
                        [38;2;130;170;255mctrl+z    [m  [38;2;192;202;245mundo last action[m
-                       [38;2;130;170;255m?         [m  [38;2;192;202;245mhelp[m
-                       [38;2;130;170;255mq         [m  [38;2;192;202;245mquit[m
-                     

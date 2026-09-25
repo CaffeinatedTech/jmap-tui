@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -94,9 +95,12 @@ type Model struct {
 	sidebarSel     int
 	showSize       bool
 	helpOpen       bool
-	fullscreen     bool   // full-screen message view (FR-E5)
-	stacked        bool   // list above preview (FR-I10), remembered in prefs
-	viewKey        string // last seen snapshot view (mailbox/search switch)
+	fullscreen     bool // full-screen message view (FR-E5)
+	stacked        bool // list above preview (FR-I10), remembered in prefs
+	// sortByID remembers each account's current list order for the
+	// picker's preselect (FR-D8); prefs persist it across runs.
+	sortByID map[string]string
+	viewKey  string // last seen snapshot view (mailbox/search switch)
 
 	vp       viewport.Model
 	vpBodyID mail.ID
@@ -152,8 +156,18 @@ func New(opts Options) *Model {
 		accs = []AccountOpt{{ID: id, Name: id, Provider: opts.Provider, Connected: true}}
 	}
 	hub := sync.NewHub()
+	sortByID := map[string]string{}
 	for _, a := range accs {
-		hub.Enroll(a.ID, a.Name, a.Provider, a.Connected, sync.Config{})
+		var scfg sync.Config
+		if opts.Prefs != nil {
+			// The account's remembered list order (FR-D8) rides the
+			// engine config; unknown ids fall back to newest first.
+			if o := opts.Prefs.Sort(a.ID); o != "" {
+				sortByID[a.ID] = o
+				scfg.Sort = sortCrits(o)
+			}
+		}
+		hub.Enroll(a.ID, a.Name, a.Provider, a.Connected, scfg)
 		if a.Err != nil {
 			// Show the pre-flight failure immediately; Hub.Start keeps
 			// retrying whatever provider exists (failure isolation).
@@ -180,6 +194,7 @@ func New(opts Options) *Model {
 		ctx:            ctx,
 		cancel:         cancel,
 		stacked:        opts.Prefs.Stacked(),
+		sortByID:       sortByID,
 	}
 	for _, a := range infos {
 		// Every account starts as an unloaded view: the unified merge
@@ -361,7 +376,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// wedge the unified preview behind its request key.
 			m.bodyReq = ""
 		}
-		if acct != m.activeID && len(m.accounts) > 1 {
+		if errors.Is(msg.err, sync.ErrNoUnread) {
+			// The jump's own notice, verbatim (FR-D7).
+			m.err = sync.ErrNoUnread.Error()
+		} else if acct != m.activeID && len(m.accounts) > 1 {
 			m.err = truncateErr(m.accountName(acct)+": "+msg.op, msg.err)
 		} else {
 			m.err = truncateErr(msg.op, msg.err)
@@ -1021,6 +1039,16 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		return m.moveCursor(1)
 	case ui.ActListUp:
 		return m.moveCursor(-1)
+	case ui.ActListHalfDown:
+		return m.moveCursor(max(listPage(m)/2, 1))
+	case ui.ActListHalfUp:
+		return m.moveCursor(-max(listPage(m)/2, 1))
+	case ui.ActListNextUnread:
+		return m.jumpUnread(1)
+	case ui.ActListPrevUnread:
+		return m.jumpUnread(-1)
+	case ui.ActSort:
+		return m.openSortPicker()
 	case ui.ActListTop:
 		return m, m.jump(sync.JumpStart)
 	case ui.ActListBottom:
@@ -1102,10 +1130,20 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case ui.ActSearchClear:
-		// Esc while browsing results clears the search (FR-F1); with no
-		// search open it is a no-op.
-		if m.search != nil {
+		// esc is the contextual back chain (KEYMAP_PLAN §4): close an
+		// open search first (FR-F1), else leave full-screen view
+		// (FR-E5), else drop a multi-select (FR-G3); with none of those
+		// it is a no-op. Modals and the composer intercept esc before
+		// the keymap ever gets here.
+		switch {
+		case m.search != nil:
 			return m, m.closeSearch()
+		case m.fullscreen:
+			m.toggleFullscreen()
+			return m, nil
+		case len(m.sel) > 0:
+			m.sel = map[mail.ID]bool{}
+			return m, nil
 		}
 		return m, nil
 
@@ -1133,6 +1171,14 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActSidebarUp:
 		if m.sidebarSel > 0 {
 			m.sidebarSel--
+		}
+		return m, nil
+	case ui.ActSidebarTop:
+		m.sidebarSel = 0
+		return m, nil
+	case ui.ActSidebarBottom:
+		if n := len(m.snap.Mailboxes); n > 0 {
+			m.sidebarSel = n - 1
 		}
 		return m, nil
 	case ui.ActOpenMailbox:

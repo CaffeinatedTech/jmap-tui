@@ -285,3 +285,59 @@ func TestEngineUnknownMailboxIsEmpty(t *testing.T) {
 		t.Fatalf("total %d rows %d, want empty", snap.Total, len(snap.Rows))
 	}
 }
+
+// TestEngineBackwardPrefetchKeepsCursor: a backward extension prepends
+// rows under the raw cursor index — the selection must stay on the same
+// message (FR-D5), which the id repair in snapshotLocked guarantees.
+func TestEngineBackwardPrefetchKeepsCursor(t *testing.T) {
+	e, _ := newTestEngine(t, &mockjmap.SyntheticMailbox{MailboxID: "mb-big", Prefix: "syn", Count: 200})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-big"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+	_ = e.Jump(ctx, JumpEnd)
+	_ = e.MoveCursor(-45) // near the top of the anchored chunk
+	want := e.CursorID()
+	if err := e.Prefetch(ctx); err != nil {
+		t.Fatalf("Prefetch: %v", err)
+	}
+	if got := e.CursorID(); got != want {
+		t.Fatalf("cursor drifted %s → %s after backward extension", want, got)
+	}
+	if id := e.Snapshot().Rows[e.Snapshot().Cursor].Summary.ID; id != want {
+		t.Fatalf("snapshot cursor row = %q, want %q", id, want)
+	}
+}
+
+// TestEngineJumpUnread: the scan force-extends forward and backward past
+// the loaded window (FR-D7) and reports ErrNoUnread when nothing is left.
+func TestEngineJumpUnread(t *testing.T) {
+	e, _ := newTestEngine(t, &mockjmap.SyntheticMailbox{MailboxID: "mb-big", Prefix: "syn", Count: 200})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-big"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+	// Forward across the chunk boundary: cursor at the last loaded row
+	// (idx 49, unread itself), the jump looks beyond the window.
+	_ = e.MoveCursor(49)
+	if err := e.JumpUnread(ctx, 1); err != nil {
+		t.Fatalf("JumpUnread(forward): %v", err)
+	}
+	if got := e.CursorID(); got != "syn-000050" {
+		t.Fatalf("forward jump landed on %q, want syn-000050", got)
+	}
+
+	// Backward from the end: rows above the window chunk must load.
+	if err := e.Jump(ctx, JumpEnd); err != nil {
+		t.Fatalf("JumpEnd: %v", err)
+	}
+	_ = e.MoveCursor(-49) // top of the anchored chunk (syn-000150)
+	if err := e.JumpUnread(ctx, -1); err != nil {
+		t.Fatalf("JumpUnread(backward): %v", err)
+	}
+	if got := e.CursorID(); got != "syn-000149" {
+		t.Fatalf("backward jump landed on %q, want syn-000149", got)
+	}
+}

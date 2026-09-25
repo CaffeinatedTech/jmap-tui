@@ -213,6 +213,30 @@ func (w *Window) NextNeed() (r Request, position, limit, dir int, ok bool) {
 	}
 }
 
+// NextNeedForce is NextNeed without the cursor-proximity threshold: the
+// unread-jump scan (FR-D7) deliberately extends rows the cursor has not
+// approached yet. dir > 0 requests the forward side, dir < 0 the backward
+// side; ok=false when that side is exhausted or a request is already
+// outstanding. Ordinary scrolling keeps using NextNeed (FR-D3).
+func (w *Window) NextNeedForce(dir int) (r Request, position, limit int, ok bool) {
+	if w.outstanding != 0 || w.dirty || len(w.ids) == 0 || w.total < 0 {
+		return 0, 0, 0, false
+	}
+	if dir > 0 {
+		if w.start+len(w.ids) >= w.total {
+			return 0, 0, 0, false
+		}
+		r, position, limit = w.issue(w.start+len(w.ids), w.cfg.Chunk, false, Forward)
+		return r, position, limit, true
+	}
+	if w.start <= 0 {
+		return 0, 0, 0, false
+	}
+	pos := max(0, w.start-w.cfg.Chunk)
+	r, position, limit = w.issue(pos, w.start-pos, false, Backward)
+	return r, position, limit, true
+}
+
 // issue allocates a request id and marks it outstanding. Any previously
 // outstanding request is superseded and its result will be discarded.
 func (w *Window) issue(position, limit int, replace bool, dir int) (Request, int, int) {

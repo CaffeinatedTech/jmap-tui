@@ -1,7 +1,7 @@
 # KEYMAP_PLAN — keymap redesign v2
 
-Status: **decided — ready to implement** · decisions finalised 2026-09-25 ·
-no code changes yet.
+Status: **implemented** 2026-09-25 (decisions finalised the same day).
+All bindings, the esc chain, unread jumps, sidebar `g/G`, and sort (FR-D8) landed; §9 records the resolutions.
 Scope: redesign default keybindings for consistency and muscle memory
 targeting vim-literate users and habits from mutt/neomutt, newsboat,
 ranger/lf, less, aerc, lazygit, Thunderbird. Remap action ids stay

@@ -128,13 +128,18 @@ undo_delay = "5s"   # 0s submits immediately
 |---|---|---|
 | List | `j` / `k`, `↓` / `↑` | Next / previous message |
 | List | `g` / `G` | Top / bottom |
-| List | `Space` / `u` | Toggle read/unread |
+| List | `ctrl+f` / `Space` (and `ctrl+b`) | Page down / page up |
+| List | `ctrl+d` / `ctrl+u` | Half page down / up |
+| List | `J` / `K` | Next / previous unread |
+| List | `u` | Toggle read/unread |
 | List | `*` | Toggle star/flag |
 | List | `x` | Select (multi-select; batched actions) |
-| List | `h` | Archive |
+| List | `e` | Archive |
 | List | `m` | Move to mailbox… |
 | List | `y` | Copy to mailbox… |
-| List | `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
+| List | `d` / `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
+| List | `s` / `o` | Sort by… (picker: newest, oldest, sender, subject, size — remembered per account in `prefs.toml`) |
+| List | `S` | Show/hide sizes |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
 | Any | `PgUp` / `PgDn` | Page the preview — from any pane, focus stays put |
@@ -145,11 +150,11 @@ undo_delay = "5s"   # 0s submits immediately
 | Drafts | `Enter` | Edit the draft in the composer |
 | Any | `/` | Search — server-side query bar; `Enter` confirms and jumps into the results, `/` re-focuses the bar |
 | Any | `ctrl+s` | Advanced search (fielded form — works from the query bar or anywhere else) |
-| Any | `Esc` | Clear the search (while a search view is open; no-op otherwise) |
+| Any | `Esc` | Back: close the search → exit full-screen → clear the selection |
 | Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
-| Any | `S` | Switch account (instant — every account stays warm) |
+| Any | `A` | Switch account (instant — every account stays warm) |
 | Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
 | Any | `ctrl+a` | Add or edit an account (opens the wizard; the TUI restarts) |
 | Any | `[` | Show/hide sidebar |

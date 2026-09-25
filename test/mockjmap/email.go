@@ -240,6 +240,24 @@ type scopedEmail struct {
 	id       string
 	threadID string
 	at       time.Time
+	from     string // lowercased senders, for from sorting
+	subject  string
+	size     uint64
+}
+
+// emailSortLess orders two candidates by one sort property; unknown
+// properties fall back to receivedAt. Equal keys keep caller stability.
+func emailSortLess(a, b scopedEmail, prop string) bool {
+	switch prop {
+	case "from":
+		return a.from < b.from
+	case "subject":
+		return a.subject < b.subject
+	case "size":
+		return a.size < b.size
+	default: // "receivedAt" and friends
+		return a.at.Before(b.at)
+	}
 }
 
 // hasSearchFilter reports whether the filter carries content conditions
@@ -332,7 +350,14 @@ func (snap *emailSnapshot) scoped(f queryFilter) []scopedEmail {
 		if search && !matchesSearch(e, f) {
 			return
 		}
-		out = append(out, scopedEmail{id: e.ID, threadID: e.ThreadID, at: e.ReceivedAt})
+		out = append(out, scopedEmail{
+			id:       e.ID,
+			threadID: e.ThreadID,
+			at:       e.ReceivedAt,
+			from:     strings.ToLower(strings.Join(addrStrings(e.From), ", ")),
+			subject:  strings.ToLower(e.Subject),
+			size:     e.Size,
+		})
 	}
 	switch {
 	case f.InThread != "":
@@ -369,15 +394,22 @@ func emailQueryResponse(snap *emailSnapshot, args json.RawMessage) map[string]an
 
 	cands := snap.scoped(q.Filter)
 
-	desc := true // RFC 8621 §4.4.1: default sort is receivedAt descending
+	// RFC 8621 §4.4.1: default sort is receivedAt descending. Any
+	// property the client asks for is honoured (FR-D8).
+	prop := "receivedAt"
+	desc := true
 	if len(q.Sort) > 0 {
+		if q.Sort[0].Property != "" {
+			prop = q.Sort[0].Property
+		}
 		desc = !q.Sort[0].IsAscending
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
+		less := emailSortLess(cands[i], cands[j], prop)
 		if desc {
-			return cands[i].at.After(cands[j].at)
+			return !less && emailSortLess(cands[j], cands[i], prop)
 		}
-		return cands[i].at.Before(cands[j].at)
+		return less
 	})
 
 	if q.CollapseThreads {

@@ -118,8 +118,8 @@ func TestKeymapAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKeyMap: %v", err)
 	}
-	if act, ok := km.Match(ui.PaneAny, "shift+s"); !ok || act != ui.ActAccountSwitch {
-		t.Fatalf("shift+s = %v,%v, want account.switch", act, ok)
+	if act, ok := km.Match(ui.PaneAny, "shift+a"); !ok || act != ui.ActAccountSwitch {
+		t.Fatalf("shift+a = %v,%v, want account.switch", act, ok)
 	}
 	if act, ok := km.Match(ui.PaneAny, "i"); !ok || act != ui.ActUnified {
 		t.Fatalf("i = %v,%v, want unified.toggle", act, ok)
@@ -292,7 +292,7 @@ func TestUnifiedActionsRouteToOwner(t *testing.T) {
 	if owner, _, _ := m.cursorRef(); owner != "work" {
 		t.Fatalf("cursor owner = %q, want work", owner)
 	}
-	_, cmd = m.handleKey(key(" "))
+	_, cmd = m.handleKey(key("u"))
 	pump(t, m, cmd)
 
 	if !m.snaps["work"].Rows[0].Summary.Keywords.Has("$seen") {
@@ -313,7 +313,7 @@ func TestUnifiedActionsRouteToOwner(t *testing.T) {
 	if owner, _, _ := m.cursorRef(); owner != "personal" {
 		t.Fatalf("cursor owner = %q, want personal", owner)
 	}
-	_, cmd = m.handleKey(key(" "))
+	_, cmd = m.handleKey(key("u"))
 	pump(t, m, cmd)
 	if !m.snaps["personal"].Rows[0].Summary.Keywords.Has("$seen") {
 		t.Fatalf("personal row not marked: %+v", m.snaps["personal"].Rows[0].Summary)

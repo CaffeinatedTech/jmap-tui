@@ -37,6 +37,10 @@ type AccountPrefs struct {
 	// ArchiveMailbox is the mailbox id used by archive (FR-G4) when the
 	// server exposes no role-archive mailbox.
 	ArchiveMailbox string `toml:"archive_mailbox"`
+
+	// Sort is the list order id (FR-D8: "newest", "oldest", "sender",
+	// "subject", "size"); empty means the default, newest first.
+	Sort string `toml:"sort,omitempty"`
 }
 
 // DefaultPrefsPath returns the prefs file location: prefs.toml in the same
@@ -103,5 +107,24 @@ func (p *Prefs) SetArchiveMailbox(accountID, mailboxID string) {
 	}
 	a := p.Accounts[accountID]
 	a.ArchiveMailbox = mailboxID
+	p.Accounts[accountID] = a
+}
+
+// Sort returns the account's remembered list order id (FR-D8); empty is
+// the default.
+func (p *Prefs) Sort(accountID string) string {
+	if p == nil || p.Accounts == nil {
+		return ""
+	}
+	return p.Accounts[accountID].Sort
+}
+
+// SetSort remembers the list order for the account.
+func (p *Prefs) SetSort(accountID, order string) {
+	if p.Accounts == nil {
+		p.Accounts = map[string]AccountPrefs{}
+	}
+	a := p.Accounts[accountID]
+	a.Sort = order
 	p.Accounts[accountID] = a
 }

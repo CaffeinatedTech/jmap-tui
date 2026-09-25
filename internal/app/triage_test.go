@@ -74,10 +74,10 @@ func TestSelectThenBatchReadAndUndo(t *testing.T) {
 		t.Fatalf("selection = %v, want one row", m.sel)
 	}
 
-	// space marks the selection read in one batched action.
-	_, cmd := m.handleKey(key(" "))
+	// u marks the selection read in one batched action.
+	_, cmd := m.handleKey(key("u"))
 	if cmd == nil {
-		t.Fatal("space produced no command")
+		t.Fatal("u produced no command")
 	}
 	pump(t, m, cmd)
 	if len(m.sel) != 0 {
@@ -138,7 +138,7 @@ func TestMoveViaPicker(t *testing.T) {
 func TestArchiveUsesRoleMailbox(t *testing.T) {
 	m := triageTestModel(t)
 
-	_, cmd := m.handleKey(key("h"))
+	_, cmd := m.handleKey(key("e"))
 	pump(t, m, cmd)
 	if m.picker != nil {
 		t.Fatal("y opened the picker although an archive role exists")
@@ -165,9 +165,9 @@ func TestArchivePromptRemembersChoice(t *testing.T) {
 	m.opts.AccountID = "test"
 	pump(t, m, m.loadAccountCmd())
 
-	_, cmd := m.handleKey(key("h"))
+	_, cmd := m.handleKey(key("e"))
 	if cmd != nil || m.picker == nil {
-		t.Fatal("y did not open the archive-destination picker")
+		t.Fatal("e did not open the archive-destination picker")
 	}
 	// Choose the only non-active mailbox.
 	_, _ = m.handleKey(key("j"))
@@ -201,7 +201,7 @@ func TestArchivePromptRemembersChoice(t *testing.T) {
 		t.Fatalf("prefs file missing the choice: %s", data)
 	}
 	// A second archive goes straight to the remembered mailbox.
-	_, cmd = m.handleKey(key("h"))
+	_, cmd = m.handleKey(key("e"))
 	pump(t, m, cmd)
 	if m.picker != nil {
 		t.Fatal("archive prompt reopened although prefs hold the choice")
@@ -330,14 +330,14 @@ func TestUndoWithoutToastIsNoop(t *testing.T) {
 
 func TestKeywordDirectionFollowsState(t *testing.T) {
 	m := triageTestModel(t)
-	// e2 is unread: space marks read.
-	_, cmd := m.handleKey(key(" "))
+	// e2 is unread: u marks read.
+	_, cmd := m.handleKey(key("u"))
 	pump(t, m, cmd)
 	if m.toast == nil || !strings.Contains(m.toast.text, "Marked read") {
 		t.Fatalf("first toast = %+v", m.toast)
 	}
-	// The confirmed state is read: space marks unread.
-	_, cmd = m.handleKey(key(" "))
+	// The confirmed state is read: u marks unread.
+	_, cmd = m.handleKey(key("u"))
 	pump(t, m, cmd)
 	if m.toast == nil || !strings.Contains(m.toast.text, "Marked unread") {
 		t.Fatalf("second toast = %+v", m.toast)

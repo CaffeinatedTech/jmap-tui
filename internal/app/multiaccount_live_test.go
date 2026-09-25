@@ -316,7 +316,7 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 		t.Fatalf("%s row %s not on the server", other, otherRow.ID)
 	}
 
-	_, cmd = m.handleKey(key(" "))
+	_, cmd = m.handleKey(key("u"))
 	pump(t, m, cmd)
 
 	ownerAfter, _ := readSeen(owner, row0.ID)
@@ -333,7 +333,7 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 
 	// Cleanup: toggle back, then sweep every fixture subject out of both
 	// accounts (Sent copy + recipient inbox; absent rows are a no-op).
-	_, cmd = m.handleKey(key(" "))
+	_, cmd = m.handleKey(key("u"))
 	pump(t, m, cmd)
 	ownerRestored, _ := readSeen(owner, row0.ID)
 	if ownerRestored != ownerBefore {

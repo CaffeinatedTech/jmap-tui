@@ -84,8 +84,10 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-D2] [M1]** Threads collapsed by default via `collapseThreads=true`; expanding loads full thread (`Thread/get` + `Email/get`) in place. Collapse state is per-view, in-memory.
 - **[FR-D3] [M1]** **Rolling window:** the query runs server-side with `limit` = chunk (default 50). Scrolling within 10 rows of a loaded edge prefetches the next chunk (`position`/`anchor` offsets) so the user only ever experiences smooth endless scroll. Window may grow to a configurable cap (default 2,000 rows); scrolling further re-anchors and trims the far edge, silently — to the user it is still endless.
 - **[FR-D4] [M1]** Only **summaries** are fetched for the window (`Email/get` with small property set). Bodies load lazily on open.
-- **[FR-D5] [M2]** While a live update rearranges the list, preserve the user's visual position by message id, not row index.
+- **[FR-D5] [M2]** While a live update rearranges the list, preserve the user's visual position by message id, not row index. *(`snapshotLocked` now re-anchors the engine cursor from its tracked id on every publish — extensions and live patches previously shifted a raw index and moved the selection; found via the keymap v2 pass, 2026-09-25.)*
 - **[FR-D6] [M1]** List must render its first frame from data already in memory within **16 ms**; any fetch shows skeletons/spinner rows, never a freeze.
+- **[FR-D7] [M7]** `J`/`K` jump the cursor to the next/previous unread message. The scan runs engine-side and force-extends the window while it looks (unlike the scrolling prefetch it ignores the cursor-proximity threshold), bounded to a fixed number of chunk fetches per press; nothing found ⇒ the non-fatal notice "no more unread". The unified view scans its loaded merged rows. *(Added post-M7 2026-09-25, KEYMAP_PLAN.)*
+- **[FR-D8] [M7]** Server-side list sort (`s`/`o` picker): newest first (default), oldest first, by sender, by subject, by size. The window re-queries like a mailbox open (one outstanding query, cursor to top), the choice persists per account in `prefs.toml` (FR-J1), and a fresh client restores it. Thread and search queries keep their own order; the unified merge stays date-ordered. *(Added post-M7 2026-09-25, KEYMAP_PLAN.)*
 
 ## FR-E — Reading
 
@@ -98,7 +100,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## FR-F — Search
 
-- **[FR-F1] [M4]** `/` opens the query bar; typing issues debounced server-side `Email/query` filters (`text`, `from`, `to`, `subject`, `after`/`before`, `hasKeyword`, `inMailbox`, `hasAttachment`). Results reuse the list component; `Esc` returns to the mailbox view with position preserved.
+- **[FR-F1] [M4]** `/` opens the query bar; typing issues debounced server-side `Email/query` filters (`text`, `from`, `to`, `subject`, `after`/`before`, `hasKeyword`, `inMailbox`, `hasAttachment`). Results reuse the list component; `Esc` returns to the mailbox view with position preserved — `Esc` is the general back key (close search → exit full-screen → clear selection; KEYMAP_PLAN §4).
 - **[FR-F2] [M4]** Advanced search modal (`ctrl-s`): fielded form generating filter operators. *(`/ /` was the original wording — dropped at the M7 docs gate 2026-09-25: `/` must stay typeable in queries, and `ctrl-s` reaches the form from the bar or from a closed search view.)*
 - **[FR-F3] [M4]** Search scope defaults to current mailbox; toggle to all mailboxes. Unified-account mode searches across selected accounts (parallel queries, merged). *(The unified-account sentence rides M6 — it needs the multi-account Hub (FR-A4/A5); deferred at the M4 gate 2026-09-22.)*
 
@@ -123,7 +125,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 - **[FR-I1] [M1]** Layout: three panes (sidebar 24–30 cols · list · preview), responsive: two-pane < 100 cols, single-pane with stack navigation < 60 cols.
 - **[FR-I2] [M1]** **Minimal & elegant theme system:** Lipgloss v2 adaptive colors (dark default, light aware), one accent color, semantic colors only (unread, danger, success, muted). Border styles used sparingly; whitespace does the separating. No gradients/emoji chrome in v1.
-- **[FR-I3] [M1]** Vim-style keys as listed in README, fully remappable in config. Unambiguous defaults; conflicts forbidden.
+- **[FR-I3] [M1]** Vim-style keys as listed in README, fully remappable in config. Unambiguous defaults; conflicts forbidden. *Defaults redesigned as keymap v2 (2026-09-25, KEYMAP_PLAN.md): motion letters are motion-only (`h` archive became `e`), `Space` pages, `d` deletes, `e` archives, sizes moved to `S` so the account switcher could take `A`, `esc` is a contextual back chain — action ids unchanged, existing `[keys]` remaps keep working.*
 - **[FR-I4] [M1]** Help overlay (`?`) auto-generated from the keymap, context-sensitive per pane.
 - **[FR-I5] [M2]** Status line: connection state per account, last-sync time, sync errors, current mailbox counts.
 - **[FR-I6] [M5]** Toasts (bottom-right) for async results; errors always actionable ("Retry", "Show details").
