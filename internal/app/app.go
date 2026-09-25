@@ -454,7 +454,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
-	return m, nil
+
+	// The filepicker's directory reads arrive as unexported bubbles
+	// message types, so no case above can ever match them: hand every
+	// unhandled message to the open picker, or its listing never loads
+	// (FR-E4 save, FR-H3 attach). Keys never reach here — they return
+	// above — and a picker ignores messages carrying another picker's id.
+	var cmd tea.Cmd
+	if m.fp != nil {
+		next, c := m.fp.fp.Update(msg)
+		m.fp.fp = next
+		cmd = c
+	}
+	if m.attachPick != nil {
+		next, c := m.attachPick.fp.Update(msg)
+		m.attachPick.fp = next
+		cmd = tea.Batch(cmd, c)
+	}
+	return m, cmd
 }
 
 func truncateErr(op string, err error) string {
@@ -1373,6 +1390,7 @@ func (m *Model) uiState() ui.State {
 		st.FilePick = &ui.FilePickView{
 			Title: "Save attachments to…",
 			Path:  m.fp.fp.CurrentDirectory,
+			Hint:  "j/k move · l open · h back · enter save · esc cancel",
 			View:  m.fp.fp.View(),
 		}
 	}
@@ -1389,6 +1407,7 @@ func (m *Model) uiState() ui.State {
 		st.FilePick = &ui.FilePickView{
 			Title: "Attach a file…",
 			Path:  m.attachPick.fp.CurrentDirectory,
+			Hint:  "j/k move · l open · h back · enter attach · esc cancel",
 			View:  m.attachPick.fp.View(),
 		}
 	}

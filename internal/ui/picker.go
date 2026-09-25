@@ -29,6 +29,7 @@ type PickerItem struct {
 type FilePickView struct {
 	Title string
 	Path  string // directory currently browsed
+	Hint  string // key line — the widget browses, it has no path field
 	View  string // pre-rendered filepicker body
 }
 
@@ -78,24 +79,32 @@ func renderPicker(w, h int, st State) string {
 }
 
 // renderFilePick draws the attachment-save overlay: title, browsed path,
-// and the pre-rendered filepicker body (FR-E4).
+// the widget's key line, and the pre-rendered filepicker body (FR-E4).
 func renderFilePick(w, h int, st State) string {
 	th := st.Theme
 	fp := st.FilePick
 
 	boxW := 56
 	lines := strings.Split(strings.TrimRight(fp.View, "\n"), "\n")
-	boxH := min(len(lines)+4, max(h-2, 6))
+	header := 3 // title + path + rule
+	if fp.Hint != "" {
+		header++
+	}
+	boxH := min(len(lines)+header+1, max(h-2, 6))
 
 	var body strings.Builder
 	body.WriteString(th.Accent.Render(truncate(fp.Title, boxW-2)))
 	body.WriteString("\n")
 	body.WriteString(th.Muted.Render(truncate(fp.Path, boxW-2)))
 	body.WriteString("\n")
+	if fp.Hint != "" {
+		body.WriteString(th.Muted.Render(truncate(fp.Hint, boxW-2)))
+		body.WriteString("\n")
+	}
 	body.WriteString(th.Rule.Render(strings.Repeat("─", boxW-2)))
 	body.WriteString("\n")
 	for i, ln := range lines {
-		if i >= boxH-3 {
+		if i >= boxH-header {
 			break
 		}
 		body.WriteString(truncate(ln, boxW-2))

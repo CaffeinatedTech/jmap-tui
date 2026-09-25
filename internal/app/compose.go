@@ -1162,8 +1162,10 @@ func (m *Model) attachPickKey(msg tea.KeyPressMsg) tea.Cmd {
 	default:
 		next, cmd := m.attachPick.fp.Update(msg)
 		m.attachPick.fp = next
-		if path := m.attachPick.fp.FileSelected; path != "" {
-			m.attachPick.fp.FileSelected = ""
+		// DidSelectFile must run on the post-update model: the picker only
+		// sets Path inside Update (the bubbles filepicker documents this
+		// order). FileSelected, the v1 field, is never written in v2.2.1.
+		if ok, path := m.attachPick.fp.DidSelectFile(msg); ok && path != "" {
 			m.attachPick = nil
 			return tea.Batch(cmd, m.uploadAttachmentCmd(path))
 		}

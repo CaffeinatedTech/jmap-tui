@@ -557,6 +557,44 @@ func TestUploadAttachmentCompletes(t *testing.T) {
 	}
 }
 
+// TestAttachPickerListsAndSelects drives the chooser itself end to end —
+// the one path the other tests bypass. The filepicker's directory read is
+// an unexported bubbles message, so unless the model forwards it the
+// listing stays empty ("Bummer. No Files Found.") and enter never attaches
+// (FR-H3).
+func TestAttachPickerListsAndSelects(t *testing.T) {
+	m, _ := composeTestModel(t)
+	_, cmd := m.handleKey(key("n"))
+	pump(t, m, cmd)
+	path := writeAttachFile(t)
+
+	cmd = m.composeKey(keyCtrl('a'))
+	if m.attachPick == nil {
+		t.Fatal("ctrl+a did not open the attach picker")
+	}
+	pump(t, m, cmd) // filepicker Init readDir
+	view := m.attachPick.fp.View()
+	if !strings.Contains(view, "notes.txt") {
+		t.Fatalf("listing never loaded: %q", view)
+	}
+	if strings.Contains(view, "Bummer") {
+		t.Fatalf("empty-directory placeholder shown: %q", view)
+	}
+
+	cmd = m.composeKey(keyEnter())
+	if m.attachPick != nil {
+		t.Fatal("picker stayed open after enter")
+	}
+	if len(m.compose.atts) != 1 || m.compose.atts[0].name != filepath.Base(path) {
+		t.Fatalf("attachment not staged: %+v", m.compose.atts)
+	}
+	pump(t, m, cmd)
+	a := m.compose.atts[0]
+	if a.state != attReady || a.att.BlobID == "" {
+		t.Fatalf("upload did not complete: state=%v err=%q", a.state, a.err)
+	}
+}
+
 // TestEscCancelsInFlightUpload: while an upload runs, esc cancels the
 // transfer instead of closing the composer (FR-H3 cancel).
 func TestEscCancelsInFlightUpload(t *testing.T) {

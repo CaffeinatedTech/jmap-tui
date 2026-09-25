@@ -264,6 +264,11 @@ func TestSaveAttachments(t *testing.T) {
 	saved := downloadsDirFn
 	downloadsDirFn = func() string { return dir }
 	t.Cleanup(func() { downloadsDirFn = saved })
+	// Something to actually list — an empty fixture would let a picker
+	// whose directory read never reached the model pass unnoticed.
+	if err := os.WriteFile(filepath.Join(dir, "report.pdf"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	// The cursor message (e2) carries the attachment fixture.
 	pump(t, m, m.loadBody(m.cursorID()))
@@ -283,6 +288,9 @@ func TestSaveAttachments(t *testing.T) {
 	}
 	if m.fp.fp.CurrentDirectory != dir {
 		t.Fatalf("picker root = %q, want %q", m.fp.fp.CurrentDirectory, dir)
+	}
+	if got := m.fp.fp.View(); !strings.Contains(got, "report.pdf") {
+		t.Fatalf("save listing never loaded: %q", got)
 	}
 
 	// enter saves into the browsed directory.

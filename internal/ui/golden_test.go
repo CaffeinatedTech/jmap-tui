@@ -173,6 +173,7 @@ func goldenFrames() []frame {
 			st.FilePick = &FilePickView{
 				Title: "Save attachments to…",
 				Path:  "/home/tester/Downloads",
+				Hint:  "j/k move · l open · h back · enter save · esc cancel",
 				View:  "  drwxr-xr-x  agent-test\n  drwxr-xr-x  invoices\n",
 			}
 			return st
