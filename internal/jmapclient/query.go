@@ -175,9 +175,12 @@ func (c *Client) FetchSummaries(ctx context.Context, ids []mail.ID) ([]mail.Emai
 // bodyFetchProperties is the full property set for body fetches: summary
 // metadata plus the body structure parts and their values. Listing the
 // body properties explicitly is required — a Properties list that omits
-// them yields null body structure even with FetchAllBodyValues.
+// them yields null body structure even with FetchAllBodyValues. The
+// addressing and RFC 5322 threading fields ride along so one fetch serves
+// both the preview and a reply/forward (FR-H2).
 var bodyFetchProperties = append(append([]string{}, summaryProperties...),
-	"blobId", "textBody", "htmlBody", "attachments", "bodyValues")
+	"blobId", "textBody", "htmlBody", "attachments", "bodyValues",
+	"cc", "bcc", "replyTo", "messageId", "references", "inReplyTo")
 
 // bodyProperties keeps the fetched body parts lean: identity enough to
 // download attachments later, never content (FR-E4, NFR-4).
@@ -212,7 +215,22 @@ func (c *Client) FetchBody(ctx context.Context, id mail.ID) (mail.EmailBody, err
 }
 
 func convertBody(e *email.Email) mail.EmailBody {
-	body := mail.EmailBody{ID: mail.ID(e.ID)}
+	body := mail.EmailBody{
+		ID:         mail.ID(e.ID),
+		ThreadID:   mail.ID(e.ThreadID),
+		From:       convertAddresses(e.From),
+		To:         convertAddresses(e.To),
+		Cc:         convertAddresses(e.CC),
+		Bcc:        convertAddresses(e.BCC),
+		ReplyTo:    convertAddresses(e.ReplyTo),
+		Subject:    e.Subject,
+		MessageID:  append([]string(nil), e.MessageID...),
+		References: append([]string(nil), e.References...),
+		InReplyTo:  append([]string(nil), e.InReplyTo...),
+	}
+	if e.ReceivedAt != nil {
+		body.ReceivedAt = *e.ReceivedAt
+	}
 	for _, p := range e.TextBody {
 		if p.Type != "text/plain" {
 			continue

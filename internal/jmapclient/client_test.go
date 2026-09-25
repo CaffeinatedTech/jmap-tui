@@ -114,11 +114,20 @@ func TestMailboxesBeforeConnect(t *testing.T) {
 	}
 }
 
-func TestUnimplementedMethodsAreTyped(t *testing.T) {
+// TestSendGuardsCoverBadDrafts pins the pre-flight rejections Send makes
+// before it touches the network: no identity and no drafts mailbox are
+// configuration errors, not server round-trips (FR-A6, FR-H1).
+func TestSendGuardsCoverBadDrafts(t *testing.T) {
 	c, _ := newTestClient(t, testPassword)
 	ctx := context.Background()
-	if _, err := c.Send(ctx, mail.Draft{}); !errors.Is(err, ErrUnimplemented) {
-		t.Errorf("Send err = %v", err)
+	if _, err := c.Send(ctx, mail.Draft{MailboxID: "mb-drafts"}); err == nil {
+		t.Error("Send without an identity must fail before any network call")
+	}
+	if _, err := c.Send(ctx, mail.Draft{IdentityID: "id-1"}); err == nil {
+		t.Error("Send without a drafts mailbox must fail before any network call")
+	}
+	if _, err := c.SaveDraft(ctx, mail.Draft{}); err == nil {
+		t.Error("SaveDraft without a drafts mailbox must fail before any network call")
 	}
 	// A no-op mutation does nothing and must not need the network.
 	res, err := c.Mutate(ctx, mail.Mutation{})

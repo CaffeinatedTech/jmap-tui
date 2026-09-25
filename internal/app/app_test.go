@@ -33,6 +33,9 @@ func newTestModelWith(t *testing.T, mailboxes []mockjmap.Mailbox) (*Model, *mock
 	srv.SetEmails([]mockjmap.Email{
 		{
 			ID: "e2", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
+			MessageID:  []string{"<m2@example.test>"},
+			References: []string{"<m1@example.test>"},
+			InReplyTo:  []string{"<m1@example.test>"},
 			From:       []mockjmap.Address{{Name: "Bob", Email: "bob@example.test"}},
 			Subject:    "Re: thread starter",
 			ReceivedAt: time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC),
@@ -43,6 +46,7 @@ func newTestModelWith(t *testing.T, mailboxes []mockjmap.Mailbox) (*Model, *mock
 		},
 		{
 			ID: "e1", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
+			MessageID:  []string{"<m1@example.test>"},
 			From:       []mockjmap.Address{{Name: "Alice", Email: "alice@example.test"}},
 			Subject:    "thread starter",
 			ReceivedAt: time.Date(2026, 9, 10, 9, 0, 0, 0, time.UTC),
@@ -66,17 +70,30 @@ func newTestModelWith(t *testing.T, mailboxes []mockjmap.Mailbox) (*Model, *mock
 }
 
 // pump executes a Cmd and feeds its message into the model, following the
-// returned command chain.
+// returned command chain — including everything inside a tea.Batch, which
+// a real program runs concurrently. A generous iteration cap keeps a
+// self-rearming timer from hanging the suite.
 func pump(t *testing.T, m *Model, cmd tea.Cmd) {
 	t.Helper()
-	for cmd != nil {
-		msg := cmd()
-		if msg == nil {
-			return
+	queue := []tea.Cmd{cmd}
+	for i := 0; i < 400 && len(queue) > 0; i++ {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
 		}
-		var next tea.Cmd
-		_, next = m.Update(msg)
-		cmd = next
+		msg := c()
+		if msg == nil {
+			continue
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		_, next := m.Update(msg)
+		if next != nil {
+			queue = append(queue, next)
+		}
 	}
 }
 

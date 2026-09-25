@@ -88,6 +88,7 @@ func runTUI(args []string) error {
 		AccountID: copts.accountID,
 		Prefs:     prefs,
 		PrefsPath: prefsPath,
+		UndoDelay: resolveUndoDelay(cfg),
 	})
 	program := tea.NewProgram(m, tea.WithContext(m.Ctx()))
 
@@ -186,6 +187,20 @@ func connectAccount(opts connectOpts) (*jmapclient.Client, *config.Config, error
 		return nil, nil, fmt.Errorf("connect to %s: %w", serverURL, err)
 	}
 	return client, cfg, nil
+}
+
+// resolveUndoDelay reads [compose].undo_delay (FR-H5), defaulting to the
+// 5s cancel window REQUIREMENTS specifies. A zero value means the
+// submission leaves immediately with no client-side hold.
+func resolveUndoDelay(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.Compose.UndoDelay == "" {
+		return 5 * time.Second
+	}
+	d, err := time.ParseDuration(cfg.Compose.UndoDelay)
+	if err != nil || d < 0 {
+		return 5 * time.Second
+	}
+	return d
 }
 
 // buildKeymap applies config key remaps (FR-I3); unknown actions and

@@ -14,9 +14,6 @@ var ErrAuth = errors.New("authentication failed (check username and app password
 // SessionURL is configured.
 var ErrNoServerURL = errors.New("no server URL configured")
 
-// ErrUnimplemented marks provider methods whose milestone has not landed.
-var ErrUnimplemented = errors.New("jmapclient: method not implemented in this milestone")
-
 // ErrNotFound wraps a server notFound response for a requested object id.
 var ErrNotFound = errors.New("object not found on server")
 

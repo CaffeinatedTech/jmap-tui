@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // --- Email/set (M3 triage surface) ---
@@ -13,8 +14,44 @@ import (
 // emailSetArgs is the RFC 8620 §5.3 Email/set request as the fake models it:
 // patches stay raw so keyword and mailbox deltas decode per key.
 type emailSetArgs struct {
-	Update  map[string]map[string]any `json:"update"`
-	Destroy []string                  `json:"destroy"`
+	Create  map[string]json.RawMessage `json:"create"`
+	Update  map[string]map[string]any  `json:"update"`
+	Destroy []string                   `json:"destroy"`
+}
+
+// createdEmail is the RFC 8621 §4.6 create object: content properties only
+// — the fake mirrors the spec's immutability by accepting them solely here.
+type createdEmail struct {
+	MailboxIDs map[string]bool `json:"mailboxIds"`
+	Keywords   map[string]bool `json:"keywords"`
+	MessageID  []string        `json:"messageId"`
+	InReplyTo  []string        `json:"inReplyTo"`
+	References []string        `json:"references"`
+	From       []Address       `json:"from"`
+	To         []Address       `json:"to"`
+	Cc         []Address       `json:"cc"`
+	Bcc        []Address       `json:"bcc"`
+	ReplyTo    []Address       `json:"replyTo"`
+	Subject    string          `json:"subject"`
+	ReceivedAt *time.Time      `json:"receivedAt"`
+	TextBody   []partRef       `json:"textBody"`
+	HTMLBody   []partRef       `json:"htmlBody"`
+	BodyValues map[string]struct {
+		Value string `json:"value"`
+	} `json:"bodyValues"`
+	Attachments []struct {
+		BlobID      string `json:"blobId"`
+		Name        string `json:"name"`
+		Type        string `json:"type"`
+		Size        uint64 `json:"size"`
+		Disposition string `json:"disposition"`
+	} `json:"attachments"`
+}
+
+// partRef is the subset of EmailBodyPart a create needs.
+type partRef struct {
+	PartID string `json:"partId"`
+	Type   string `json:"type"`
 }
 
 // setError is the RFC 8620 SetError object.
@@ -22,11 +59,14 @@ type setError = map[string]string
 
 // buildSetResponse assembles the Email/set response map with the exact wire
 // keys go-jmap decodes.
-func buildSetResponse(s *Server, oldState string, updated, destroyed []string, notUpdated, notDestroyed map[string]setError) map[string]any {
+func buildSetResponse(s *Server, oldState string, created map[string]any, updated, destroyed []string, notUpdated, notDestroyed map[string]setError) map[string]any {
 	out := map[string]any{
 		"accountId": "acc1",
 		"oldState":  oldState,
 		"newState":  s.emailState(),
+	}
+	if len(created) > 0 {
+		out["created"] = created
 	}
 	if len(updated) > 0 {
 		out["updated"] = updated
@@ -56,13 +96,15 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 	_ = json.Unmarshal(args, &req)
 
 	oldState := s.emailState()
+	created := map[string]any{}
+	notCreated := map[string]setError{}
 	notUpdated := map[string]setError{}
 	notDestroyed := map[string]setError{}
 	updated := []string{}
 	destroyed := []string{}
 
 	// countDelta accumulates per-mailbox total/unread changes so fixture
-	// counts stay honest after moves and destroys (FR-B6 realism).
+	// counts stay honest after creates, moves, and destroys (FR-B6 realism).
 	type delta struct{ total, unread int }
 	countDelta := map[string]*delta{}
 	deltas := func(mbs []string) []*delta {
@@ -77,6 +119,45 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 		}
 		return out
 	}
+
+	// --- creates (M5 drafts): Email content is immutable in RFC 8621
+	// §4.1.2, so this is the only way a message's content ever gets
+	// written. The fake accepts content keys here and nowhere else.
+	for handle, raw := range req.Create {
+		var ce createdEmail
+		if err := json.Unmarshal(raw, &ce); err != nil {
+			notCreated[handle] = setError{"type": "invalidProperties", "description": err.Error()}
+			continue
+		}
+		e, mbs := s.materialiseCreateLocked(handle, ce)
+		s.createSeq++
+		e.ID = fmt.Sprintf("cr%06d", s.createSeq)
+		if ce.InReplyTo != nil && e.ThreadID == "" {
+			// Thread a reply into the original's thread the way a server
+			// does: match on the replied-to Message-ID.
+			if orig := s.byMessageIDLocked(ce.InReplyTo[0]); orig != nil {
+				e.ThreadID = orig.ThreadID
+			}
+		}
+		if e.ThreadID == "" {
+			e.ThreadID = "th-" + e.ID
+		}
+		s.emails = append(s.emails, *e)
+		for _, d := range deltas(mbs) {
+			d.total++
+			if !e.Keywords["$seen"] {
+				d.unread++
+			}
+		}
+		created[handle] = map[string]any{
+			"id":       e.ID,
+			"blobId":   "blob-" + e.ID,
+			"threadId": e.ThreadID,
+			"size":     e.Size,
+		}
+		updated = append(updated, e.ID)
+	}
+	sort.Strings(updated)
 
 	// --- updates ---
 	for id, patch := range req.Update {
@@ -186,7 +267,7 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 	}
 	sort.Strings(destroyed)
 
-	if len(updated) > 0 || len(destroyed) > 0 {
+	if len(created) > 0 || len(updated) > 0 || len(destroyed) > 0 {
 		s.emailVersion++
 		s.journal = append(s.journal, journalEntry{
 			typ:       "Email",
@@ -220,7 +301,107 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 		})
 	}
 
-	return buildSetResponse(s, oldState, updated, destroyed, notUpdated, notDestroyed)
+	return buildSetResponse(s, oldState, created, updated, destroyed, notUpdated, notDestroyed)
+}
+
+// materialiseCreateLocked turns a create object into a fixture plus the
+// mailboxes it lands in, deriving the body, preview, and size the way a
+// server does when it renders the message (RFC 8621 §4.6).
+func (s *Server) materialiseCreateLocked(handle string, ce createdEmail) (*Email, []string) {
+	e := &Email{
+		Keywords:   map[string]bool{},
+		MessageID:  ce.MessageID,
+		InReplyTo:  ce.InReplyTo,
+		References: ce.References,
+		From:       ce.From,
+		To:         ce.To,
+		Cc:         ce.Cc,
+		Bcc:        ce.Bcc,
+		ReplyTo:    ce.ReplyTo,
+		Subject:    ce.Subject,
+		ReceivedAt: time.Now().UTC(),
+	}
+	if ce.ReceivedAt != nil {
+		e.ReceivedAt = ce.ReceivedAt.UTC()
+	}
+	for mb := range ce.MailboxIDs {
+		e.MailboxIDs = append(e.MailboxIDs, mb)
+	}
+	sort.Strings(e.MailboxIDs)
+	for kw, on := range ce.Keywords {
+		if on {
+			e.Keywords[kw] = true
+		}
+	}
+	if e.MessageID == nil {
+		e.MessageID = []string{fmt.Sprintf("<%s@mock.jmap>", handle)}
+	}
+
+	// Body: the first text/plain part's value wins, exactly like the
+	// client's FR-E2 preference order.
+	for _, p := range ce.TextBody {
+		if p.Type != "text/plain" {
+			continue
+		}
+		if bv, ok := ce.BodyValues[p.PartID]; ok {
+			e.TextBody = bv.Value
+			break
+		}
+	}
+	if e.TextBody == "" {
+		for _, bv := range ce.BodyValues {
+			e.TextBody = bv.Value
+			break
+		}
+	}
+	for _, p := range ce.HTMLBody {
+		if p.Type == "text/html" {
+			if bv, ok := ce.BodyValues[p.PartID]; ok {
+				e.HTMLBody = bv.Value
+			}
+			break
+		}
+	}
+	for _, a := range ce.Attachments {
+		if a.Disposition != "" && a.Disposition != "attachment" {
+			continue
+		}
+		e.Attachments = append(e.Attachments, Attachment{
+			BlobID: a.BlobID, Name: a.Name, Type: a.Type, Size: a.Size,
+		})
+	}
+	e.HasAttachment = len(e.Attachments) > 0
+	e.Size = uint64(len(e.TextBody) + len(e.HTMLBody))
+	e.Preview = previewOf(e.TextBody, e.HTMLBody, e.Subject)
+	return e, e.MailboxIDs
+}
+
+// byMessageIDLocked finds the fixture carrying the given Message-ID.
+func (s *Server) byMessageIDLocked(msgID string) *Email {
+	for i := range s.emails {
+		for _, m := range s.emails[i].MessageID {
+			if m == msgID {
+				return &s.emails[i]
+			}
+		}
+	}
+	return nil
+}
+
+// previewOf derives the one-line preview Email/get reports (FR-D1).
+func previewOf(text, html, subject string) string {
+	src := text
+	if src == "" {
+		src = html
+	}
+	src = strings.Join(strings.Fields(src), " ")
+	if src == "" {
+		return subject
+	}
+	if len(src) > 120 {
+		return src[:120]
+	}
+	return src
 }
 
 // --- blob download (FR-E4) ---

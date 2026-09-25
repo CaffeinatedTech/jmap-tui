@@ -679,10 +679,10 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if id == "" {
 		return nil
 	}
-	if text, _, atts, ok := e.bodies.get(id); ok {
+	if text, body, ok := e.bodies.get(id); ok {
 		e.mu.Lock()
 		e.bodyLoading = ""
-		e.setBodyLocked(id, text, atts)
+		e.setBodyLocked(id, text, body.Attachments)
 		e.mu.Unlock()
 		return nil
 	}
@@ -705,7 +705,8 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if text == "" && body.HTML != "" {
 		text = mailtext.HTMLToText(body.HTML)
 	}
-	e.bodies.put(id, text, body.HTML, body.Attachments)
+	body.Text = text
+	e.bodies.put(id, text, body)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()

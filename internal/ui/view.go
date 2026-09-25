@@ -56,6 +56,10 @@ type State struct {
 	// AdvSearch is the advanced-search modal (FR-F2); non-nil while open.
 	AdvSearch *AdvSearchView
 
+	// Compose is the full-screen composer (FR-H1); non-nil while open. It
+	// owns the frame, so it takes precedence over the other overlays.
+	Compose *ComposeView
+
 	// Fullscreen hides the sidebar and list so the preview takes the full
 	// frame (FR-E5).
 	Fullscreen bool
@@ -161,6 +165,9 @@ func Render(w, h int, st State) string {
 	}
 	if st.AdvSearch != nil {
 		return renderAdvSearch(w, h, st)
+	}
+	if st.Compose != nil {
+		return renderCompose(w, h, st)
 	}
 	var b strings.Builder
 	b.WriteString(renderHeader(w, st))

@@ -29,6 +29,7 @@ const (
 	pickerMove pickerMode = iota
 	pickerCopy
 	pickerArchive
+	pickerIdentity // choose the From identity (FR-H1)
 )
 
 // pickerState is the modal mailbox chooser (FR-G2, FR-G4).
@@ -237,6 +238,11 @@ func (m *Model) archiveAction() (tea.Model, tea.Cmd) {
 // undoAction reverses the toast's action while its window is open (FR-G5):
 // a stored reversal spec re-runs as Triage; a prepared destroy cancels.
 func (m *Model) undoAction() (tea.Model, tea.Cmd) {
+	// A held submission outranks any action receipt: ctrl+z during the
+	// undo window cancels the send outright (FR-H5).
+	if m.pendingSend != nil {
+		return m.cancelPendingSend()
+	}
 	t := m.toast
 	if t == nil {
 		return m, nil
@@ -352,6 +358,8 @@ func (m *Model) pickerView() *ui.PickerView {
 		title = "Copy to mailbox"
 	case pickerArchive:
 		title = "Choose archive destination"
+	case pickerIdentity:
+		title = "Send as"
 	}
 	return &ui.PickerView{Title: title, Filter: p.filter, Items: p.items, Sel: p.sel}
 }
@@ -407,6 +415,10 @@ func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 		}
 	}
 	m.picker = nil
+	if p.mode == pickerIdentity {
+		m.chooseIdentity(id)
+		return nil
+	}
 	ids := m.actionIDs()
 	if len(ids) == 0 {
 		return nil

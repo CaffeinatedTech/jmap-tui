@@ -69,6 +69,7 @@ type Server struct {
 	emails         []Email
 	synthetic      *SyntheticMailbox
 	blobs          map[string][]byte
+	identities     []Identity
 	mailboxVersion int
 	emailVersion   int
 	journal        []journalEntry
@@ -80,6 +81,7 @@ type Server struct {
 	lastMailboxNotify int
 	lastEmailNotify   int
 	setCalls          int // total Email/set requests served (M3 rate tests)
+	createSeq         int // mints ids for Email/set create (M5 drafts)
 }
 
 // SetCalls reports how many Email/set requests the server has served
@@ -210,6 +212,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.handleEvent(w, r)
 	case strings.HasPrefix(r.URL.Path, "/jmap/download/") && r.Method == http.MethodGet:
 		s.handleDownload(w, r)
+	case strings.HasPrefix(r.URL.Path, "/jmap/upload/") && r.Method == http.MethodPost:
+		s.handleUpload(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -244,13 +248,19 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				"maxMailboxesPerEmail":     100,
 				"mayCreateTopLevelMailbox": true,
 			},
+			// Compose (M5) needs the submission capability or Identity/get
+			// is gated off and the client sees no identities (FR-A6).
+			"urn:ietf:params:jmap:submission": map[string]any{
+				"maxDelayedSend": 0,
+			},
 		},
 		"accounts": map[string]any{
 			"acc1": map[string]any{
 				"name":       s.username,
 				"isPersonal": true,
 				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:mail": map[string]any{},
+					"urn:ietf:params:jmap:mail":       map[string]any{},
+					"urn:ietf:params:jmap:submission": map[string]any{},
 				},
 			},
 		},
@@ -397,6 +407,18 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 			args = s.changesResponse("Email", call.Args)
 		case "Email/set":
 			args = s.emailSetResponse(call.Args)
+		case "Identity/get":
+			args = s.identityGetResponse()
+		case "EmailSubmission/set":
+			// The implicit Email/set rides the *same* call id as the
+			// submission, after it — Stalwart's ordering (PLAN §7).
+			out, implicit := s.emailSubmissionSetResponse(call.Args, call.CallID, results)
+			resp.add(call.Name, call.CallID, out)
+			results[call.CallID] = out
+			if implicit != nil {
+				resp.add("Email/set", call.CallID, implicit)
+			}
+			continue
 		default:
 			args = map[string]any{"type": "unknownMethod"}
 			resp.add("error", call.CallID, args)

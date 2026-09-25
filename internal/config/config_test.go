@@ -176,3 +176,48 @@ username = "s"
 		t.Fatalf("PrimaryAccount = %q, %v; want solo, nil", id, err)
 	}
 }
+
+// TestComposeUndoDelay covers FR-H5's configurable client-side hold: a
+// valid Go duration loads, anything else is a precise config error (FR-J3).
+func TestComposeUndoDelay(t *testing.T) {
+	base := `
+default_account = "personal"
+
+[accounts.personal]
+url = "https://mail.example.com"
+username = "me@example.com"
+`
+
+	ok := write(t, base+`
+[compose]
+undo_delay = "10s"
+`)
+	cfg, err := Load(ok)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Compose.UndoDelay != "10s" {
+		t.Errorf("undo_delay = %q, want 10s", cfg.Compose.UndoDelay)
+	}
+
+	absent := write(t, base)
+	cfg, err = Load(absent)
+	if err != nil {
+		t.Fatalf("Load without [compose]: %v", err)
+	}
+	if cfg.Compose.UndoDelay != "" {
+		t.Errorf("undo_delay = %q, want empty (the app applies the 5s default)", cfg.Compose.UndoDelay)
+	}
+
+	for _, bad := range []string{"soon", "-5s", "5"} {
+		path := write(t, base+"\n[compose]\nundo_delay = \""+bad+"\"\n")
+		_, err := Load(path)
+		if err == nil {
+			t.Errorf("undo_delay = %q accepted; want an error", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "undo_delay") {
+			t.Errorf("undo_delay = %q: error %q does not name the key", bad, err)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -56,6 +57,20 @@ type Config struct {
 
 	// Theme selects the palette: "dark", "light", or "auto" (default).
 	Theme string `toml:"theme"`
+
+	// Compose holds composer settings (M5).
+	Compose Compose `toml:"compose"`
+}
+
+// Compose tunes the composer (FR-H5). The app never writes this section:
+// config.toml stays user-owned (FR-J1).
+type Compose struct {
+	// UndoDelay is how long Send holds the submission before it reaches
+	// the server — the client-side undo window FR-H5 describes. Go
+	// duration syntax ("5s", "500ms"); empty or "0" submits immediately.
+	// The server's own EmailSubmission undo window (reported back after
+	// submit) is separate and server-controlled (PLAN §7).
+	UndoDelay string `toml:"undo_delay"`
 }
 
 // Window holds the rolling-window tuning knobs (FR-D3). Zero fields fall
@@ -158,6 +173,12 @@ func validate(cfg *Config, md toml.MetaData) error {
 	case "", "dark", "light", "auto":
 	default:
 		return fmt.Errorf("theme %q is not one of: dark, light, auto", cfg.Theme)
+	}
+	if cfg.Compose.UndoDelay != "" {
+		d, err := time.ParseDuration(cfg.Compose.UndoDelay)
+		if err != nil || d < 0 {
+			return fmt.Errorf("compose: undo_delay %q must be a non-negative duration such as \"5s\" or \"0s\"", cfg.Compose.UndoDelay)
+		}
 	}
 	for act, key := range cfg.Keys {
 		if act == "" {

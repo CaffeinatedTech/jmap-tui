@@ -24,8 +24,13 @@ type Email struct {
 	MailboxIDs    []string
 	Keywords      map[string]bool
 	MessageID     []string
+	References    []string
+	InReplyTo     []string
 	From          []Address
 	To            []Address
+	Cc            []Address
+	Bcc           []Address
+	ReplyTo       []Address
 	Subject       string
 	ReceivedAt    time.Time
 	Size          uint64
@@ -478,8 +483,13 @@ func emailGetItem(e Email, wantBodies bool) map[string]any {
 		"mailboxIds":    mailboxIDSet(e.MailboxIDs),
 		"keywords":      e.Keywords,
 		"messageId":     e.MessageID,
+		"references":    e.References,
+		"inReplyTo":     e.InReplyTo,
 		"from":          addrList(e.From),
 		"to":            addrList(e.To),
+		"cc":            addrList(e.Cc),
+		"bcc":           addrList(e.Bcc),
+		"replyTo":       addrList(e.ReplyTo),
 		"subject":       e.Subject,
 		"receivedAt":    e.ReceivedAt.Format(time.RFC3339),
 		"size":          e.Size,
@@ -533,4 +543,31 @@ func addrList(addrs []Address) []map[string]any {
 		out = append(out, map[string]any{"name": a.Name, "email": a.Email})
 	}
 	return out
+}
+
+// CountIn reports how many fixture emails are in the given mailbox
+// (compose assertions on FR-H4/H6 filing).
+func (s *Server) CountIn(mailbox string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, e := range s.emails {
+		if contains(e.MailboxIDs, mailbox) {
+			n++
+		}
+	}
+	return n
+}
+
+// SubjectIn reports how many emails in mailbox carry exactly subject.
+func (s *Server) SubjectIn(mailbox, subject string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, e := range s.emails {
+		if e.Subject == subject && contains(e.MailboxIDs, mailbox) {
+			n++
+		}
+	}
+	return n
 }

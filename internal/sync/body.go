@@ -19,25 +19,26 @@ func newBodyCache(capacity int) *bodyCache {
 	return &bodyCache{cap: capacity, ll: list.New(), ents: map[mail.ID]*list.Element{}}
 }
 
+// bodyEntry is one cached fetch: the display text the preview renders
+// (HTML already converted, FR-E2) plus the whole EmailBody, whose
+// addressing and threading headers the composer reuses for replies
+// (FR-H2) so opening a reply on a message you just read costs nothing.
 type bodyEntry struct {
 	id   mail.ID
 	text string
-	html string
-	atts []mail.Attachment
+	body mail.EmailBody
 }
 
 // put inserts/refreshes an entry, evicting the least recently used beyond
-// capacity. Attachments travel with the entry so a cache-hit reinstall
-// keeps the attachment strip (FR-E4).
-func (c *bodyCache) put(id mail.ID, text, html string, atts []mail.Attachment) {
+// capacity. text is the display text; body carries everything else.
+func (c *bodyCache) put(id mail.ID, text string, body mail.EmailBody) {
 	if el, ok := c.ents[id]; ok {
 		c.ll.MoveToFront(el)
 		el.Value.(*bodyEntry).text = text
-		el.Value.(*bodyEntry).html = html
-		el.Value.(*bodyEntry).atts = atts
+		el.Value.(*bodyEntry).body = body
 		return
 	}
-	el := c.ll.PushFront(&bodyEntry{id: id, text: text, html: html, atts: atts})
+	el := c.ll.PushFront(&bodyEntry{id: id, text: text, body: body})
 	c.ents[id] = el
 	for c.ll.Len() > c.cap {
 		back := c.ll.Back()
@@ -49,13 +50,14 @@ func (c *bodyCache) put(id mail.ID, text, html string, atts []mail.Attachment) {
 	}
 }
 
-// get returns the cached body and marks it recently used.
-func (c *bodyCache) get(id mail.ID) (text, html string, atts []mail.Attachment, ok bool) {
+// get returns the cached display text and full body, marking it recently
+// used.
+func (c *bodyCache) get(id mail.ID) (text string, body mail.EmailBody, ok bool) {
 	el, ok := c.ents[id]
 	if !ok {
-		return "", "", nil, false
+		return "", mail.EmailBody{}, false
 	}
 	c.ll.MoveToFront(el)
 	e := el.Value.(*bodyEntry)
-	return e.text, e.html, e.atts, true
+	return e.text, e.body, true
 }

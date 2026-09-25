@@ -138,7 +138,7 @@ func TestMoveViaPicker(t *testing.T) {
 func TestArchiveUsesRoleMailbox(t *testing.T) {
 	m := triageTestModel(t)
 
-	_, cmd := m.handleKey(key("y"))
+	_, cmd := m.handleKey(key("h"))
 	pump(t, m, cmd)
 	if m.picker != nil {
 		t.Fatal("y opened the picker although an archive role exists")
@@ -165,7 +165,7 @@ func TestArchivePromptRemembersChoice(t *testing.T) {
 	m.opts.AccountID = "test"
 	pump(t, m, m.loadAccountCmd())
 
-	_, cmd := m.handleKey(key("y"))
+	_, cmd := m.handleKey(key("h"))
 	if cmd != nil || m.picker == nil {
 		t.Fatal("y did not open the archive-destination picker")
 	}
@@ -201,7 +201,7 @@ func TestArchivePromptRemembersChoice(t *testing.T) {
 		t.Fatalf("prefs file missing the choice: %s", data)
 	}
 	// A second archive goes straight to the remembered mailbox.
-	_, cmd = m.handleKey(key("y"))
+	_, cmd = m.handleKey(key("h"))
 	pump(t, m, cmd)
 	if m.picker != nil {
 		t.Fatal("archive prompt reopened although prefs hold the choice")

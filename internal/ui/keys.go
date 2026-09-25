@@ -37,6 +37,10 @@ const (
 	ActPreviewTop    Action = "preview.top"
 	ActPreviewBottom Action = "preview.bottom"
 	ActSaveAttach    Action = "preview.save_attachment"
+	ActCompose       Action = "ui.compose"
+	ActReply         Action = "list.reply"
+	ActReplyAll      Action = "list.reply_all"
+	ActForward       Action = "list.forward"
 	ActSearch        Action = "ui.search"
 	ActSearchAdv     Action = "ui.search_advanced"
 	ActSearchClear   Action = "ui.search_clear"
@@ -58,8 +62,15 @@ type Binding struct {
 	Pane Pane // which pane the action belongs to (for context-sensitive help)
 }
 
-// defaultBindings is the canonical keymap (README). Keys are single strings;
-// remaps replace by action.
+// defaultBindings is the canonical keymap (README). Keys are single
+// strings; remaps replace by action.
+//
+// Note on case: paneKey lowercases both the binding and the keystroke, so
+// "c" and "C" can never be distinct bindings in one pane — and a terminal
+// delivers a capital letter as the keystroke "shift+c", not "C" (M5 audit:
+// the old `{Key: "C"}` copy binding never matched in a real terminal).
+// Distinct bindings therefore use distinct letters, and any capital is
+// written as "shift+<letter>" the way "shift+g" already is.
 func defaultBindings() []Binding {
 	return []Binding{
 		{Key: "j", Act: ActListDown, Help: "next message", Pane: PaneList},
@@ -78,8 +89,8 @@ func defaultBindings() []Binding {
 		{Key: "*", Act: ActToggleStar, Help: "toggle star", Pane: PaneList},
 		{Key: "x", Act: ActToggleSelect, Help: "select for batch action", Pane: PaneList},
 		{Key: "m", Act: ActMove, Help: "move to mailbox…", Pane: PaneList},
-		{Key: "C", Act: ActCopy, Help: "copy to mailbox…", Pane: PaneList},
-		{Key: "y", Act: ActArchive, Help: "archive", Pane: PaneList},
+		{Key: "y", Act: ActCopy, Help: "copy to mailbox…", Pane: PaneList},
+		{Key: "h", Act: ActArchive, Help: "archive", Pane: PaneList},
 		{Key: "#", Act: ActDelete, Help: "delete (to trash)", Pane: PaneList},
 		{Key: "j", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
 		{Key: "down", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
@@ -100,6 +111,10 @@ func defaultBindings() []Binding {
 		{Key: "shift+g", Act: ActPreviewBottom, Help: "bottom of message", Pane: PanePreview},
 		{Key: "s", Act: ActSaveAttach, Help: "save attachments…", Pane: PanePreview},
 		{Key: "v", Act: ActFullscreen, Help: "full-screen message", Pane: PaneAny},
+		{Key: "n", Act: ActCompose, Help: "compose a message", Pane: PaneAny},
+		{Key: "r", Act: ActReply, Help: "reply", Pane: PaneAny},
+		{Key: "a", Act: ActReplyAll, Help: "reply to all", Pane: PaneAny},
+		{Key: "f", Act: ActForward, Help: "forward", Pane: PaneAny},
 		{Key: "/", Act: ActSearch, Help: "search", Pane: PaneAny},
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
 		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},

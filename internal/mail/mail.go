@@ -91,11 +91,34 @@ type Attachment struct {
 // EmailBody is the fetched content of a single message. Providers should
 // populate Text when a text/plain part exists; HTML carries the raw
 // text/html part for in-repo conversion otherwise (FR-E2).
+//
+// It also carries the addressing and threading headers a reply or forward
+// needs (FR-H2): the summary property set is deliberately lean (FR-D4), so
+// Cc/Bcc/Reply-To and the RFC 5322 threading fields are only ever fetched
+// alongside the body of the one message being replied to.
 type EmailBody struct {
 	ID          ID
+	ThreadID    ID
 	Text        string
 	HTML        string
 	Attachments []Attachment
+
+	// Addressing, for reply-all and the reply destination.
+	From    []Address
+	To      []Address
+	Cc      []Address
+	Bcc     []Address
+	ReplyTo []Address
+	Subject string
+
+	// Threading: the RFC 5322 Message-ID of this message plus its
+	// References chain. A reply sets inReplyTo to the former and
+	// references to the latter plus the former (RFC 8621 §4.1.2.5).
+	MessageID  []string
+	References []string
+	InReplyTo  []string
+
+	ReceivedAt time.Time
 }
 
 // SortCriterion is one level of a server-side query sort.
@@ -218,11 +241,57 @@ type MutationResult struct {
 	NotDestroyed map[ID]error
 }
 
-// Draft describes a message to send. Its shape is finalised in M5 (compose).
-type Draft struct{}
+// Draft is a message being composed (M5, FR-H1): what the composer holds
+// and what SaveDraft writes to the role-drafts mailbox. ID is empty until
+// the server has a copy, after which SaveDraft updates in place so
+// autosave never litter the mailbox with one draft per keystroke (FR-H4).
+type Draft struct {
+	// ID is the existing server draft; empty means create.
+	ID ID
 
-// SendReceipt acknowledges a sent message. Its shape is finalised in M5.
-type SendReceipt struct{}
+	// MailboxID is the role-drafts mailbox the draft lives in; the provider
+	// does not resolve roles itself, so the caller supplies it from the
+	// mailbox tree.
+	MailboxID ID
+
+	// SentMailboxID is the role-sent mailbox the submitted message moves
+	// into (FR-H6). Empty degrades to leaving the message where it was.
+	SentMailboxID ID
+
+	// IdentityID selects the sending identity (FR-H1).
+	IdentityID ID
+
+	From    []Address
+	To      []Address
+	Cc      []Address
+	Bcc     []Address
+	Subject string
+
+	// Text is the text/plain body. Compose is plain-text only: HTML
+	// authoring is out of scope (REQUIREMENTS non-goals).
+	Text string
+
+	// InReplyTo and References thread a reply into the original
+	// conversation (FR-H2): inReplyTo names the replied-to message's
+	// Message-ID, references is that message's chain extended by it.
+	InReplyTo  []string
+	References []string
+
+	// Attachments are already-uploaded blobs (BlobID set by UploadBlob).
+	Attachments []Attachment
+}
+
+// SendReceipt acknowledges a sent message (FR-H5). UndoStatus is RFC 8621
+// §7.5: "pending" while the server still holds a cancellation window,
+// "final" once handed to SMTP, "canceled" if the server cancelled it; empty
+// when the server reports no window (PLAN §7 fallback is the client-side
+// delay alone).
+type SendReceipt struct {
+	EmailID      ID // the submitted Email, now in Sent (FR-H6)
+	SubmissionID ID
+	UndoStatus   string
+	SendAt       time.Time
+}
 
 // Change describes a pushed or polled server notification that one or more
 // object types changed state (RFC 8620 §7.1 StateChange). Changed maps
@@ -307,7 +376,18 @@ type Provider interface {
 	// the caller closes the reader.
 	DownloadBlob(ctx context.Context, blobID ID, name, mediaType string) (io.ReadCloser, error)
 
-	// Send submits a message for delivery (M5).
+	// UploadBlob posts attachment bytes to the session upload URL (FR-H3,
+	// RFC 8620 §6.1) and returns the stored attachment metadata. size is
+	// the exact byte count of r; the caller owns r's lifetime.
+	UploadBlob(ctx context.Context, name, mediaType string, size int64, r io.Reader) (Attachment, error)
+
+	// SaveDraft creates or updates the draft in the role-drafts mailbox
+	// (FR-H4) and returns its server id.
+	SaveDraft(ctx context.Context, draft Draft) (ID, error)
+
+	// Send submits a message for delivery (M5, FR-H5): the draft is
+	// written if needed, EmailSubmission/set submits it, and on success
+	// the Email moves out of Drafts into Sent (FR-H6).
 	Send(ctx context.Context, draft Draft) (SendReceipt, error)
 
 	// Subscribe opens one EventSource push stream (RFC 8620 §7.3) and

@@ -265,6 +265,70 @@ func goldenFrames() []frame {
 			st.Fullscreen = true
 			return st
 		}},
+		// M5 composer (FR-H1..H5).
+		{name: "compose", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Compose = composeFixture(st.Theme)
+			return st
+		}},
+		{name: "compose-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Compose = composeFixture(st.Theme)
+			return st
+		}},
+		{name: "compose-compact", w: 59, h: 25, st: func() State {
+			st := mk(true)()
+			st.Compose = composeFixture(st.Theme)
+			return st
+		}},
+		{name: "compose-uploading", w: 99, h: 35, st: func() State {
+			st := mk(true)()
+			c := composeFixture(st.Theme)
+			c.Focus = ZoneAttach
+			c.Attachments = []ComposeAttachment{
+				{Label: "audit-q3.pdf (248.3KiB)", Progress: "uploading 62%"},
+				{Label: "notes.txt (1.2KiB)", Failed: "permission denied"},
+			}
+			c.Status = "uploading audit-q3.pdf"
+			st.Compose = c
+			return st
+		}},
+		{name: "compose-discard", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Compose = composeFixture(st.Theme)
+			st.Compose.Discard = &DiscardConfirm{
+				Title: "Discard this draft?",
+				Hint:  "y discard · n keep in Drafts · esc keep editing",
+			}
+			return st
+		}},
+	}
+}
+
+// composeFixture builds a representative composer: a reply with a quoted
+// body, one attachment, and the status/hint lines the app renders.
+func composeFixture(th Theme) *ComposeView {
+	return &ComposeView{
+		Title:   "reply",
+		From:    "Tester <tester@example.test>",
+		To:      "Eve Security <eve@example.test>",
+		Cc:      "dana@example.test",
+		Bcc:     "",
+		Subject: "Re: Quarterly audit report attached",
+		Body: "On Mon, 21 Sep 2026 07:00 +0000, Eve Security <eve@example.test> wrote:\n" +
+			"> Find the quarterly audit report attached.\n" +
+			">\n" +
+			"> Let me know if anything looks off.\n\n" +
+			"Reviewed — numbers tie out.\n",
+		Focus:  ZoneBody,
+		Status: "saved",
+		Attachments: []ComposeAttachment{
+			{Label: "audit-q3.pdf (248.3KiB)"},
+		},
+		Hint: th.Accent.Render("ctrl+s send") + th.Muted.Render(" · ") +
+			th.Muted.Render("ctrl+a attach") + th.Muted.Render(" · ") +
+			th.Muted.Render("tab next") + th.Muted.Render(" · ") +
+			th.Muted.Render("esc close"),
 	}
 }
 

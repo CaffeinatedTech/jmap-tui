@@ -31,6 +31,10 @@ type Options struct {
 	// where it persists; either may be empty (session-only memory).
 	Prefs     *config.Prefs
 	PrefsPath string
+
+	// UndoDelay is how long Send holds the submission before it reaches
+	// the server (FR-H5); 5s when zero, negative submits immediately.
+	UndoDelay time.Duration
 }
 
 // Model is the Bubble Tea model for the reader.
@@ -70,6 +74,11 @@ type Model struct {
 	pendingDestroy *pendingDestroy
 	seq            int
 
+	// Compose state (M5): nil when the composer is closed (FR-H1..H5).
+	compose     *composeState
+	attachPick  *filepickState
+	pendingSend *pendingSend
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -77,6 +86,9 @@ type Model struct {
 // New returns the root model.
 func New(opts Options) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
+	if opts.UndoDelay == 0 {
+		opts.UndoDelay = 5 * time.Second
+	}
 	return &Model{
 		opts:           opts,
 		engine:         sync.NewEngine(opts.Provider, sync.Config{}),
@@ -217,6 +229,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.showToast(msg.text, "", nil, nil)
+
+	// --- compose (M5, FR-H1..H6) ---
+	case composePrepMsg:
+		return m.handleComposePrep(msg)
+	case composeAutosaveMsg:
+		if m.compose == nil || m.compose.discard || msg.seq != m.compose.saveSeq {
+			return m, nil
+		}
+		m.compose.armed = false
+		if !m.compose.dirty {
+			return m, nil
+		}
+		return m, m.saveDraftCmd()
+	case draftSavedMsg:
+		return m.handleDraftSaved(msg)
+	case sendArmedMsg:
+		return m.handleSendArmed(msg)
+	case sendCommitMsg:
+		if m.pendingSend == nil || m.pendingSend.seq != msg.seq {
+			return m, nil // cancelled during the undo window
+		}
+		return m, m.commitSend(m.pendingSend)
+	case sendDoneMsg:
+		return m.handleSendDone(msg)
+	case uploadProgressMsg:
+		return m.handleUploadProgress()
+	case uploadDoneMsg:
+		return m.handleUploadDone(msg)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -375,6 +415,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd, _ := m.filePickKey(msg)
 		return m, cmd
 	}
+	// The composer owns the keyboard while it is open (FR-H1); its own
+	// overlays (attach picker, discard confirm) are handled inside.
+	if m.compose != nil {
+		return m, m.composeKey(msg)
+	}
 	// The search bar and the advanced modal over it own the keyboard
 	// only while the bar is focused; once a search is confirmed, normal
 	// pane keys apply (FR-F1).
@@ -430,6 +475,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActListPageUp:
 		return m.moveCursor(-listPage(m))
 	case ui.ActToggleThread:
+		// In the Drafts mailbox, Enter edits the draft instead of
+		// expanding a thread (FR-C3 edit-aware mode).
+		if _, ok := m.cursorDraft(); ok {
+			_, cmd := m.openCompose(composeDraft)
+			return m, cmd
+		}
 		return m, m.engineOp("toggle-thread", func(ctx context.Context) (sync.Snapshot, error) {
 			if err := m.engine.ToggleThread(ctx); err != nil {
 				return sync.Snapshot{}, err
@@ -506,6 +557,16 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 			return m, m.closeSearch()
 		}
 		return m, nil
+
+	// --- compose (M5, FR-H1..H5) ---
+	case ui.ActCompose:
+		return m.openCompose(composeNew)
+	case ui.ActReply:
+		return m.openCompose(composeReply)
+	case ui.ActReplyAll:
+		return m.openCompose(composeReplyAll)
+	case ui.ActForward:
+		return m.openCompose(composeForward)
 
 	// --- full-screen message view (FR-E5) ---
 	case ui.ActFullscreen:
@@ -612,6 +673,7 @@ func (m *Model) jump(t sync.JumpTarget) tea.Cmd {
 
 // resizeViewport sizes the preview viewport to the current layout.
 func (m *Model) resizeViewport() {
+	m.resizeComposer()
 	l, ok := m.layout()
 	if !ok {
 		return
@@ -658,6 +720,16 @@ func (m *Model) uiState() ui.State {
 		st.Search = m.searchView()
 		if m.search.adv != nil {
 			st.AdvSearch = m.advSearchView()
+		}
+	}
+	if m.compose != nil {
+		st.Compose = m.composeView()
+	}
+	if m.attachPick != nil && m.compose != nil {
+		st.FilePick = &ui.FilePickView{
+			Title: "Attach a file…",
+			Path:  m.attachPick.fp.CurrentDirectory,
+			View:  m.attachPick.fp.View(),
 		}
 	}
 	st.Fullscreen = m.fullscreen
