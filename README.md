@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M6 landed (reader, live sync, triage, search, composer, and now multi-account: an `S` switcher with per-account status, an `i` unified inbox that interleaves every account's mail by date with owner badges and routes every action back to the owning account, per-account failure isolation with connect retry, and search merged across accounts; verified against two live Stalwart accounts).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -77,19 +77,30 @@ go install github.com/CaffeinatedTech/jmap-tui/cmd/jmap-tui@latest
 jmap-tui
 ```
 
-Pre-built binaries for Linux, macOS, and Windows will ship with releases.
+Pre-built binaries for Linux, macOS, and Windows are planned for the v0.1 release (goreleaser config is a release-milestone item); until then build from source.
 
 ## Quick start
 
-First run starts an account wizard:
+First run starts the account wizard (re-runnable at any time with `jmap-tui login`):
 
 ```text
-Server URL:  https://mail.example.com      (or https://api.fastmail.com)
-Username:    you@example.com
-Password:    → stored in your OS keyring, never on disk
+Add an account                       1 of 4 · details
+Server URL     https://mail.example.com    (or https://api.fastmail.com)
+Username       you@example.com
+Password       ••••••••                     → stored in your OS keyring, never on disk
+Account name   agent-test1                     (defaults to your username)
+
+2 of 4 · connection        tests the session and lists your mailboxes
+3 of 4 · opening mailbox   picks what opens first (saved as initial_mailbox)
+4 of 4 · save              keyring write + config — password_file is offered
+                           if no OS keyring is available (SSH/headless)
 ```
 
-Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-k-configuration--credentials). Several `[accounts.*]` tables configure every account (`default_account` picks the one that opens first; `S` switches, `i` toggles the unified inbox):
+The wizard writes `config.toml` (never `prefs.toml`), pins `default_account` on a first account, and leaves any existing config content — comments included — untouched. A password supplied via `JMAP_TUI_PASSWORD_<ACCOUNT>` is used as-is and not stored.
+
+Once an account exists, `jmap-tui login` — or `ctrl+a` from the running TUI (the TUI exits, runs the wizard, and restarts) — opens an **account picker**: choose an account to edit it in place (re-test the connection, rotate the password, re-pick the opening mailbox) or pick `+ add a new account`. Edits keep everything the wizard didn't ask about — `session_url`, `default_identity`, your comments — and leaving the password field empty keeps the current secret.
+
+Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-j--configuration--credentials). Several `[accounts.*]` tables configure every account (`default_account` picks the one that opens first; `S` switches, `i` toggles the unified inbox):
 
 ```toml
 default_account = "work"
@@ -99,6 +110,7 @@ display_name  = "Work"
 url           = "https://mail.example.com"
 username      = "you@work.example.com"
 default_identity = "you@work.example.com"   # optional: the composer's From
+initial_mailbox  = "mb-abc123"              # optional: wizard-chosen; defaults to Inbox
 
 [accounts.personal]
 display_name = "Personal"
@@ -130,15 +142,25 @@ undo_delay = "5s"   # 0s submits immediately
 | List | `f` | Forward |
 | Drafts | `Enter` | Edit the draft in the composer |
 | Any | `/` | Search — server-side query bar; `Enter` confirms and jumps into the results, `/` re-focuses the bar |
-| Any | `ctrl+s` | Advanced search (fielded form; also `/` while the query bar is open) |
+| Any | `ctrl+s` | Advanced search (fielded form — works from the query bar or anywhere else) |
 | Any | `Esc` | Clear the search (while a search view is open; no-op otherwise) |
 | Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
 | Any | `S` | Switch account (instant — every account stays warm) |
 | Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
+| Any | `ctrl+a` | Add or edit an account (opens the wizard; the TUI restarts) |
+| Any | `[` | Show/hide sidebar |
 | Any | `?` | Help overlay |
-| Any | `q` | Quit |
+| Any | `q` | Quit (or `ctrl+c` twice — cancels in-flight work first) |
+
+Every key above is remappable: `[keys]` maps an action id — the action's dotted name (`list.down`, `ui.quit`, `list.archive`, …; the `?` overlay shows what each action does) — to a keystroke. Conflicts are rejected at startup — a global key rebound onto a pane key is an error, not a silent shadow:
+
+```toml
+[keys]
+"list.down" = "ctrl+n"
+"ui.quit"   = "ctrl+d"
+```
 
 Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. `Enter` confirms a search and moves the cursor into the filtered list — `j`/`k` navigate, `/` re-focuses the bar, `Esc` clears the search and restores the mailbox view with position preserved. The advanced modal (`ctrl+s`) composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments — and every field is contains-style. Servers index whole words only, so when a search matches nothing server-side (e.g. a partial word like `0008`), the client automatically falls back to a fuzzy scan: it walks the scope newest-first and matches the chosen fields in memory (keyword, attachment and date filters still apply), streaming matches in with a `scanning n/N` indicator — `Esc` cancels.
 
@@ -162,7 +184,7 @@ The composer takes the whole screen: To/Cc/Bcc/Subject fields above a hairline, 
 
 ## Roadmap
 
-- **v0.1** — everything above against JMAP servers (Stalwart & Fastmail first)
+- **v0.1** — feature-complete (everything above landed); the release milestone finishes it: Fastmail verification pass, goreleaser artifacts, tag `v0.1.0`
 - **v0.2+** — push subscriptions, Sieve script management (RFC 9291), vacation responder, quota display (RFC 9425), advanced theming
 - **Later** — IMAP provider behind the same provider interface (will use a local cache; see [PLAN.md](PLAN.md#imap-future))
 

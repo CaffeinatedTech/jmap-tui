@@ -2,7 +2,7 @@
 
 **This document is the source of truth for scope.** PLAN.md describes *how*; this describes *what*. Changes to scope go here first.
 
-Status markers: **[M1]…[M7]** = milestone in which the requirement lands (see PLAN.md), **[FUTURE]** = explicitly out of v1.
+Status markers: **[M1]…[M7]** = milestone in which the requirement lands (see PLAN.md), **[Release]** = the post-M7 release milestone (Fastmail gate, packaging, tag), **[FUTURE]** = explicitly out of v1.
 
 ---
 
@@ -99,7 +99,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 ## FR-F — Search
 
 - **[FR-F1] [M4]** `/` opens the query bar; typing issues debounced server-side `Email/query` filters (`text`, `from`, `to`, `subject`, `after`/`before`, `hasKeyword`, `inMailbox`, `hasAttachment`). Results reuse the list component; `Esc` returns to the mailbox view with position preserved.
-- **[FR-F2] [M4]** Advanced search modal (`/ /` or `ctrl-s`): fielded form generating filter operators.
+- **[FR-F2] [M4]** Advanced search modal (`ctrl-s`): fielded form generating filter operators. *(`/ /` was the original wording — dropped at the M7 docs gate 2026-09-25: `/` must stay typeable in queries, and `ctrl-s` reaches the form from the bar or from a closed search view.)*
 - **[FR-F3] [M4]** Search scope defaults to current mailbox; toggle to all mailboxes. Unified-account mode searches across selected accounts (parallel queries, merged). *(The unified-account sentence rides M6 — it needs the multi-account Hub (FR-A4/A5); deferred at the M4 gate 2026-09-22.)*
 
 ## FR-G — Actions & triage
@@ -128,7 +128,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-I5] [M2]** Status line: connection state per account, last-sync time, sync errors, current mailbox counts.
 - **[FR-I6] [M5]** Toasts (bottom-right) for async results; errors always actionable ("Retry", "Show details").
 - **[FR-I7] [M6]** Account switcher UI + unified view toggle.
-- **[FR-I8] [M7]** First-run wizard: add account, test connection, store secret, pick initial mailbox. Re-runnable via `jmap-tui login`.
+- **[FR-I8] [M7]** First-run wizard: add account, test connection, store secret, pick initial mailbox. Re-runnable via `jmap-tui login` **or from the running TUI (`ctrl+a`)** — the TUI exits, runs the wizard, and relaunches with the change applied. When accounts already exist the wizard opens on an account picker: selecting one **edits that account in place** (re-test, rotate the secret, re-pick the opening mailbox) while preserving hand-written config fields (`session_url`, `default_identity`, comments) and the existing secret when the password field is left empty. *(`ctrl+a` and in-place editing added at the M7 gate 2026-09-25 after user testing: there was no way to reach the wizard, or to fix a mistake, from inside the app.)*
 
 ## FR-J — Configuration & credentials
 
@@ -167,7 +167,8 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **M4** — search across 50k messages returns first page < 1 s (server-bound), advanced modal works, unified search merges accounts.
 - **M5** — compose → attach → send → appears in Sent; undo cancels a send; draft survives restart (because it lives on the server).
 - **M6** — two accounts configured; switch is instant; unified inbox interleaves correctly; actions never cross accounts.
-- **M7** — wizard, themes, help, packaging complete; v0.1 tagged.
+- **M7** — wizard, themes, help, keymap, docs complete.
+- **Release v0.1** **[Release]** — every gate above passes on Fastmail as well as Stalwart (PLAN §7), NFR-6 artifacts built, tag v0.1.0. *(Split out of M7 at the M7 scoping 2026-09-25: Fastmail verification, goreleaser, and the tag ride their own milestone so M7 stays polish.)*
 
 ## 8. Open questions
 
