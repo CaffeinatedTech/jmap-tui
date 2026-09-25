@@ -58,7 +58,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 - **[FR-A2] [M0]** Authentication via **app password / API token over HTTP Basic** for all endpoints (API, upload, download, EventSource). No cookies, no browser.
 - **[FR-A3] [M1]** Every request and push connection carries a timeout, retry with exponential backoff (cap ~30s), and jitter. 401/403 surfaces a re-auth prompt, not a crash.
 - **[FR-A4] [M6]** Account switcher (`S`): instant switch between accounts; each account has independent sync state.
-- **[FR-A5] [M6]** **Unified view** merging the inboxes of selected accounts, interleaved by `receivedAt`. Unified mode is a view; actions route back to the owning account.
+- **[FR-A5] [M6]** **Unified view** merging the inboxes of selected accounts, interleaved by `receivedAt`. Unified mode is a view; actions route back to the owning account. Each row is led by a one-cell **colour bar** identifying its owning account (tints assigned in account order, cycling past the palette) and the preview header names that account in text. *(`colour bar` wording added at the M7 gate 2026-09-25 — the original name-badge column was replaced per user proposal; the attribution requirement is unchanged.)*
 - **[FR-A6] [M1]** Per-account capability detection: features degrade gracefully (no push → poll; no submission → read-only banner). Unknown capabilities are ignored, never fatal.
 
 ## FR-B — Sync & state

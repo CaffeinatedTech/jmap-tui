@@ -53,15 +53,15 @@ Archive               │ ●     Alice Root     └ planning sync   1d  │ Sub
                       │                                            │ 1 attachment: audit-q3.pdf (242.5K)
 ```
 
-The unified inbox (`i`) interleaves every account's mail by date, each row badged with its owner — actions always route to the owning account:
+The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. Actions always route to the owning account:
 
 ```text
 jmap-tui  unified inbox  13 messages
-Inbox               3 │ ●   Work      Dana Ops      Deploy pipeline is … 35m │ From: Eve Security <eve@example.test>
-Sent Items            │     Personal  Eve Security  Quarterly audit r… 3h   │ Subject: Quarterly audit report attached
-  agent-test          │     Work      Bob Thread    ▾ Re: planning sync  1d  │ Date: Mon, 21 Sep 2026 07:00
-Archive               │ ●   Work      Alice Root     └ planning sync    1d  │ ↑ new mail
-                      │ ↓ more                                              │ Hello,
+Inbox               3 │█ ●   Dana Ops         Deploy pipeline is … 35m │ Account: Personal
+Sent Items            │▓     Eve Security     Quarterly audit r… 3h    │ From: Eve Security <eve@example.test>
+  agent-test          │█     Bob Thread       ▾ Re: planning sync  1d   │ Subject: Quarterly audit report attached
+Archive               │█ ●   Alice Root        └ planning sync    1d   │ Date: Mon, 21 Sep 2026 07:00
+                      │ ↓ more                                        │ ↑ new mail
 unified  live  synced 10:00:00   Personal: push stream lost, reconnecting
 ```
 
