@@ -9,6 +9,7 @@ package keyring
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -23,9 +24,35 @@ const Service = "jmap-tui"
 // keyring.ErrNotFound).
 type Backend func(service, user string) (string, error)
 
+// Store abstracts the write side of the keyring (the wizard stores the
+// secret it just proved works, FR-I8).
+type Store func(service, user, secret string) error
+
 // DefaultBackend reads from the OS keyring.
 func DefaultBackend(service, user string) (string, error) {
 	return keyring.Get(service, user)
+}
+
+// DefaultStore writes to the OS keyring.
+func DefaultStore(service, user, secret string) error {
+	return keyring.Set(service, user, secret)
+}
+
+// Set stores the secret for accountID in the OS keyring (service
+// Service). The wizard calls it after the connection test succeeds
+// (FR-I8); store may be nil for the real keyring. The secret is never
+// logged or echoed back.
+func Set(accountID, secret string, store Store) error {
+	if accountID == "" {
+		return fmt.Errorf("keyring: empty account id")
+	}
+	if store == nil {
+		store = DefaultStore
+	}
+	if err := store(Service, accountID, secret); err != nil {
+		return fmt.Errorf("keyring: store secret for account %q: %w", accountID, err)
+	}
+	return nil
 }
 
 // EnvVar derives the password environment variable name for an account id:
@@ -94,4 +121,25 @@ func readPasswordFile(path string) (string, error) {
 		return "", fmt.Errorf("read password file: %w", err)
 	}
 	return strings.TrimRight(string(data), "\r\n"), nil
+}
+
+// WritePasswordFile stores secret in an explicit chmod-600 file — the
+// FR-J2 escape hatch the wizard offers when the OS keyring is unavailable
+// (SSH sessions and headless machines with no secret service). The mode is
+// re-asserted after the write because os.WriteFile keeps an existing
+// file's permissions.
+func WritePasswordFile(path, secret string) error {
+	if path == "" {
+		return fmt.Errorf("keyring: empty password file path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("keyring: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		return fmt.Errorf("keyring: write %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("keyring: chmod %s: %w", path, err)
+	}
+	return nil
 }

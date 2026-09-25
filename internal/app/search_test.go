@@ -475,3 +475,34 @@ func TestSearchEscClearsFromResults(t *testing.T) {
 		t.Fatal("esc invented a search state")
 	}
 }
+
+// TestSearchBarKeepsSlashTypable is the M7 docs-gate behaviour: "/" typed
+// into the focused query bar is a slash (FR-F2's "/ /" chord was dropped —
+// ctrl+s owns the fielded form), and esc still clears through the
+// keymap-bound action.
+func TestSearchBarKeepsSlashTypable(t *testing.T) {
+	m := searchTestModel(t)
+	_, _ = m.handleKey(key("/"))
+	if m.search == nil {
+		t.Fatal("/ did not open the search bar")
+	}
+	typeInto(m, '/')
+	typeInto(m, 'p')
+	typeInto(m, 'a')
+	typeInto(m, 't')
+	if got := m.search.spec.Text; got != "/pat" {
+		t.Fatalf("spec.Text = %q, want /pat — the bar must swallow slashes as text", got)
+	}
+	if m.search.adv != nil {
+		t.Fatal("typing / must not open the advanced modal")
+	}
+
+	// ctrl+s opens the fielded form from inside the bar (keymap action).
+	_, cmd := m.handleKey(keyCtrl('s'))
+	if m.search.adv == nil {
+		t.Fatal("ctrl+s did not open the advanced modal from the bar")
+	}
+	if cmd != nil {
+		t.Errorf("modal open returned a command: %v", cmd)
+	}
+}

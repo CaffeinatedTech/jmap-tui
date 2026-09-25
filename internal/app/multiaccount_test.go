@@ -526,3 +526,76 @@ func TestDefaultIdentity(t *testing.T) {
 		t.Fatalf("identity = %q, want second@example.test (configured default)", got)
 	}
 }
+
+// TestInitialMailboxHonorsWizardChoice: the first snapshot opens the
+// wizard-chosen initial mailbox (FR-I8), falls back to the inbox when the
+// id no longer exists, and never changes what other accounts open.
+func TestInitialMailboxHonorsWizardChoice(t *testing.T) {
+	mailboxes := []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 2, UnreadEmails: 2},
+		{ID: "mb-archive", Name: "Archive", Role: "archive", SortOrder: 1},
+		{ID: "mb-trash", Name: "Trash", Role: "trash", SortOrder: 2},
+	}
+	srv := mockjmap.New("tester@example.com", "pw", mailboxes)
+	srv.SetEmails(twoAccountFixture("tester", time.Now(), time.Now().Add(-time.Hour)))
+	t.Cleanup(srv.Close)
+	c := jmapclient.New(jmapclient.Options{ServerURL: srv.URL(), Username: "tester@example.com", Password: "pw"})
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("KeyMap: %v", err)
+	}
+	// work: wizard-chosen Archive; personal: orphaned id → inbox.
+	m := New(Options{
+		Accounts: []AccountOpt{
+			{ID: "work", Name: "Work", Provider: c, Connected: true, InitialMailbox: "mb-archive"},
+			{ID: "personal", Name: "Personal", Provider: c, Connected: true, InitialMailbox: "mb-gone"},
+		},
+		AccountID: "work",
+		Keys:      km,
+		Theme:     ui.NewTheme(ui.DarkTheme()),
+	})
+	m.width, m.height = 120, 40
+	loadAll(t, m)
+
+	if got := m.snaps["work"].ActiveMailbox; got != "mb-archive" {
+		t.Errorf("work opened %q, want mb-archive (the wizard's choice)", got)
+	}
+	if got := m.snaps["personal"].ActiveMailbox; got != "mb-inbox" {
+		t.Errorf("personal opened %q, want mb-inbox (orphaned id falls back)", got)
+	}
+	if m.snap.ActiveMailbox != "mb-archive" {
+		t.Errorf("active view = %q, want mb-archive", m.snap.ActiveMailbox)
+	}
+}
+
+// TestAccountManageKey: ctrl+a is the documented escape hatch to the
+// account wizard (FR-I8) — it resolves in the keymap, marks the request,
+// and quits the session so the command layer can run the wizard and
+// relaunch.
+func TestAccountManageKey(t *testing.T) {
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("NewKeyMap: %v", err)
+	}
+	if act, ok := km.Match(ui.PaneAny, "ctrl+a"); !ok || act != ui.ActAccountManage {
+		t.Fatalf("ctrl+a = %v,%v, want account.manage", act, ok)
+	}
+	if err := km.Validate(); err != nil {
+		t.Fatalf("keymap conflict: %v", err)
+	}
+
+	m, _ := newTestModel(t)
+	if m.ManageRequested() {
+		t.Fatal("flag set before the key was pressed")
+	}
+	_, cmd := m.handleKey(keyCtrl('a'))
+	if cmd == nil {
+		t.Fatal("ctrl+a produced no quit command")
+	}
+	if !m.ManageRequested() {
+		t.Fatal("ManageRequested not set — the wizard would never run")
+	}
+}

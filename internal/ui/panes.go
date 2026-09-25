@@ -26,9 +26,11 @@ func truncate(s string, n int) string {
 	return ansi.Truncate(s, max(n-1, 1), "…")
 }
 
-// pad right-fills s with spaces to width n.
+// pad right-fills s with spaces to width n. Escape sequences are ignored
+// for measurement (ANSI-styled callers pad mixed plain+styled lines), so
+// the visible width lands on n either way.
 func pad(s string, n int) string {
-	d := n - runewidth.StringWidth(s)
+	d := n - ansi.StringWidth(s)
 	if d <= 0 {
 		return s
 	}

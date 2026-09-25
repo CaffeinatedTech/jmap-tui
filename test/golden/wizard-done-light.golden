@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                               [38;2;42;93;176mAdd an account[m                                            
+                               [38;2;209;213;219m────────────────────────────────────────────────────────[m  
+                               [38;2;156;163;175maccount     [m[38;2;55;65;81mmail-example-com[m                              
+                               [38;2;156;163;175mname        [m[38;2;55;65;81mmail-example-com[m                              
+                               [38;2;156;163;175mconfig      [m[38;2;55;65;81m/home/tester/.config/jmap-tui/config.toml[m     
+                               [38;2;156;163;175mmailbox     [m[38;2;55;65;81mInbox[m                                         
+                               [38;2;156;163;175msecret      [m[38;2;55;65;81mOS keyring[m                                    
+                                                                                         
+                               [38;2;156;163;175menter continue — jmap-tui starts next[m                     

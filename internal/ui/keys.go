@@ -45,6 +45,7 @@ const (
 	ActSearchAdv     Action = "ui.search_advanced"
 	ActSearchClear   Action = "ui.search_clear"
 	ActAccountSwitch Action = "account.switch"
+	ActAccountManage Action = "account.manage"
 	ActUnified       Action = "unified.toggle"
 	ActFullscreen    Action = "preview.fullscreen"
 	ActCyclePane     Action = "pane.cycle"
@@ -121,6 +122,7 @@ func defaultBindings() []Binding {
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
 		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},
 		{Key: "shift+s", Act: ActAccountSwitch, Help: "switch account", Pane: PaneAny},
+		{Key: "ctrl+a", Act: ActAccountManage, Help: "add or edit an account", Pane: PaneAny},
 		{Key: "i", Act: ActUnified, Help: "unified inbox", Pane: PaneAny},
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
 		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
@@ -249,6 +251,9 @@ func (km *KeyMap) Help(pane Pane) HelpSection {
 }
 
 // Validate reports duplicate key bindings within the same pane (FR-I3).
+// It also rejects a global binding shadowed by a pane-specific one: the
+// pane binding wins on every keystroke, which would leave the global
+// action silently unreachable there — ambiguity by another name.
 func (km *KeyMap) Validate() error {
 	seen := map[string]Action{}
 	for _, b := range km.keys {
@@ -257,6 +262,32 @@ func (km *KeyMap) Validate() error {
 			return fmt.Errorf("keys: %q bound to both %s and %s in the same context", b.Key, prev, b.Act)
 		}
 		seen[pk] = b.Act
+	}
+	// Same pane+key duplicates already returned above, so every entry
+	// here is a distinct pane sharing one keystroke.
+	byKey := map[string][]Binding{}
+	for _, b := range km.keys {
+		k := strings.ToLower(b.Key)
+		byKey[k] = append(byKey[k], b)
+	}
+	for k, binds := range byKey {
+		var global *Binding
+		for i := range binds {
+			if binds[i].Pane == PaneAny {
+				global = &binds[i]
+				break
+			}
+		}
+		if global == nil {
+			continue
+		}
+		for _, b := range binds {
+			if b.Pane == PaneAny || b.Act == global.Act {
+				continue
+			}
+			return fmt.Errorf("keys: %q is bound to %s everywhere and %s in the %s pane — the global binding would never fire there",
+				k, global.Act, b.Act, paneTitle(b.Pane))
+		}
 	}
 	return nil
 }

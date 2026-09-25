@@ -108,3 +108,50 @@ func TestPasswordKeyringErrorWrapped(t *testing.T) {
 		t.Fatalf("err = %v, want wrapped sentinel", err)
 	}
 }
+
+func TestSetStoresAndReportsFailures(t *testing.T) {
+	var got struct{ service, user, secret string }
+	err := Set("work", "s3cret", func(service, user, secret string) error {
+		got.service, got.user, got.secret = service, user, secret
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if got.service != Service || got.user != "work" || got.secret != "s3cret" {
+		t.Errorf("stored %+v, want service=%q user=work", got, Service)
+	}
+
+	boom := errors.New("no dbus")
+	err = Set("work", "s3cret", func(string, string, string) error { return boom })
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "work") {
+		t.Errorf("err = %v, want wrapped boom naming the account", err)
+	}
+	if err := Set("", "x", func(string, string, string) error { return nil }); err == nil {
+		t.Error("empty account id accepted")
+	}
+}
+
+func TestWritePasswordFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secrets", "work.password")
+	if err := WritePasswordFile(path, "s3cret"); err != nil {
+		t.Fatalf("WritePasswordFile: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 600", fi.Mode().Perm())
+	}
+	secret, warnings, err := Password("work", path, func(string, string) (string, error) {
+		t.Fatal("keyring must not be reached when password_file is set")
+		return "", nil
+	})
+	if err != nil || secret != "s3cret" {
+		t.Fatalf("Password = %q, %v", secret, err)
+	}
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "plaintext on disk") {
+		t.Errorf("warnings = %v, want a plaintext-on-disk notice", warnings)
+	}
+}

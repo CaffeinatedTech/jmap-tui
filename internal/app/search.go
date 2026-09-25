@@ -89,17 +89,27 @@ func (m *Model) refocusSearch() tea.Cmd {
 
 // searchKey routes a keypress while the bar (or the advanced modal over
 // it) has the keyboard. While the modal is open it swallows everything;
-// the bar handles enter (confirm + focus the results), esc (clear),
-// tab (scope), and ctrl+s (modal).
+// the bar handles enter (confirm + focus the results) and tab (scope),
+// plus its two keymap actions — clear and the fielded form — so remaps
+// (FR-I3) reach them too. Everything else is typing, including "/": a
+// query may contain a slash, and ctrl+s is the documented chord (the
+// M4 "/ /" chord was dropped at the M7 docs gate).
 func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	if s := m.search; s.adv != nil {
 		return m.advKey(msg)
 	}
 	key := msg.Keystroke()
 	s := m.search
+	if act, ok := m.opts.Keys.Match(ui.PaneAny, key); ok {
+		switch act {
+		case ui.ActSearchClear:
+			return m.closeSearch()
+		case ui.ActSearchAdv:
+			m.openAdvSearch()
+			return nil
+		}
+	}
 	switch key {
-	case "esc":
-		return m.closeSearch()
 	case "enter":
 		// Confirm: focus the results (FR-F1). Re-issuing an identical
 		// spec would restart an in-flight fuzzy scan, so only search
@@ -112,9 +122,6 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "tab":
 		return m.toggleSearchScope()
-	case "ctrl+s":
-		m.openAdvSearch()
-		return nil
 	}
 	ti, cmd := s.input.Update(msg)
 	s.input = ti

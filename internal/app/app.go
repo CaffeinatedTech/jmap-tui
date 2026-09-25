@@ -56,6 +56,10 @@ type AccountOpt struct {
 	// DefaultIdentity optionally pins the composer's From for this
 	// account (FR-A1): matched by email, then by id.
 	DefaultIdentity string
+	// InitialMailbox is the mailbox this account opens on first load,
+	// chosen in the wizard (FR-I8); empty (or an id no longer in the
+	// tree) falls back to the inbox.
+	InitialMailbox mail.ID
 	// Err is the pre-flight failure (bad credentials, unreachable
 	// server). Non-nil with a nil Provider means the account cannot
 	// recover without a config fix; the Hub surfaces it on the status
@@ -103,6 +107,11 @@ type Model struct {
 	// Search state (M4): query bar + advanced modal; nil when closed
 	// (FR-F1, FR-F2).
 	search *searchState
+
+	// manageAccounts is set when the user asked for the account wizard
+	// (ctrl+a): the command layer quits this session, runs the wizard, and
+	// relaunches with whatever it saved (FR-I8).
+	manageAccounts bool
 
 	// Triage state (M3): multi-select set, modal overlays, toast, and the
 	// prepared (delayed) destroy (FR-G2..G5). pickPending/pickLabel hold
@@ -437,23 +446,22 @@ func truncateErr(op string, err error) string {
 }
 
 // applySnapshot stores one account's snapshot and schedules follow-up
-// work: the first mailbox snapshot opens that account's inbox (every
-// account gets a warm window — instant switch and the unified merge both
-// need it, FR-A4/A5), then either the active view's pipeline or the
-// unified rebuild.
+// work: the first mailbox snapshot opens that account's starting mailbox
+// (the wizard's initial_mailbox when it still exists, else the inbox —
+// every account gets a warm window; instant switch and the unified merge
+// both need it, FR-A4/A5/FR-I8), then either the active view's pipeline
+// or the unified rebuild.
 func (m *Model) applySnapshot(acct string, snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	m.snaps[acct] = snap
 
-	// First load: open the inbox (FR-B1 initial window). ViewKey "" means
-	// no view is open yet — mailbox or search.
+	// First load: open the starting mailbox (FR-B1 initial window).
+	// ViewKey "" means no view is open yet — mailbox or search.
 	if snap.ViewKey == "" && len(snap.Mailboxes) > 0 {
-		for _, node := range snap.Mailboxes {
-			if node.Mailbox.Role == mail.RoleInbox {
-				if acct == m.activeID {
-					m.sidebarSel = indexOfMailbox(snap.Mailboxes, node.Mailbox.ID)
-				}
-				return m, m.openMailboxOn(acct, node.Mailbox.ID)
+		if node := firstMailboxNode(m.opts.Accounts, acct, snap.Mailboxes); node != nil {
+			if acct == m.activeID {
+				m.sidebarSel = indexOfMailbox(snap.Mailboxes, node.Mailbox.ID)
 			}
+			return m, m.openMailboxOn(acct, node.Mailbox.ID)
 		}
 		return m, nil
 	}
@@ -476,6 +484,33 @@ func indexOfMailbox(nodes []sync.MailboxNode, id mail.ID) int {
 		}
 	}
 	return -1
+}
+
+// firstMailboxNode picks the mailbox an account opens on its first
+// snapshot: the wizard-chosen initial mailbox when it is still in the
+// tree (FR-I8), else the inbox — a re-created mailbox orphans the id and
+// must not strand the account on an empty view.
+func firstMailboxNode(accounts []AccountOpt, acct string, nodes []sync.MailboxNode) *sync.MailboxNode {
+	var want mail.ID
+	for _, a := range accounts {
+		if a.ID == acct {
+			want = a.InitialMailbox
+			break
+		}
+	}
+	if want != "" {
+		for i := range nodes {
+			if nodes[i].Mailbox.ID == want {
+				return &nodes[i]
+			}
+		}
+	}
+	for i := range nodes {
+		if nodes[i].Mailbox.Role == mail.RoleInbox {
+			return &nodes[i]
+		}
+	}
+	return nil
 }
 
 // applyView runs the render pipeline over the active account's snapshot:
@@ -956,6 +991,12 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActAccountSwitch:
 		m.openSwitcher()
 		return m, nil
+	case ui.ActAccountManage:
+		// FR-I8: leave the TUI, run the wizard, come back — the command
+		// layer owns the relaunch, so the engines shut down first.
+		m.manageAccounts = true
+		m.cancel()
+		return m, tea.Quit
 	case ui.ActUnified:
 		return m.toggleUnified()
 
@@ -1035,19 +1076,14 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 
 	// --- search (M4, FR-F1..F3) ---
 	case ui.ActSearch:
-		// "/": open the bar, re-focus it over existing results, or (from
-		// the bar itself) open the advanced modal — the FR-F2 "/ /" chord.
-		switch {
-		case m.search == nil:
+		// "/": open the bar, or re-focus it over existing results. The
+		// bar owns the keyboard while it is focused, so this never runs
+		// mid-typing — "/" stays typeable in a query (M7 docs gate: the
+		// "/ /" chord is gone, ctrl+s is the fielded form's key).
+		if m.search == nil {
 			return m, m.openSearch()
-		case m.search.adv != nil:
-			return m, nil
-		case m.search.editing:
-			m.openAdvSearch()
-			return m, nil
-		default:
-			return m, m.refocusSearch()
 		}
+		return m, m.refocusSearch()
 	case ui.ActSearchAdv:
 		// ctrl+s always reaches the fielded form — opening the bar first
 		// when the search view is closed (FR-F2).
@@ -1317,6 +1353,11 @@ func (m *Model) View() tea.View {
 	}
 	return tea.NewView(ui.Render(m.width, m.height, st))
 }
+
+// ManageRequested reports that the user opened the account wizard from
+// the running TUI (ctrl+a, FR-I8): the command layer runs it and starts a
+// fresh session with the result.
+func (m *Model) ManageRequested() bool { return m.manageAccounts }
 
 // Cancel exposes the root context cancel for clean shutdown from outside.
 func (m *Model) Cancel() { m.cancel() }

@@ -445,3 +445,144 @@ func TestRenderIsStableAcrossRuns(t *testing.T) {
 		t.Fatal("header overflows width")
 	}
 }
+
+// M7 wizard (FR-I8): the setup flow renders through its own entry point,
+// so it gets its own frame set — form (dark/light), connection test,
+// mailbox pick (both densities), the keyring-failure screen, and the
+// saved summary.
+func wizardFrames() []struct {
+	name string
+	w, h int
+	dark bool
+	v    WizardView
+} {
+	form := WizardView{
+		Title: "Add an account",
+		Step:  "1 of 4 · details",
+		Fields: []WizardField{
+			{Label: "Server URL", Value: "https://mail.example.com"},
+			{Label: "Username", Value: "me@example.com"},
+			{Label: "Password", Value: strings.Repeat("•", 8) + "▌", Focused: true},
+			{Label: "Account name", Placeholder: "defaults to the account id"},
+		},
+		Hint: "tab next · enter continue · esc quit",
+	}
+	conn := form
+	conn.Step = "2 of 4 · connection"
+	conn.Fields = []WizardField{
+		{Label: "Server URL", Value: "https://mail.example.com"},
+		{Label: "Username", Value: "me@example.com"},
+		{Label: "Password", Value: strings.Repeat("•", 8)},
+		{Label: "Account name", Placeholder: "defaults to the account id"},
+	}
+	conn.Hint = "esc cancel"
+	conn.Err = "connect to https://mail.example.com: 401 unauthorized — check the app password or the server URL"
+	testing := conn
+	testing.Err = ""
+	testing.Status = "⣽ testing connection…"
+	mailboxes := WizardView{
+		Title: "Add an account",
+		Step:  "3 of 4 · opening mailbox",
+		Items: []PickerItem{
+			{ID: "mb-inbox", Label: "Inbox"},
+			{ID: "mb-sent", Label: "Sent Items"},
+			{ID: "mb-archive", Label: "Archive"},
+			{ID: "mb-agent", Label: "agent-test", Depth: 1},
+			{ID: "mb-2026", Label: "2026", Depth: 1},
+		},
+		Sel:    2,
+		Status: "connected — 5 mailboxes",
+		Hint:   "j/k choose · enter continue · esc back",
+	}
+	save := WizardView{
+		Title: "Add an account",
+		Step:  "4 of 4 · save",
+		Fields: []WizardField{
+			{Label: "Server URL", Value: "https://mail.example.com"},
+			{Label: "Username", Value: "me@example.com"},
+			{Label: "Password", Value: strings.Repeat("•", 8)},
+			{Label: "Account name", Value: "mail-example-com"},
+		},
+		Err:  "store secret: no secret service",
+		Hint: "r retry keyring · f use password file · esc quit",
+	}
+	accounts := WizardView{
+		Title: "Accounts",
+		Step:  "1 of 5 · account",
+		Items: []PickerItem{
+			{Label: "+ add a new account"},
+			{Label: "Work — me@work.example.com"},
+			{Label: "Personal — me@example.com"},
+		},
+		Sel:  1,
+		Hint: "j/k choose · enter select · esc quit",
+	}
+	edit := WizardView{
+		Title: "Edit account · work",
+		Step:  "2 of 5 · details",
+		Fields: []WizardField{
+			{Label: "Server URL", Value: "https://mail.example.com"},
+			{Label: "Username", Value: "me@work.example.com"},
+			{Label: "Password", Placeholder: "leave empty to keep the current password", Focused: true},
+			{Label: "Account name", Value: "Work"},
+		},
+		Hint: "tab next · enter continue · esc back",
+	}
+	done := WizardView{
+		Title: "Add an account",
+		Step:  "",
+		Lines: []string{
+			"account\tmail-example-com",
+			"name\tmail-example-com",
+			"config\t/home/tester/.config/jmap-tui/config.toml",
+			"mailbox\tInbox",
+			"secret\tOS keyring",
+		},
+		Hint: "enter continue — jmap-tui starts next",
+	}
+	return []struct {
+		name string
+		w, h int
+		dark bool
+		v    WizardView
+	}{
+		{name: "wizard-form", w: 120, h: 40, dark: true, v: form},
+		{name: "wizard-accounts", w: 120, h: 40, dark: true, v: accounts},
+		{name: "wizard-accounts-light", w: 120, h: 40, dark: false, v: accounts},
+		{name: "wizard-edit", w: 120, h: 40, dark: true, v: edit},
+		{name: "wizard-form-light", w: 120, h: 40, dark: false, v: form},
+		{name: "wizard-connection-error", w: 120, h: 40, dark: true, v: conn},
+		{name: "wizard-testing", w: 120, h: 40, dark: true, v: testing},
+		{name: "wizard-mailboxes", w: 120, h: 40, dark: true, v: mailboxes},
+		{name: "wizard-mailboxes-compact", w: 59, h: 25, dark: true, v: mailboxes},
+		{name: "wizard-save-keyring-failed", w: 120, h: 40, dark: true, v: save},
+		{name: "wizard-done", w: 120, h: 40, dark: true, v: done},
+		{name: "wizard-done-light", w: 120, h: 40, dark: false, v: done},
+	}
+}
+
+func TestGoldenWizardFrames(t *testing.T) {
+	dir := filepath.Join("..", "..", "test", "golden")
+	for _, f := range wizardFrames() {
+		pal := DarkTheme()
+		if !f.dark {
+			pal = LightTheme()
+		}
+		got := RenderWizard(f.w, f.h, NewTheme(pal), f.v)
+		path := filepath.Join(dir, f.name+".golden")
+		if *update {
+			if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+				t.Fatalf("write %s: %v", path, err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("read golden %s: %v (run with -update to generate)", path, err)
+			continue
+		}
+		if got != strings.TrimRight(string(want), "\n") {
+			t.Errorf("golden mismatch for %s\n--- want ---\n%s\n--- got ---\n%s", f.name, want, got)
+		}
+	}
+}

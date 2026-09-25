@@ -20,14 +20,36 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/keyring"
+	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
 )
 
-// runTUI is the daily-driver reader (M1). It resolves config + keyring,
-// connects, and runs the Bubble Tea program. Panics are caught, the
-// terminal is restored (bubbletea handles its own teardown), and a
-// sanitised crash report is written for filing bugs (FR-K3).
+// runTUI is the daily-driver reader (M1). It runs sessions back-to-back:
+// when one ends by asking for the account wizard (ctrl+a, FR-I8) the
+// wizard runs in the gap and a fresh session starts with whatever it
+// saved — cancelled, and the session simply comes back.
 func runTUI(args []string) error {
+	for {
+		manage, cfgPath, err := runTUISession(args)
+		if err != nil {
+			return err
+		}
+		if !manage {
+			return nil
+		}
+		if _, werr := runWizard(wizardOptions{Path: cfgPath, Launch: true}); werr != nil && !errors.Is(werr, errWizardCancelled) {
+			return werr
+		}
+	}
+}
+
+// runTUISession is one run of the reader: resolve config + keyring,
+// connect, run the Bubble Tea program. Panics are caught, the terminal is
+// restored (bubbletea handles its own teardown), and a sanitised crash
+// report is written for filing bugs (FR-K3). The first result reports a
+// pending account-wizard request (ctrl+a); the second is the config path
+// the wizard should use.
+func runTUISession(args []string) (manage bool, cfgPath string, retErr error) {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	configPath := fs.String("config", "", "config file path (default: $XDG_CONFIG_HOME/jmap-tui/config.toml)")
 	accountID := fs.String("account", "", "account id from config (default: default_account, else the only account)")
@@ -39,15 +61,22 @@ func runTUI(args []string) error {
 	logLevel := fs.String("log-level", "debug", "log level when --log-file is set")
 	timeout := fs.Duration("timeout", 30*time.Second, "network timeout")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return false, "", err
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("tui: unexpected arguments: %v", fs.Args())
+		return false, "", fmt.Errorf("tui: unexpected arguments: %v", fs.Args())
+	}
+	if *configPath == "" {
+		p, err := config.DefaultPath()
+		if err != nil {
+			return false, "", err
+		}
+		*configPath = p
 	}
 
 	logger, closeLog, err := setupLogger(*logFile, *logLevel)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	if closeLog != nil {
 		defer closeLog()
@@ -64,12 +93,12 @@ func runTUI(args []string) error {
 	}
 	accounts, cfg, activeID, err := connectAccounts(copts)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 
 	keys, err := buildKeymap(cfg)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	pal := resolvePalette(first(*theme, cfgTheme(cfg)))
 
@@ -80,7 +109,7 @@ func runTUI(args []string) error {
 	}
 	prefs, err := config.LoadPrefs(prefsPath)
 	if err != nil {
-		return fmt.Errorf("prefs: %w", err)
+		return false, "", fmt.Errorf("prefs: %w", err)
 	}
 
 	m := app.New(app.Options{
@@ -105,11 +134,14 @@ func runTUI(args []string) error {
 		}
 	}()
 
-	_, err = program.Run()
+	final, err := program.Run()
 	if err != nil && !errors.Is(err, tea.ErrProgramKilled) {
-		return fmt.Errorf("tui: %w", err)
+		return false, "", fmt.Errorf("tui: %w", err)
 	}
-	return nil
+	if fm, ok := final.(*app.Model); ok && fm.ManageRequested() {
+		return true, *configPath, nil
+	}
+	return false, *configPath, nil
 }
 
 // connectOpts carries the credential resolution inputs shared by the smoke
@@ -152,6 +184,19 @@ func connectAccounts(opts connectOpts) ([]app.AccountOpt, *config.Config, string
 	}
 
 	cfg, err := config.Load(opts.configPath)
+	adHoc := opts.url != "" || opts.user != ""
+	if needsWizard(err) && !adHoc {
+		// FR-I8 first run: no account configured yet, so the wizard runs
+		// before the reader and the TUI opens with what it saved.
+		fmt.Fprintln(os.Stderr, "No account configured — starting setup.")
+		if _, werr := runWizard(wizardOptions{Path: opts.configPath, Launch: true}); werr != nil {
+			if errors.Is(werr, errWizardCancelled) {
+				return nil, nil, "", fmt.Errorf("%w (run `jmap-tui login` to add one)", errWizardCancelled)
+			}
+			return nil, nil, "", werr
+		}
+		cfg, err = config.Load(opts.configPath)
+	}
 	type target struct {
 		id   string
 		acct *config.Account
@@ -193,7 +238,7 @@ func connectAccounts(opts connectOpts) ([]app.AccountOpt, *config.Config, string
 		if _, ok := cfg.Account(activeID); !ok {
 			return nil, nil, "", fmt.Errorf("account %q not found in %s", activeID, opts.configPath)
 		}
-	case errors.Is(err, os.ErrNotExist) && (opts.url != "" || opts.user != ""):
+	case errors.Is(err, os.ErrNotExist) && adHoc:
 		// Flags-only mode; config is optional there.
 		if opts.accountID == "" {
 			opts.accountID = "default"
@@ -237,6 +282,13 @@ func connectAccounts(opts connectOpts) ([]app.AccountOpt, *config.Config, string
 	return out, cfg, activeID, nil
 }
 
+// needsWizard reports whether a config load failure means "no account is
+// set up yet" — the wizard's cue (FR-I8) — rather than a broken file the
+// user must fix.
+func needsWizard(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, config.ErrNoAccounts)
+}
+
 // connectOne resolves one account's credentials (flags win for the active
 // account) and pre-flights Connect. A failure is reported through
 // Connected=false + Err — never fatal on its own (M6 failure isolation).
@@ -247,6 +299,7 @@ func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool
 	}
 	if acct != nil {
 		out.DefaultIdentity = acct.DefaultIdentity
+		out.InitialMailbox = mail.ID(acct.InitialMailbox)
 	}
 
 	serverURL := accountURL(acct)

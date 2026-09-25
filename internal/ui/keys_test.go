@@ -1,6 +1,9 @@
 package ui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestKeyMapDefaultsResolve(t *testing.T) {
 	km, err := NewKeyMap(nil)
@@ -65,5 +68,39 @@ func TestKeyMapHelpGroupsAliases(t *testing.T) {
 	}
 	if found != "j/down" {
 		t.Fatalf("alias group = %q, want j/down", found)
+	}
+}
+
+// TestKeyMapRejectsShadowedGlobals: a global binding that a pane-specific
+// binding reuses would never fire in that pane — ambiguity FR-I3 forbids
+// (it shows up when a user remaps an action onto an existing key).
+func TestKeyMapRejectsShadowedGlobals(t *testing.T) {
+	// Defaults must be clean, or every startup would fail.
+	km, err := NewKeyMap(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := km.Validate(); err != nil {
+		t.Fatalf("defaults violate Validate: %v", err)
+	}
+
+	// Remapping quit onto a list key shadows the global in the list pane.
+	bad, err := NewKeyMap(map[Action]string{ActQuit: "j"})
+	if err != nil {
+		t.Fatalf("NewKeyMap: %v", err)
+	}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("shadowed global accepted; want an error")
+	} else if !strings.Contains(err.Error(), "quit") {
+		t.Errorf("error %q should name the shadowed action", err)
+	}
+
+	// Two actions on one key in one pane is still the original error.
+	clash, err := NewKeyMap(map[Action]string{ActListDown: "x"})
+	if err != nil {
+		t.Fatalf("NewKeyMap: %v", err)
+	}
+	if err := clash.Validate(); err == nil || !strings.Contains(err.Error(), "select") {
+		t.Fatalf("err = %v, want the list.down/list.toggle_select conflict", err)
 	}
 }

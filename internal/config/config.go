@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,58 +14,72 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// ErrNoAccounts is the validation failure that means "this config has no
+// [accounts.*] table at all" — the wizard's cue to offer first-run setup
+// (FR-I8) instead of an error the user cannot act on.
+var ErrNoAccounts = errors.New("no accounts defined; add an [accounts.<id>] table or run `jmap-tui login`")
+
 // Account describes one server account.
+//
+// Every field carries omitempty so the wizard's SaveAccount writes only
+// what was actually chosen (config.toml is user-facing output, FR-J1).
 type Account struct {
 	// DisplayName is a user-facing label shown in the switcher.
-	DisplayName string `toml:"display_name"`
+	DisplayName string `toml:"display_name,omitempty"`
 
 	// URL is the server base URL; the session resource is discovered at
 	// /.well-known/jmap unless SessionURL is set.
 	URL string `toml:"url"`
 
 	// SessionURL overrides discovery with an explicit session endpoint.
-	SessionURL string `toml:"session_url"`
+	SessionURL string `toml:"session_url,omitempty"`
 
 	// Username is the principal used for HTTP Basic auth (FR-A2).
 	Username string `toml:"username"`
 
 	// PasswordKeyring requests keyring-backed secrets; true when nil
 	// (the default).
-	PasswordKeyring *bool `toml:"password_keyring"`
+	PasswordKeyring *bool `toml:"password_keyring,omitempty"`
 
 	// PasswordFile is an explicit opt-in escape hatch: a chmod-600 file
 	// containing the app password (FR-J2). Its use is warned about at
 	// password-resolution time.
-	PasswordFile string `toml:"password_file"`
+	PasswordFile string `toml:"password_file,omitempty"`
 
 	// DefaultIdentity optionally pins the composer's From for this
 	// account (FR-A1): matched against the server's Identity/get results
 	// by email, then by id. Empty means the account's first identity.
-	DefaultIdentity string `toml:"default_identity"`
+	DefaultIdentity string `toml:"default_identity,omitempty"`
+
+	// InitialMailbox is the mailbox the app opens first for this account,
+	// chosen in the wizard (FR-I8); empty (or an id no longer in the
+	// tree) falls back to the inbox. Mailbox ids are server-side and
+	// stable, so a re-created mailbox is the only thing that orphans it.
+	InitialMailbox string `toml:"initial_mailbox,omitempty"`
 }
 
 // Config is the parsed configuration document.
 type Config struct {
 	// DefaultAccount is the account id to activate at startup; empty means
 	// the sole configured account, or an error when several exist.
-	DefaultAccount string `toml:"default_account"`
+	DefaultAccount string `toml:"default_account,omitempty"`
 
 	// Accounts maps a stable account id to its settings.
 	Accounts map[string]*Account `toml:"accounts"`
 
 	// Window bounds the rolling query window (FR-D3); zero values mean
 	// defaults.
-	Window Window `toml:"window"`
+	Window Window `toml:"window,omitempty"`
 
 	// Keys remaps actions to keystrokes: action id → key (FR-I3). Keys are
 	// validated when the keymap is built.
-	Keys map[string]string `toml:"keys"`
+	Keys map[string]string `toml:"keys,omitempty"`
 
 	// Theme selects the palette: "dark", "light", or "auto" (default).
-	Theme string `toml:"theme"`
+	Theme string `toml:"theme,omitempty"`
 
 	// Compose holds composer settings (M5).
-	Compose Compose `toml:"compose"`
+	Compose Compose `toml:"compose,omitempty"`
 }
 
 // Compose tunes the composer (FR-H5). The app never writes this section:
@@ -75,15 +90,15 @@ type Compose struct {
 	// duration syntax ("5s", "500ms"); empty or "0" submits immediately.
 	// The server's own EmailSubmission undo window (reported back after
 	// submit) is separate and server-controlled (PLAN §7).
-	UndoDelay string `toml:"undo_delay"`
+	UndoDelay string `toml:"undo_delay,omitempty"`
 }
 
 // Window holds the rolling-window tuning knobs (FR-D3). Zero fields fall
 // back to sync defaults.
 type Window struct {
-	Chunk    int `toml:"chunk"`
-	Cap      int `toml:"cap"`
-	Prefetch int `toml:"prefetch"`
+	Chunk    int `toml:"chunk,omitempty"`
+	Cap      int `toml:"cap,omitempty"`
+	Prefetch int `toml:"prefetch,omitempty"`
 }
 
 // DefaultPath returns the conventional config location:
@@ -164,7 +179,7 @@ func validate(cfg *Config, md toml.MetaData) error {
 		}
 	}
 	if len(cfg.Accounts) == 0 {
-		return fmt.Errorf("no accounts defined; add an [accounts.<id>] table")
+		return ErrNoAccounts
 	}
 	for id, a := range cfg.Accounts {
 		if err := validateAccount(id, a); err != nil {
