@@ -39,30 +39,31 @@ IMAP support is a **future roadmap item**, designed for from day one via a provi
 
 > Rendered output from the golden test suite (real UI frames, ANSI colours in the terminal):
 
-Three panes (≥100 cols) — sidebar · list · preview, one accent, hairline rules:
+Three panes (≥100 cols) — sidebar · list · preview, one accent. Every column leads with a top rule: heavy and accent-coloured under the focused column, a hairline under the others — the focus indicator, readable even without colour. The sidebar's first row names the account whose folders it shows, bracketed by accent-filled cells so it can't be mistaken for a mailbox:
 
 ```text
 jmap-tui  Inbox  1432 messages · 3 unread
-Inbox               3 │ ★   Dana Ops      Deploy pipeline is … 35m │ From: Eve Security <eve@example.test>
-Sent Items            │   ↩   Eve Security  Quarterly audit r… 3h  │ To: me@example.test
-  agent-test          │       Bob Thread    ▾ Re: planning sync 1d │ Date: Mon, 21 Sep 2026 07:00
-Archive               │ ●     Alice Root     └ planning sync   1d  │ Subject: Quarterly audit report attached
-                      │ ↓ more                                     │ ──────────────────────────────
-                      │                                            │ Hello,
-                      │                                            │ Find the quarterly audit report attached.
-                      │                                            │ 1 attachment: audit-q3.pdf (242.5K)
+─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
+█ Work                  █│  ★   Dana Ops         Deploy pipeline is… 35m    │From: Eve Security <from@example.test>
+Inbox                   3│   ↩  Eve Security     Quarterly audit re… 3h     │To: me@example.test
+Sent Items               │      Bob Thread       ▾ Re: planning s…   1d     │Date: Mon, 21 Sep 2026 07:00
+  agent-test             │ ●    Alice Root         └ planning sync   1d     │Subject: Quarterly audit report attached
+Archive                  │↓ more                                            │──────────────────────────────────────────
+                         │                                                  │Hello,
 ```
 
-The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. Actions always route to the owning account:
+The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. The folder tree stays the active account's — the sidebar label says whose. Actions always route to the owning account:
 
 ```text
-jmap-tui  unified inbox  13 messages
-Inbox               3 │█ ●   Dana Ops         Deploy pipeline is … 35m │ Account: Personal
-Sent Items            │▓     Eve Security     Quarterly audit r… 3h    │ From: Eve Security <eve@example.test>
-  agent-test          │█     Bob Thread       ▾ Re: planning sync  1d   │ Subject: Quarterly audit report attached
-Archive               │█ ●   Alice Root        └ planning sync    1d   │ Date: Mon, 21 Sep 2026 07:00
-                      │ ↓ more                                        │ ↑ new mail
-unified  live  synced 10:00:00   Personal: push stream lost, reconnecting
+jmap-tui  unified inbox  4 messages
+─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
+█ Work                  █│█  ★   Dana Ops         Deploy pipeline i… 35m    │Account: Personal
+Inbox                   3│▓   ↩  Eve Security     Quarterly audit r… 3h     │From: Eve Security <from@example.test>
+Sent Items               │█      Bob Thread       ▾ Re: planning …   1d     │To: me@example.test
+  agent-test             │█ ●    Alice Root         └ planning sync  1d     │Date: Mon, 21 Sep 2026 07:00
+Archive                  │↓ more                                            │Subject: Quarterly audit report attached
+                         │                                                  │──────────────────────────────────────────
+unified  live  synced 10:00:00                                                        Old laptop: connect: auth rejected
 ```
 
 Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. Dark and light palettes are terminal-adaptive.
