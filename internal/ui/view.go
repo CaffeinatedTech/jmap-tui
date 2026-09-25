@@ -170,7 +170,8 @@ func ComputeLayout(w, h int, st State) Layout {
 
 // previewChrome counts the preview's fixed lines for the given state.
 func previewChrome(st State) int {
-	n := len(previewHeader(st)) + 1 + 1 // header block + rule + strip
+	// top rule + header block + rule + strip (+ error line)
+	n := len(previewHeader(st)) + 1 + 1 + 1
 	if st.Err != "" {
 		n++
 	}

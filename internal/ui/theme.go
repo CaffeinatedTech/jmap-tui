@@ -86,19 +86,25 @@ func LightTheme() Palette {
 type Theme struct {
 	P Palette
 
-	Row        lipgloss.Style
-	RowSel     lipgloss.Style
-	RowSelDim  lipgloss.Style
-	Muted      lipgloss.Style
-	Accent     lipgloss.Style
-	Header     lipgloss.Style
-	Rule       lipgloss.Style
-	HelpKey    lipgloss.Style
-	HelpDesc   lipgloss.Style
-	Attachment lipgloss.Style
-	Danger     lipgloss.Style
-	Success    lipgloss.Style
-	FreshRow   lipgloss.Style
+	Row       lipgloss.Style
+	RowSel    lipgloss.Style
+	RowSelDim lipgloss.Style
+	Muted     lipgloss.Style
+	Accent    lipgloss.Style
+	Header    lipgloss.Style
+	Rule      lipgloss.Style
+	// RuleActive is the top rule of the focused column: heavy glyph plus
+	// the accent, so focus reads without relying on colour alone.
+	RuleActive lipgloss.Style
+	// SidebarLabel styles the sidebar's account label — bold header text;
+	// the accent end-caps are painted as background-filled cells.
+	SidebarLabel lipgloss.Style
+	HelpKey      lipgloss.Style
+	HelpDesc     lipgloss.Style
+	Attachment   lipgloss.Style
+	Danger       lipgloss.Style
+	Success      lipgloss.Style
+	FreshRow     lipgloss.Style
 }
 
 // AccountTint is the owner-bar style for a unified row (FR-A5): a
@@ -117,19 +123,21 @@ func (t Theme) AccountTint(i int) lipgloss.Style {
 func NewTheme(p Palette) Theme {
 	base := lipgloss.NewStyle().Foreground(p.BodyFg)
 	return Theme{
-		P:          p,
-		Row:        base,
-		RowSel:     base.Background(p.Selected).Foreground(p.SelectedFg),
-		RowSelDim:  lipgloss.NewStyle().Foreground(p.Muted).Background(p.Selected),
-		Muted:      lipgloss.NewStyle().Foreground(p.Muted),
-		Accent:     lipgloss.NewStyle().Foreground(p.Accent),
-		Header:     lipgloss.NewStyle().Foreground(p.HeaderFg),
-		Rule:       lipgloss.NewStyle().Foreground(p.Rule),
-		HelpKey:    lipgloss.NewStyle().Foreground(p.Accent),
-		HelpDesc:   lipgloss.NewStyle().Foreground(p.BodyFg),
-		Attachment: lipgloss.NewStyle().Foreground(p.Muted),
-		Danger:     lipgloss.NewStyle().Foreground(p.Danger),
-		Success:    lipgloss.NewStyle().Foreground(p.Success),
-		FreshRow:   base.Background(p.Selected),
+		P:            p,
+		Row:          base,
+		RowSel:       base.Background(p.Selected).Foreground(p.SelectedFg),
+		RowSelDim:    lipgloss.NewStyle().Foreground(p.Muted).Background(p.Selected),
+		Muted:        lipgloss.NewStyle().Foreground(p.Muted),
+		Accent:       lipgloss.NewStyle().Foreground(p.Accent),
+		Header:       lipgloss.NewStyle().Foreground(p.HeaderFg),
+		Rule:         lipgloss.NewStyle().Foreground(p.Rule),
+		RuleActive:   lipgloss.NewStyle().Foreground(p.Accent),
+		SidebarLabel: lipgloss.NewStyle().Foreground(p.HeaderFg).Bold(true),
+		HelpKey:      lipgloss.NewStyle().Foreground(p.Accent),
+		HelpDesc:     lipgloss.NewStyle().Foreground(p.BodyFg),
+		Attachment:   lipgloss.NewStyle().Foreground(p.Muted),
+		Danger:       lipgloss.NewStyle().Foreground(p.Danger),
+		Success:      lipgloss.NewStyle().Foreground(p.Success),
+		FreshRow:     base.Background(p.Selected),
 	}
 }

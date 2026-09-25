@@ -94,6 +94,7 @@ func goldenFrames() []frame {
 				Snap:           fixtureSnapshot(),
 				Focus:          uiFocus,
 				SidebarVisible: sidebarOn,
+				Account:        "Work",
 				Now:            time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC),
 				ShowSize:       showSize,
 				VpView:         vpBody,
@@ -258,11 +259,13 @@ func goldenFrames() []frame {
 		{name: "fullscreen", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.Fullscreen = true
+			st.Focus = PanePreview // the app forces preview focus (FR-E5)
 			return st
 		}},
 		{name: "fullscreen-light", w: 120, h: 40, st: func() State {
 			st := mk(false)()
 			st.Fullscreen = true
+			st.Focus = PanePreview
 			return st
 		}},
 		// M5 composer (FR-H1..H5).

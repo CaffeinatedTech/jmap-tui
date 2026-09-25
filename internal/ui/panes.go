@@ -38,12 +38,51 @@ func pad(s string, n int) string {
 	return s + strings.Repeat(" ", d)
 }
 
-// renderSidebar draws the mailbox tree (FR-C1): hierarchy indentation,
-// unread counts, one accent on the active mailbox.
+// topRule draws a column's first line: a heavy accent rule under the
+// focused pane, a hairline under the others. The glyph weight carries the
+// focus signal on terminals where colour does not (FR-I1 companion).
+func topRule(w int, focused bool, th Theme) string {
+	if w <= 0 {
+		return ""
+	}
+	if focused {
+		return th.RuleActive.Render(strings.Repeat("━", w))
+	}
+	return th.Rule.Render(strings.Repeat("─", w))
+}
+
+// sidebarLabel draws the account label at the top of the folder column:
+// accent-filled cells at both ends bracket the account name, so the line
+// reads as chrome — it cannot be confused with a mailbox row, the
+// selection wash, or the accent-coloured active mailbox (FR-A5 companion).
+// The row is always emitted, even with an empty name, so the tree below
+// never shifts between frames.
+func sidebarLabel(w int, name string, th Theme) string {
+	if w <= 0 {
+		return ""
+	}
+	cell := lipgloss.NewStyle().Background(th.P.Accent).Render(" ")
+	return cell + pad(th.SidebarLabel.Render(" "+name), w-2) + cell
+}
+
+// renderSidebar draws the mailbox tree (FR-C1): top rule, account label,
+// then hierarchy indentation, unread counts, one accent on the active
+// mailbox.
 func renderSidebar(l Layout, h int, st State) string {
 	th := st.Theme
+	w := max(l.SidebarW-1, 0)
 	var b strings.Builder
 	used := 0
+	if used < h {
+		b.WriteString(topRule(w, st.Focus == PaneSidebar, th))
+		b.WriteString("\n")
+		used++
+	}
+	if used < h {
+		b.WriteString(sidebarLabel(w, st.Account, th))
+		b.WriteString("\n")
+		used++
+	}
 	for i, node := range st.Snap.Mailboxes {
 		if used >= h {
 			break
@@ -149,23 +188,29 @@ func renderList(l Layout, h int, st State) string {
 
 	role := activeMailboxRole(st)
 
-	if st.Snap.Total < 0 {
-		// First frame skeleton (FR-D6): never a freeze, never blank.
-		return th.Muted.Render("loading mailbox…")
-	}
-
 	rows := st.Snap.Rows
 	cursor := st.Snap.Cursor
 
 	var b strings.Builder
 	used := 0
-	if st.Snap.LoadBackward && used < h {
+	if used < h {
+		b.WriteString(topRule(w, st.Focus == PaneList, th))
+		b.WriteString("\n")
+		used++
+	}
+	if st.Snap.Total < 0 {
+		// First frame skeleton (FR-D6): never a freeze, never blank —
+		// rendered under the top rule so the column chrome holds.
+		b.WriteString(th.Muted.Render("loading mailbox…"))
+		b.WriteString("\n")
+		used++
+	} else if st.Snap.LoadBackward && used < h {
 		b.WriteString(th.Muted.Render("↑ more"))
 		b.WriteString("\n")
 		used++
 	}
 	for i, r := range rows {
-		if used >= h {
+		if st.Snap.Total < 0 || used >= h {
 			break
 		}
 		unread := !r.Summary.Keywords.Has("$seen")
@@ -244,7 +289,7 @@ func renderList(l Layout, h int, st State) string {
 		b.WriteString("\n")
 		used++
 	}
-	if st.Snap.LoadForward && used < h {
+	if st.Snap.Total >= 0 && st.Snap.LoadForward && used < h {
 		b.WriteString(th.Muted.Render("↓ more"))
 		b.WriteString("\n")
 		used++
@@ -346,6 +391,11 @@ func renderPreview(l Layout, h int, st State) string {
 	w := l.PreviewW - 1
 	var b strings.Builder
 	used := 0
+	if used < h {
+		b.WriteString(topRule(w, st.Focus == PanePreview, th))
+		b.WriteString("\n")
+		used++
+	}
 
 	if _, ok := cursorRow(st.Snap); ok {
 		for _, line := range previewHeader(st) {
