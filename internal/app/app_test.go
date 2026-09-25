@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
@@ -203,6 +206,53 @@ func TestOpenMailboxMovesFocusToList(t *testing.T) {
 	}
 	if m.snap.ActiveMailbox != "mb-trash" {
 		t.Errorf("active mailbox = %q, want mb-trash", m.snap.ActiveMailbox)
+	}
+}
+
+// TestLayoutTogglePersists: z flips the pane layout and remembers it in
+// prefs.toml — the app-managed file only, never config.toml (FR-I10,
+// FR-J1) — and a fresh model boots from the saved choice.
+func TestLayoutTogglePersists(t *testing.T) {
+	m, _ := newTestModel(t)
+	prefsPath := filepath.Join(t.TempDir(), "prefs.toml")
+	m.opts.Prefs = &config.Prefs{}
+	m.opts.PrefsPath = prefsPath
+
+	_, cmd := m.handleKey(key("z"))
+	if cmd != nil {
+		t.Fatal("layout toggle produced a command (local state only)")
+	}
+	if !m.stacked {
+		t.Fatal("z did not switch to the stacked layout")
+	}
+	data, err := os.ReadFile(prefsPath)
+	if err != nil {
+		t.Fatalf("prefs file: %v", err)
+	}
+	if !strings.Contains(string(data), `layout = "stacked"`) {
+		t.Fatalf("prefs file missing the layout choice:\n%s", data)
+	}
+
+	// A fresh model boots stacked from the saved prefs.
+	got, err := config.LoadPrefs(prefsPath)
+	if err != nil {
+		t.Fatalf("LoadPrefs: %v", err)
+	}
+	if fresh := New(Options{Prefs: got}); !fresh.stacked {
+		t.Fatal("fresh model did not restore the stacked layout")
+	}
+
+	// Toggling back clears the key: prefs stay minimal, default layout.
+	_, _ = m.handleKey(key("z"))
+	if m.stacked {
+		t.Fatal("second z did not return to side-by-side")
+	}
+	data, err = os.ReadFile(prefsPath)
+	if err != nil {
+		t.Fatalf("prefs file: %v", err)
+	}
+	if strings.Contains(string(data), "layout") {
+		t.Fatalf("prefs still record a layout:\n%s", data)
 	}
 }
 

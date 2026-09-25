@@ -51,6 +51,7 @@ const (
 	ActCyclePane     Action = "pane.cycle"
 	ActCyclePaneRev  Action = "pane.cycle_reverse"
 	ActToggleSidebar Action = "pane.toggle_sidebar"
+	ActToggleLayout  Action = "pane.toggle_layout"
 	ActUndo          Action = "ui.undo"
 	ActHelp          Action = "ui.help"
 	ActQuit          Action = "ui.quit"
@@ -127,6 +128,7 @@ func defaultBindings() []Binding {
 		{Key: "tab", Act: ActCyclePane, Help: "next pane", Pane: PaneAny},
 		{Key: "shift+tab", Act: ActCyclePaneRev, Help: "previous pane", Pane: PaneAny},
 		{Key: "[", Act: ActToggleSidebar, Help: "show/hide sidebar", Pane: PaneAny},
+		{Key: "z", Act: ActToggleLayout, Help: "stack/side-by-side layout", Pane: PaneAny},
 		{Key: "ctrl+z", Act: ActUndo, Help: "undo last action", Pane: PaneAny},
 		{Key: "?", Act: ActHelp, Help: "help", Pane: PaneAny},
 		{Key: "q", Act: ActQuit, Help: "quit", Pane: PaneAny},

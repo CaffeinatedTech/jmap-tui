@@ -22,6 +22,7 @@ func TestSavePrefsRoundTrip(t *testing.T) {
 	p := &Prefs{}
 	p.SetArchiveMailbox("acc1", "mb-archive")
 	p.SetArchiveMailbox("acc2", "mb-hold")
+	p.Layout = LayoutStacked
 	if err := SavePrefs(path, p); err != nil {
 		t.Fatalf("SavePrefs: %v", err)
 	}
@@ -41,6 +42,13 @@ func TestSavePrefsRoundTrip(t *testing.T) {
 	}
 	if got.ArchiveMailbox("acc1") != "mb-archive" || got.ArchiveMailbox("acc2") != "mb-hold" {
 		t.Fatalf("round trip: %+v", got)
+	}
+	if !got.Stacked() || got.Layout != LayoutStacked {
+		t.Fatalf("layout round trip = %q, want %q", got.Layout, LayoutStacked)
+	}
+	// The zero/unknown value falls back to the default layout.
+	if (&Prefs{}).Stacked() || (&Prefs{Layout: "sideways"}).Stacked() {
+		t.Fatal("unknown layout must fall back to side-by-side")
 	}
 }
 

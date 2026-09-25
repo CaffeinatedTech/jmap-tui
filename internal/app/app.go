@@ -95,6 +95,7 @@ type Model struct {
 	showSize       bool
 	helpOpen       bool
 	fullscreen     bool   // full-screen message view (FR-E5)
+	stacked        bool   // list above preview (FR-I10), remembered in prefs
 	viewKey        string // last seen snapshot view (mailbox/search switch)
 
 	vp       viewport.Model
@@ -178,6 +179,7 @@ func New(opts Options) *Model {
 		vp:             viewport.New(),
 		ctx:            ctx,
 		cancel:         cancel,
+		stacked:        opts.Prefs.Stacked(),
 	}
 	for _, a := range infos {
 		// Every account starts as an unloaded view: the unified merge
@@ -1010,6 +1012,9 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		m.sidebarVisible = !m.sidebarVisible
 		m.resizeViewport()
 		return m, nil
+	case ui.ActToggleLayout:
+		m.toggleLayout()
+		return m, nil
 
 	// --- list pane ---
 	case ui.ActListDown:
@@ -1177,6 +1182,26 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// toggleLayout flips the pane layout between side-by-side and stacked
+// (FR-I10) and remembers the choice in prefs.toml (FR-J1: the app writes
+// only prefs, never config.toml). Session-only runs toggle without saving.
+func (m *Model) toggleLayout() {
+	m.stacked = !m.stacked
+	if m.opts.Prefs != nil {
+		if m.stacked {
+			m.opts.Prefs.Layout = config.LayoutStacked
+		} else {
+			m.opts.Prefs.Layout = ""
+		}
+		if m.opts.PrefsPath != "" {
+			if err := config.SavePrefs(m.opts.PrefsPath, m.opts.Prefs); err != nil {
+				m.err = "layout not remembered: " + err.Error()
+			}
+		}
+	}
+	m.resizeViewport()
+}
+
 func listPage(m *Model) int {
 	_, _, h := m.paneHeights()
 	if h <= 2 {
@@ -1316,6 +1341,7 @@ func (m *Model) uiState() ui.State {
 		}
 	}
 	st.Fullscreen = m.fullscreen
+	st.Stacked = m.stacked
 	if m.toast != nil {
 		st.Toast = m.toast.text
 		st.ToastHint = m.toast.hint

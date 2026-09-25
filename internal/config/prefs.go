@@ -11,12 +11,26 @@ import (
 // Prefs is the app-managed preferences document (prefs.toml, next to
 // config.toml). The app owns and writes only this file — the user-authored
 // config.toml is never rewritten by the app (FR-J1). Choices the user makes
-// in-app (remembered archive destination, per account; later: style
-// settings) persist here.
+// in-app (remembered archive destination, per account; pane layout; later:
+// style settings) persist here.
 type Prefs struct {
 	// Accounts maps a config account id to its remembered choices.
 	Accounts map[string]AccountPrefs `toml:"accounts"`
+
+	// Layout is the pane layout mode: "" or LayoutSide (default) shows the
+	// list beside the preview; LayoutStacked shows the list above it.
+	Layout string `toml:"layout,omitempty"`
 }
+
+// Pane layout modes (FR-I10).
+const (
+	LayoutSide    = "side-by-side"
+	LayoutStacked = "stacked"
+)
+
+// Stacked reports whether prefs ask for the top/bottom layout; unknown
+// values fall back to the default side-by-side.
+func (p *Prefs) Stacked() bool { return p != nil && p.Layout == LayoutStacked }
 
 // AccountPrefs holds one account's remembered in-app choices.
 type AccountPrefs struct {

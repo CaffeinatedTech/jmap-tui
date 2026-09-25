@@ -26,8 +26,8 @@ func TestKeyMapDefaultsResolve(t *testing.T) {
 		t.Fatalf("sidebar ? = %v %v", act, ok)
 	}
 	// Unbound key misses.
-	if _, ok := km.Match(PaneList, "z"); ok {
-		t.Fatal("z should be unbound in the list")
+	if _, ok := km.Match(PaneList, "w"); ok {
+		t.Fatal("w should be unbound in the list")
 	}
 }
 

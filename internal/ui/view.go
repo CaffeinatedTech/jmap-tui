@@ -89,6 +89,10 @@ type State struct {
 	// frame (FR-E5).
 	Fullscreen bool
 
+	// Stacked marks the top/bottom layout (FR-I10): the list renders above
+	// the preview instead of beside it. False is side-by-side (default).
+	Stacked bool
+
 	// Now anchors relative dates; injected for deterministic goldens.
 	Now time.Time
 }
@@ -107,13 +111,19 @@ type Layout struct {
 	ListW    int // 0 when the list is not shown
 	PreviewW int // 0 when the preview is not shown
 
+	// ListH/PreviewH are the vertical split of the stacked layout
+	// (FR-I10); both span the full pane height in side-by-side mode, so
+	// Render only reads them when State.Stacked joins the two vertically.
+	ListH, PreviewH int
+
 	BodyH int // preview viewport height (0 when preview hidden)
 }
 
 // shownPanes decides which panes render for the given width and focus
 // (FR-I1): three panes ≥ 100 cols, two panes 60–99 (preview swaps in for
-// the list when focused), single focused pane below 60. Fullscreen mode
-// (FR-E5) shows the preview alone at any width.
+// the list when focused — stacked mode shows both instead, FR-I10), single
+// focused pane below 60. Fullscreen mode (FR-E5) shows the preview alone
+// at any width.
 func shownPanes(w int, st State) (sidebar, list, preview bool) {
 	if st.Fullscreen {
 		return false, false, true
@@ -124,6 +134,9 @@ func shownPanes(w int, st State) (sidebar, list, preview bool) {
 			st.Focus == PanePreview
 	}
 	if w < 100 {
+		if st.Stacked {
+			return st.SidebarVisible, true, true
+		}
 		sidebar = st.SidebarVisible
 		list = st.Focus != PanePreview
 		preview = st.Focus == PanePreview
@@ -146,7 +159,15 @@ func ComputeLayout(w, h int, st State) Layout {
 	}
 	rest := w - l.SidebarW
 	listW := max(min(rest*55/100, listMax), listMin)
-	if list && preview {
+	if list && preview && st.Stacked {
+		// Stacked (FR-I10): full width each, split down the middle —
+		// preview biased to never drop below its chrome plus one body
+		// row when the frame is short.
+		l.ListW, l.PreviewW = rest, rest
+		ph := max(contentH/2, previewChrome(st)+1)
+		l.PreviewH = min(ph, contentH)
+		l.ListH = contentH - l.PreviewH
+	} else if list && preview {
 		l.ListW = listW
 		if pw := rest - listW; pw > 0 {
 			l.PreviewW = pw
@@ -161,6 +182,9 @@ func ComputeLayout(w, h int, st State) Layout {
 	if l.PreviewW > 0 {
 		// header block + hairline + attachments strip + error line budget
 		l.BodyH = contentH - previewChrome(st)
+		if st.Stacked && list {
+			l.BodyH = l.PreviewH - previewChrome(st)
+		}
 		if l.BodyH < 1 {
 			l.BodyH = 1
 		}
@@ -209,11 +233,19 @@ func Render(w, h int, st State) string {
 	if l.SidebarW > 0 && sidebar {
 		panes = append(panes, renderSidebar(l, contentHeight(h, st), st))
 	}
-	if l.ListW > 0 && list {
-		panes = append(panes, renderList(l, contentHeight(h, st), st))
-	}
-	if l.PreviewW > 0 && preview {
-		panes = append(panes, renderPreview(l, contentHeight(h, st), st))
+	if st.Stacked && list && preview {
+		// Stacked (FR-I10): the list block over the preview block, the
+		// preview's own top rule acting as the divider between them.
+		col := padBlock(renderList(l, l.ListH, st), l.ListH) + "\n" +
+			padBlock(renderPreview(l, l.PreviewH, st), l.PreviewH)
+		panes = append(panes, col)
+	} else {
+		if l.ListW > 0 && list {
+			panes = append(panes, renderList(l, contentHeight(h, st), st))
+		}
+		if l.PreviewW > 0 && preview {
+			panes = append(panes, renderPreview(l, contentHeight(h, st), st))
+		}
 	}
 	b.WriteString(joinPanes(panes, st.Theme))
 	b.WriteString("\n")
@@ -342,6 +374,21 @@ func activeMailboxCounts(st State) string {
 		}
 	}
 	return ""
+}
+
+// padBlock extends blk with blank lines to exactly n rows. The stacked
+// split (FR-I10) pins the preview's top rule to the midpoint, but the
+// pane renderers trim their trailing blanks — so each block is padded to
+// its allotted height before the vertical join.
+func padBlock(blk string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	lines := strings.Split(blk, "\n")
+	for len(lines) < n {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // joinPanes composes panes side by side with a hairline rule between them.

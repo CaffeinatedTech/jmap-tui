@@ -351,6 +351,28 @@ func goldenFrames() []frame {
 			st.AccountIndex = map[string]int{"work": 0, "personal": 1}
 			return st
 		}},
+		// FR-I10 stacked layout: list above preview, sidebar unchanged.
+		{name: "stacked", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Stacked = true
+			return st
+		}},
+		{name: "stacked-light", w: 120, h: 40, st: func() State {
+			st := mk(false)()
+			st.Stacked = true
+			return st
+		}},
+		{name: "stacked-medium", w: 99, h: 35, st: func() State {
+			st := mk(true)()
+			st.Stacked = true
+			return st
+		}},
+		{name: "stacked-preview-focus", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Stacked = true
+			st.Focus = PanePreview
+			return st
+		}},
 	}
 }
 
