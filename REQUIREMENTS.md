@@ -75,7 +75,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 - **[FR-C1] [M1]** Sidebar mailbox tree: hierarchy, per-mailbox unread count, special mailboxes identified by role (`inbox`, `drafts`, `sent`, `trash`, `archive`, `junk`).
 - **[FR-C2] [M1]** Selecting a mailbox issues a fresh `Email/query` for that mailbox and resets the list window.
-- **[FR-C3] [M1]** Special semantics: opening **Drafts** opens in edit-aware mode; deleting from **Trash** offers permanent delete (server `/set` destroy); **Sent** shows recipients in the "from" column.
+- **[FR-C3] [M1]** Special semantics: opening **Drafts** opens in edit-aware mode (Enter on a `$draft` row edits it in the composer — the composer itself lands in M5); deleting from **Trash** offers permanent delete (server `/set` destroy); **Sent** shows recipients in the "from" column.
 - **[FR-C4] [M1]** Sidebar collapsible (`[`) to give the list/preview more room.
 
 ## FR-D — Message list & rolling window
@@ -112,11 +112,11 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## FR-H — Compose & send
 
-- **[FR-H1] [M5]** Compose buffer with To/Cc/Bcc/Subject/Body; header/body focus zones; `Identity/get` populates From. Address completion from recent mail headers (in-memory, this session) [M5-stretch].
-- **[FR-H2] [M5]** Reply, reply-all, forward — quoting with attribution line; In-Reply-To/References handled by JMAP `inReplyToEmailId`.
+- **[FR-H1] [M5]** Compose buffer with To/Cc/Bcc/Subject/Body; header/body focus zones; `Identity/get` populates From (`ctrl+i` picks when an account has several). Address completion from recent mail headers is **deferred past M5**: it needs an address source, not a control (see Open question 5). *(Deferred at the M5 gate 2026-09-25; it was marked M5-stretch.)*
+- **[FR-H2] [M5]** Reply, reply-all, forward — quoting with attribution line (`On <date>, <name> <email> wrote:` then `> `-prefixed lines; forwards open with a `---------- Forwarded message ----------` block). Threading is carried by the immutable `inReplyTo` and `references` properties set on draft create (RFC 8621 §4.1.2.5). *(Was "handled by JMAP `inReplyToEmailId`" — no such property exists in RFC 8621; it appeared only in a 2017 draft of draft-ietf-jmap-mail and was dropped before the RFC was published. Corrected 2026-09-25 after verifying the replacement against the RFC text and live Stalwart.)*
 - **[FR-H3] [M5]** Attachments via session `uploadUrl`; progress + cancel; multiple files.
-- **[FR-H4] [M5]** Drafts: autosave (debounced `Email/set` into role-`drafts`) on blur/interval; discard confirmation.
-- **[FR-H5] [M5]** Send via `EmailSubmission/set`; **undo send** = client holds submission for a configurable delay (default 5s) with cancel toast, then submits; after submit, the `EmailSubmission`'s server undo window is reported if available.
+- **[FR-H4] [M5]** Drafts: autosave (debounced `Email/set` into role-`drafts`) on blur/interval; discard confirmation (`y` discards and destroys the server draft, `n` keeps it). An edit writes a *new* Email and retires the old one: message content is immutable (RFC 8621 §4.1.2), so `Email/set update` may only patch keywords and mailbox membership — verified against live Stalwart 2026-09-25.
+- **[FR-H5] [M5]** Send via `EmailSubmission/set`; **undo send** = client holds submission for a configurable delay (default 5s, `[compose] undo_delay` in config.toml) with a cancel toast, then submits; after submit, the `EmailSubmission`'s server undo window is reported if available.
 - **[FR-H6] [M5]** Sending updates the Sent mailbox view optimistically; server reconciliation corrects any drift.
 
 ## FR-I — UI/UX
@@ -175,3 +175,4 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 2. **Address book integration** (JMAP CardDAV capability) for autocomplete — post-v1?
 3. **Windows terminal support depth** — best-effort accepted for v0.1; confirm no blockers at M1. *(M1 note: no blockers observed — pure Go, no cgo, no platform-specific code paths; RSS measurement gracefully skips off-Linux.)*
 4. **Default archive behaviour** when server exposes no archive role — create one (needs write perms) or prompt? *(Resolved M3 2026-09-21: prompt once via the mailbox picker, remember per account in app-managed prefs.toml — FR-J1, FR-G4.)*
+5. **Address completion & address book** — FR-H1's completion and a browsable address book both need somewhere to get addresses from: the JMAP server (an address-book capability, if the account has one) or a local store. A local store collides with the zero-mail-storage rule (NFR-4) unless it is explicitly user-managed, so the source has to be chosen before either feature starts. *(Raised at the M5 gate 2026-09-25 when address completion was deferred.)*

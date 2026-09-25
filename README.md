@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M3 landed (the M2 reader + live sync, plus full triage: read/unread, star, multi-select batch actions, move/copy, delete-to-trash with permanent-destroy undo window, archive with remembered fallback, undo toasts, and attachment save; verified against Stalwart with server-side checks).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M5 landed (reader, live sync, triage, search, and now the composer: `n` to compose, `r`/`a`/`f` to reply/reply-all/forward, server-side drafts with debounced autosave and a discard confirmation, attachment upload with progress and cancel, and send behind a `ctrl+z`-cancellable undo window that files the message into Sent; verified against Stalwart with server-side checks).** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -77,7 +77,12 @@ Username:    you@example.com
 Password:    → stored in your OS keyring, never on disk
 ```
 
-Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-k-configuration--credentials).
+Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-k-configuration--credentials). The composer's undo window is set there:
+
+```toml
+[compose]
+undo_delay = "5s"   # 0s submits immediately
+```
 
 ## Keys (default, remappable)
 
@@ -88,18 +93,22 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 | List | `Space` / `u` | Toggle read/unread |
 | List | `*` | Toggle star/flag |
 | List | `x` | Select (multi-select; batched actions) |
-| List | `y` | Archive |
+| List | `h` | Archive |
 | List | `m` | Move to mailbox… |
-| List | `C` | Copy to mailbox… |
+| List | `y` | Copy to mailbox… |
 | List | `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
+| List | `n` | Compose a new message |
+| List | `r` | Reply |
+| List | `a` | Reply to all |
+| List | `f` | Forward |
+| Drafts | `Enter` | Edit the draft in the composer |
 | Any | `/` | Search — server-side query bar; `Enter` confirms and jumps into the results, `/` re-focuses the bar |
 | Any | `ctrl+s` | Advanced search (fielded form; also `/` while the query bar is open) |
 | Any | `Esc` | Clear the search (while a search view is open; no-op otherwise) |
 | Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
 | Any | `ctrl+z` | Undo last action (while its toast shows) |
-| Any | `c` | Compose *(M5)* |
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
 | Any | `S` | Switch account *(M6)* |
 | Any | `?` | Help overlay |
@@ -108,6 +117,8 @@ Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.co
 Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. `Enter` confirms a search and moves the cursor into the filtered list — `j`/`k` navigate, `/` re-focuses the bar, `Esc` clears the search and restores the mailbox view with position preserved. The advanced modal (`ctrl+s`) composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments — and every field is contains-style. Servers index whole words only, so when a search matches nothing server-side (e.g. a partial word like `0008`), the client automatically falls back to a fuzzy scan: it walks the scope newest-first and matches the chosen fields in memory (keyword, attachment and date filters still apply), streaming matches in with a `scanning n/N` indicator — `Esc` cancels.
 
 Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
+
+The composer takes the whole screen: To/Cc/Bcc/Subject fields above a hairline, the body below it, `tab`/`shift+tab` moving between zones and `ctrl+i` choosing From when the account has more than one identity. Replies quote the original with an attribution line and `> `-prefixed lines; forwards carry a `---------- Forwarded message ----------` block. Drafts are written to the server on a two-second debounce, whenever you leave a field, and whenever you answer the discard prompt with `n` — so a draft survives a restart — editing one from the Drafts mailbox recreates it, because message content is immutable in JMAP (RFC 8621 §4.1.2). Attachments upload with a live percentage and cancel with `esc`. Sending holds the submission for `[compose] undo_delay` (default 5s) and shows a toast: `ctrl+z` cancels and puts you back in the composer with the draft intact. When the window closes the message is submitted once, and the server files it into Sent.
 
 ## Stack
 
