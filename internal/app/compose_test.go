@@ -763,3 +763,34 @@ func TestNavigationDoesNotArmAutosave(t *testing.T) {
 		t.Errorf("draft was recreated by navigation: %s → %s", id, m.compose.draftID)
 	}
 }
+
+// TestAutosaveBeforeSubjectOrBody reproduces the reported failure: a fresh
+// composer saves the moment the recipient field blurs (FR-H4 "on blur"),
+// before the user has touched the subject or the body, and that create must
+// be accepted rather than answered with "autosave failed: … invalidProperties:
+// Missing body value for partId".
+func TestAutosaveBeforeSubjectOrBody(t *testing.T) {
+	m, srv := composeTestModel(t)
+
+	_, cmd := m.handleKey(key("n"))
+	pump(t, m, cmd)
+	composeType(t, m, ui.ZoneTo, "alice@example.test")
+
+	// Tab out of To: the blur flush writes the draft immediately, with the
+	// subject and body still empty.
+	_, cmd = m.handleKey(keyTab())
+	pump(t, m, cmd)
+
+	if m.compose == nil {
+		t.Fatal("composer closed on its own")
+	}
+	if strings.HasPrefix(m.compose.status, "autosave failed") {
+		t.Fatalf("autosave of a body-less draft failed: %q", m.compose.status)
+	}
+	if m.compose.draftID == "" {
+		t.Fatal("no draft id was adopted")
+	}
+	if got := srv.CountIn("mb-drafts"); got != 1 {
+		t.Fatalf("drafts on the server = %d, want 1", got)
+	}
+}

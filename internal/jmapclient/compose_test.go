@@ -3,6 +3,7 @@ package jmapclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -271,5 +272,70 @@ func TestIdentitiesAdvertised(t *testing.T) {
 	}
 	if !containsString(info.Capabilities, "urn:ietf:params:jmap:submission") {
 		t.Error("session does not advertise the submission capability")
+	}
+}
+
+// TestDraftCreateEmptyBodyOmitsPart pins the wire shape of a fresh
+// composer's autosave: no subject, no body, only a recipient. go-jmap
+// tags BodyValue.Value with omitempty, so a "" body would ship a
+// bodyValues entry with no "value" member while textBody still advertises
+// partId "1" — which a real server answers with
+// "invalidProperties: Missing body value for partId".
+func TestDraftCreateEmptyBodyOmitsPart(t *testing.T) {
+	raw, err := json.Marshal(draftCreate(draft("", "")))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := wire["textBody"]; ok {
+		t.Errorf("empty body still advertises a text part: %s", raw)
+	}
+	if _, ok := wire["bodyValues"]; ok {
+		t.Errorf("empty body still ships bodyValues: %s", raw)
+	}
+
+	raw, err = json.Marshal(draftCreate(draft("s", "hello\n")))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := wire["textBody"]; !ok {
+		t.Errorf("non-empty body lost its text part: %s", raw)
+	}
+	if !strings.Contains(string(wire["bodyValues"]), `"value":"hello`) {
+		t.Errorf("non-empty body lost its value: %s", wire["bodyValues"])
+	}
+}
+
+// TestSaveDraftEmptyBody is the autosave of a composer the user has not
+// typed a subject or body into yet: the create must be accepted, and the
+// stored draft must come back with an empty body.
+func TestSaveDraftEmptyBody(t *testing.T) {
+	c, srv := newComposeClient(t)
+	ctx := context.Background()
+
+	d := draft("", "")
+	id, err := c.SaveDraft(ctx, d)
+	if err != nil {
+		t.Fatalf("SaveDraft with no subject/body: %v", err)
+	}
+	if id == "" {
+		t.Fatal("create returned no id")
+	}
+	if got := draftInMailbox(t, srv, "mb-drafts"); got != 1 {
+		t.Fatalf("drafts after create = %d, want 1", got)
+	}
+
+	got, err := c.FetchBody(ctx, id)
+	if err != nil {
+		t.Fatalf("FetchBody: %v", err)
+	}
+	if got.Text != "" {
+		t.Errorf("empty draft came back with body %q", got.Text)
 	}
 }

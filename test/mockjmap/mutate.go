@@ -59,7 +59,7 @@ type setError = map[string]string
 
 // buildSetResponse assembles the Email/set response map with the exact wire
 // keys go-jmap decodes.
-func buildSetResponse(s *Server, oldState string, created map[string]any, updated, destroyed []string, notUpdated, notDestroyed map[string]setError) map[string]any {
+func buildSetResponse(s *Server, oldState string, created map[string]any, updated, destroyed []string, notCreated, notUpdated, notDestroyed map[string]setError) map[string]any {
 	out := map[string]any{
 		"accountId": "acc1",
 		"oldState":  oldState,
@@ -67,6 +67,9 @@ func buildSetResponse(s *Server, oldState string, created map[string]any, update
 	}
 	if len(created) > 0 {
 		out["created"] = created
+	}
+	if len(notCreated) > 0 {
+		out["notCreated"] = notCreated
 	}
 	if len(updated) > 0 {
 		out["updated"] = updated
@@ -127,6 +130,10 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 		var ce createdEmail
 		if err := json.Unmarshal(raw, &ce); err != nil {
 			notCreated[handle] = setError{"type": "invalidProperties", "description": err.Error()}
+			continue
+		}
+		if desc := validateBodyValues(raw); desc != "" {
+			notCreated[handle] = setError{"type": "invalidProperties", "description": desc}
 			continue
 		}
 		e, mbs := s.materialiseCreateLocked(handle, ce)
@@ -301,7 +308,49 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 		})
 	}
 
-	return buildSetResponse(s, oldState, created, updated, destroyed, notUpdated, notDestroyed)
+	return buildSetResponse(s, oldState, created, updated, destroyed, notCreated, notUpdated, notDestroyed)
+}
+
+// validateBodyValues enforces the create-side body rule the way a real
+// server does (Stalwart crates/jmap/src/email/set.rs): every partId named
+// in textBody/htmlBody must resolve to a bodyValues entry that carries a
+// "value" member — an empty string is fine, a *missing* one is not, since
+// the parser drops the whole map and then fails the lookup. Checked on the
+// raw JSON because the decoded form cannot tell "" from absent. It returns
+// the SetError description verbatim (empty when valid), so the fake's
+// rejection reads exactly like the server's.
+func validateBodyValues(raw json.RawMessage) string {
+	var probe struct {
+		TextBody   []partRef                  `json:"textBody"`
+		HTMLBody   []partRef                  `json:"htmlBody"`
+		BodyValues map[string]json.RawMessage `json:"bodyValues"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return err.Error()
+	}
+	check := func(parts []partRef) string {
+		for _, p := range parts {
+			if p.PartID == "" { // blob-backed attachment part
+				continue
+			}
+			bv, ok := probe.BodyValues[p.PartID]
+			if !ok {
+				return fmt.Sprintf("Missing body value for partId %q", p.PartID)
+			}
+			var entry map[string]json.RawMessage
+			if err := json.Unmarshal(bv, &entry); err != nil {
+				return err.Error()
+			}
+			if _, ok := entry["value"]; !ok {
+				return fmt.Sprintf("Missing body value for partId %q", p.PartID)
+			}
+		}
+		return ""
+	}
+	if desc := check(probe.TextBody); desc != "" {
+		return desc
+	}
+	return check(probe.HTMLBody)
 }
 
 // materialiseCreateLocked turns a create object into a fixture plus the

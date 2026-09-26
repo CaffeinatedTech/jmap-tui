@@ -63,7 +63,17 @@ func attachmentParts(atts []mail.Attachment) []*email.BodyPart {
 // draftBody renders the plain-text body the way RFC 8621 §4.6 requires for
 // create: exactly one text/plain part whose partId matches its bodyValues
 // entry.
+//
+// An empty body carries no part at all. go-jmap tags BodyValue.Value with
+// `omitempty`, so "" would serialize as a bodyValues entry with no "value"
+// member while textBody still advertises partId "1" — and a server that
+// resolves partId → value (Stalwart) rejects that with
+// "invalidProperties: Missing body value for partId", which is exactly
+// what an autosave of a fresh composer hit.
 func draftBody(text string) (parts []*email.BodyPart, values map[string]*email.BodyValue) {
+	if text == "" {
+		return nil, nil
+	}
 	return []*email.BodyPart{{PartID: "1", Type: "text/plain"}},
 		map[string]*email.BodyValue{"1": {Value: text}}
 }

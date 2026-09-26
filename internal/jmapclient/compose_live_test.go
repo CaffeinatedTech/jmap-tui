@@ -682,3 +682,42 @@ func TestLiveM5ProbeDraftRecreate(t *testing.T) {
 	}
 	_ = idC
 }
+
+// TestLiveM5ProbeEmptyBodyDraft is the autosave a brand-new composer
+// triggers: recipient filled in, subject and body still empty. go-jmap
+// tags BodyValue.Value omitempty, so a "" body used to ship a bodyValues
+// entry with no "value" member while textBody advertised partId "1" —
+// live Stalwart answers that with "invalidProperties: Missing body value
+// for partId". The create must be accepted with no text part at all.
+// Artifact destroyed.
+func TestLiveM5ProbeEmptyBodyDraft(t *testing.T) {
+	url, user, pass := liveCreds(t)
+	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	f := loadComposeFixture(t, ctx, c)
+
+	d := mail.Draft{
+		MailboxID:  f.drafts,
+		IdentityID: f.identity,
+		From:       []mail.Address{{Name: "jmap-tui M5 probe", Email: user}},
+		To:         []mail.Address{{Email: "to@example.test"}},
+	}
+	id, err := c.SaveDraft(ctx, d)
+	if err != nil {
+		t.Fatalf("SaveDraft with no subject or body: %v", err)
+	}
+	defer func() { destroyEmails(t, ctx, c, id) }()
+
+	got := fetchEmail(t, ctx, c, id, "id", "keywords", "mailboxIds", "preview")
+	t.Logf("empty-bodied draft %s: keywords=%v preview=%q", id, got.Keywords, got.Preview)
+	if !got.Keywords["$draft"] {
+		t.Errorf("$draft missing: %v", got.Keywords)
+	}
+	if !hasID(mailboxList(got), string(f.drafts)) {
+		t.Errorf("misfiled: %v", mailboxList(got))
+	}
+}

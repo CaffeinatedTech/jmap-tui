@@ -204,7 +204,7 @@ func (s *Server) emailSubmissionSetResponse(args json.RawMessage, callID string,
 		})
 	}
 
-	implicit := buildSetResponse(s, oldState, nil, updated, destroyed, nil, nil)
+	implicit := buildSetResponse(s, oldState, nil, updated, destroyed, nil, nil, nil)
 	out := map[string]any{
 		"accountId": "acc1",
 		"oldState":  oldState,
