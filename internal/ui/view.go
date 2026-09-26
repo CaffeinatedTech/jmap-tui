@@ -111,6 +111,14 @@ type State struct {
 	// non-nil while open. It takes the frame like the picker.
 	AccountSwitch *SwitchView
 
+	// Contacts is the full-screen contacts view (M9, FR-L1); non-nil
+	// while open. It takes the frame below the modals, like Compose.
+	Contacts *ContactsView
+
+	// ContactForm is the new/edit contact modal (FR-L2); non-nil while
+	// open — over the contacts screen or over the reader alike.
+	ContactForm *ContactFormView
+
 	// Accounts lists configured accounts for multi-account chrome: the
 	// switcher rows, the footer's per-account status (FR-I5), and owner
 	// names. Empty keeps single-account rendering unchanged.
@@ -267,8 +275,14 @@ func Render(w, h int, st State) string {
 	if st.AdvSearch != nil {
 		return renderAdvSearch(w, h, st)
 	}
+	if st.ContactForm != nil {
+		return renderContactForm(w, h, st)
+	}
 	if st.Compose != nil {
 		return renderCompose(w, h, st)
+	}
+	if st.Contacts != nil {
+		return renderContacts(w, h, st)
 	}
 	var b strings.Builder
 	b.WriteString(renderHeader(w, st))

@@ -69,6 +69,21 @@ type Engine struct {
 	updates      chan Snapshot
 	liveOnce     sync.Once
 	liveCfg      liveConfig
+
+	// Contacts (M9, FR-L): a parallel in-memory store with its own state
+	// strings, version and latest-wins channel — the mail Snapshot path
+	// stays untouched (CONTACTS_PLAN §2.3). Lazy: populated by
+	// LoadContacts, then kept fresh by reconcileContacts only while warm.
+	contactsLoaded  bool
+	contactsLoading bool
+	contactBooks    []mail.AddressBook
+	contacts        map[mail.ID]mail.Contact
+	contactOrder    []mail.ID
+	contactState    string
+	bookState       string
+	contactVersion  uint64
+	contactErr      string
+	contactUpdates  chan ContactSnapshot
 }
 
 // Config tunes an Engine.
@@ -195,17 +210,19 @@ type BodyView struct {
 func NewEngine(p mail.Provider, cfg Config) *Engine {
 	c := cfg.withDefaults()
 	return &Engine{
-		p:           p,
-		cfg:         c,
-		sort:        c.Sort,
-		summaries:   map[mail.ID]mail.EmailSummary{},
-		threads:     map[mail.ID][]mail.ID{},
-		threadSizes: map[mail.ID]int{},
-		expanded:    map[mail.ID]bool{},
-		bodies:      newBodyCache(c.BodyCache),
-		fresh:       map[mail.ID]time.Time{},
-		overlay:     map[mail.ID]*pendingOp{},
-		updates:     make(chan Snapshot, 1),
+		p:              p,
+		cfg:            c,
+		sort:           c.Sort,
+		summaries:      map[mail.ID]mail.EmailSummary{},
+		threads:        map[mail.ID][]mail.ID{},
+		threadSizes:    map[mail.ID]int{},
+		expanded:       map[mail.ID]bool{},
+		bodies:         newBodyCache(c.BodyCache),
+		fresh:          map[mail.ID]time.Time{},
+		overlay:        map[mail.ID]*pendingOp{},
+		updates:        make(chan Snapshot, 1),
+		contacts:       map[mail.ID]mail.Contact{},
+		contactUpdates: make(chan ContactSnapshot, 1),
 		liveCfg: liveConfig{
 			pollInterval: c.PollInterval,
 			pushRetries:  c.PushRetries,

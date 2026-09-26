@@ -74,12 +74,24 @@ type Server struct {
 	emailVersion   int
 	journal        []journalEntry
 
+	// Contacts (RFC 9610): cards are stored as JSContact wire objects,
+	// books as fixtures. Versions feed the same journal/state machinery as
+	// mail types.
+	books              []AddressBook
+	cards              []map[string]any
+	contactVersion     int
+	addressBookVersion int
+	contactSeq         int
+	noContacts         bool
+
 	// Test controls (M2 sync-engine suites).
 	failStreams       int // reject this many stream connects before accepting
 	noChanges         bool
 	streams           map[*streamConn]struct{}
 	lastMailboxNotify int
 	lastEmailNotify   int
+	lastContactNotify int
+	lastBookNotify    int
 	setCalls          int // total Email/set requests served (M3 rate tests)
 	createSeq         int // mints ids for Email/set create (M5 drafts)
 }
@@ -99,9 +111,19 @@ func New(username, password string, mailboxes []Mailbox) *Server {
 		password:  password,
 		mailboxes: append([]Mailbox(nil), mailboxes...),
 		streams:   map[*streamConn]struct{}{},
+		// A default address book exists without asking, exactly like the
+		// live Stalwart auto-creates one on first account access.
+		books: []AddressBook{{
+			ID:           "ab1",
+			Name:         "Address Book",
+			IsDefault:    true,
+			IsSubscribed: true,
+		}},
 	}
 	s.mailboxVersion = 1
 	s.emailVersion = 1
+	s.contactVersion = 1
+	s.addressBookVersion = 1
 	s.ts = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
 }
@@ -158,6 +180,14 @@ func (s *Server) notifyLocked() {
 		changed["Email"] = s.emailState()
 		s.lastEmailNotify = s.emailVersion
 	}
+	if s.lastContactNotify != s.contactVersion {
+		changed["ContactCard"] = s.contactState()
+		s.lastContactNotify = s.contactVersion
+	}
+	if s.lastBookNotify != s.addressBookVersion {
+		changed["AddressBook"] = s.addressBookState()
+		s.lastBookNotify = s.addressBookVersion
+	}
 	if len(changed) == 0 || len(s.streams) == 0 {
 		return
 	}
@@ -175,8 +205,10 @@ func (s *Server) notifyLocked() {
 	}
 }
 
-func (s *Server) mailboxState() string { return fmt.Sprintf("m-%d", s.mailboxVersion) }
-func (s *Server) emailState() string   { return fmt.Sprintf("e-%d", s.emailVersion) }
+func (s *Server) mailboxState() string     { return fmt.Sprintf("m-%d", s.mailboxVersion) }
+func (s *Server) emailState() string       { return fmt.Sprintf("e-%d", s.emailVersion) }
+func (s *Server) contactState() string     { return fmt.Sprintf("c-%d", s.contactVersion) }
+func (s *Server) addressBookState() string { return fmt.Sprintf("a-%d", s.addressBookVersion) }
 
 func (s *Server) removeStreamLocked(sc *streamConn) {
 	if _, ok := s.streams[sc]; ok {
@@ -231,37 +263,49 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := "http://" + r.Host
+	s.mu.Lock()
+	noContacts := s.noContacts
+	s.mu.Unlock()
+
 	// RFC 8620 §2: the session resource. Capabilities are raw so the fake
 	// needs no knowledge of typed capability structs.
-	session := map[string]any{
-		"capabilities": map[string]any{
-			"urn:ietf:params:jmap:core": map[string]any{
-				"maxSizeUpload":         50000000,
-				"maxConcurrentUpload":   4,
-				"maxSizeRequest":        10000000,
-				"maxConcurrentRequests": 8,
-				"maxCallsInRequest":     32,
-				"maxObjectsInGet":       100,
-				"maxObjectsInSet":       50,
-			},
-			"urn:ietf:params:jmap:mail": map[string]any{
-				"maxMailboxesPerEmail":     100,
-				"mayCreateTopLevelMailbox": true,
-			},
-			// Compose (M5) needs the submission capability or Identity/get
-			// is gated off and the client sees no identities (FR-A6).
-			"urn:ietf:params:jmap:submission": map[string]any{
-				"maxDelayedSend": 0,
-			},
+	caps := map[string]any{
+		"urn:ietf:params:jmap:core": map[string]any{
+			"maxSizeUpload":         50000000,
+			"maxConcurrentUpload":   4,
+			"maxSizeRequest":        10000000,
+			"maxConcurrentRequests": 8,
+			"maxCallsInRequest":     32,
+			"maxObjectsInGet":       100,
+			"maxObjectsInSet":       50,
 		},
+		"urn:ietf:params:jmap:mail": map[string]any{
+			"maxMailboxesPerEmail":     100,
+			"mayCreateTopLevelMailbox": true,
+		},
+		// Compose (M5) needs the submission capability or Identity/get
+		// is gated off and the client sees no identities (FR-A6).
+		"urn:ietf:params:jmap:submission": map[string]any{
+			"maxDelayedSend": 0,
+		},
+	}
+	// Contacts (M9, FR-L6) advertise by default; DisableContacts() drops
+	// them for gating tests.
+	accountCaps := map[string]any{
+		"urn:ietf:params:jmap:mail":       map[string]any{},
+		"urn:ietf:params:jmap:submission": map[string]any{},
+	}
+	if !noContacts {
+		caps["urn:ietf:params:jmap:contacts"] = map[string]any{}
+		accountCaps["urn:ietf:params:jmap:contacts"] = map[string]any{}
+	}
+	session := map[string]any{
+		"capabilities": caps,
 		"accounts": map[string]any{
 			"acc1": map[string]any{
-				"name":       s.username,
-				"isPersonal": true,
-				"accountCapabilities": map[string]any{
-					"urn:ietf:params:jmap:mail":       map[string]any{},
-					"urn:ietf:params:jmap:submission": map[string]any{},
-				},
+				"name":                s.username,
+				"isPersonal":          true,
+				"accountCapabilities": accountCaps,
 			},
 		},
 		"primaryAccounts": map[string]any{"urn:ietf:params:jmap:mail": "acc1"},
@@ -318,8 +362,10 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if payload, err := json.Marshal(map[string]any{
 		"@type": "StateChange",
 		"changed": map[string]any{"acc1": map[string]string{
-			"Mailbox": s.mailboxState(),
-			"Email":   s.emailState(),
+			"Mailbox":     s.mailboxState(),
+			"Email":       s.emailState(),
+			"ContactCard": s.contactState(),
+			"AddressBook": s.addressBookState(),
 		}},
 	}); err == nil {
 		sc.send("state", string(payload))
@@ -411,6 +457,25 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 			args = s.emailSetResponse(call.Args)
 		case "Identity/get":
 			args = s.identityGetResponse()
+		case "AddressBook/get", "AddressBook/changes", "ContactCard/get", "ContactCard/changes", "ContactCard/set":
+			// A session without the contacts capability must fail these
+			// the way a real server does (FR-L6).
+			if s.contactsDisabled() {
+				resp.add("error", call.CallID, map[string]any{"type": "unknownMethod"})
+				continue
+			}
+			switch call.Name {
+			case "AddressBook/get":
+				args = s.addressBookGetResponse(call.Args)
+			case "AddressBook/changes":
+				args = s.changesResponse("AddressBook", call.Args)
+			case "ContactCard/get":
+				args = s.contactCardGetResponse(call.Args)
+			case "ContactCard/changes":
+				args = s.changesResponse("ContactCard", call.Args)
+			case "ContactCard/set":
+				args = s.contactSetResponse(call.Args)
+			}
 		case "EmailSubmission/set":
 			// The implicit Email/set rides the *same* call id as the
 			// submission, after it — Stalwart's ordering (PLAN §7).
@@ -453,8 +518,13 @@ func (s *Server) changesResponse(typ string, args json.RawMessage) any {
 	_ = json.Unmarshal(args, &req)
 
 	current := s.mailboxState()
-	if typ == "Email" {
+	switch typ {
+	case "Email":
 		current = s.emailState()
+	case "ContactCard":
+		current = s.contactState()
+	case "AddressBook":
+		current = s.addressBookState()
 	}
 	if s.noChanges {
 		return map[string]any{"type": "cannotCalculateChanges"}

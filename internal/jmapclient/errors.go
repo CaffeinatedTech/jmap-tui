@@ -17,6 +17,11 @@ var ErrNoServerURL = errors.New("no server URL configured")
 // ErrNotFound wraps a server notFound response for a requested object id.
 var ErrNotFound = errors.New("object not found on server")
 
+// ErrNotSupported wraps an operation the connected server never advertised
+// as a capability (FR-A6). Callers degrade — hide the feature or report it
+// as unavailable — never treat it as a failure.
+var ErrNotSupported = errors.New("server does not support this capability")
+
 // ServerError is a non-2xx HTTP response from the server that is not an auth
 // failure. Detail holds the (possibly empty) response body; it never
 // contains credentials.

@@ -55,6 +55,8 @@ const (
 	ActSearch          Action = "ui.search"
 	ActSearchAdv       Action = "ui.search_advanced"
 	ActSearchClear     Action = "ui.search_clear"
+	ActContacts        Action = "ui.contacts"
+	ActContactNew      Action = "contacts.new"
 	ActAccountSwitch   Action = "account.switch"
 	ActAccountManage   Action = "account.manage"
 	ActUnified         Action = "unified.toggle"
@@ -163,6 +165,11 @@ func defaultBindings() []Binding {
 		{Key: "/", Act: ActSearch, Help: "search", Pane: PaneAny},
 		{Key: "ctrl+s", Act: ActSearchAdv, Help: "advanced search", Pane: PaneAny},
 		{Key: "esc", Act: ActSearchClear, Help: "clear search", Pane: PaneAny},
+		// Contacts (M9, FR-L): the screen plus the add-contact modal.
+		// From a message, shift+n prefills from the sender; with no
+		// message it opens blank.
+		{Key: "c", Act: ActContacts, Help: "contacts", Pane: PaneAny},
+		{Key: "shift+n", Act: ActContactNew, Help: "add contact", Pane: PaneAny},
 		{Key: "shift+a", Act: ActAccountSwitch, Help: "switch account", Pane: PaneAny},
 		{Key: "ctrl+a", Act: ActAccountManage, Help: "add or edit an account", Pane: PaneAny},
 		{Key: "i", Act: ActUnified, Help: "unified inbox", Pane: PaneAny},

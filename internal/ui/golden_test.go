@@ -514,7 +514,66 @@ func goldenFrames() []frame {
 			st.Focus = PanePreview
 			return st
 		}},
+		// M9 contacts (FR-L1): the full-screen view at all three sizes,
+		// owner tints on the rows, the detail column on the right.
+		{name: "contacts", w: 120, h: 40, st: func() State {
+			return contactsBase(mk(true)())
+		}},
+		{name: "contacts-light", w: 120, h: 40, st: func() State {
+			return contactsBase(mk(false)())
+		}},
+		{name: "contacts-medium", w: 99, h: 35, st: func() State {
+			st := contactsBase(mk(true)())
+			st.Contacts.Focus = ContactDetail // the two-column swap (FR-I1)
+			return st
+		}},
+		{name: "contacts-medium-light", w: 99, h: 35, st: func() State {
+			st := contactsBase(mk(false)())
+			st.Contacts.Focus = ContactDetail
+			return st
+		}},
+		{name: "contacts-compact", w: 59, h: 25, st: func() State {
+			return contactsBase(mk(true)())
+		}},
+		{name: "contacts-compact-light", w: 59, h: 25, st: func() State {
+			return contactsBase(mk(false)())
+		}},
+		// The contact form modal (FR-L2) over the reader.
+		{name: "contact-form", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.ContactForm = contactFormFixture()
+			return st
+		}},
+		// The recipient suggestion dropdown under To (FR-L3).
+		{name: "compose-suggest", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			c := composeFixture(st.Theme)
+			c.Focus = ZoneTo
+			c.To = "al"
+			c.Suggest = &ContactSuggestView{
+				Field: "To",
+				Items: []ContactSuggestItem{
+					{Name: "Alan Turing", Email: "alan@example.com", Suffix: "Work"},
+					{Name: "Albert Hall", Email: "albert@example.com", Suffix: "Personal"},
+				},
+				Sel: 0,
+			}
+			st.Compose = c
+			return st
+		}},
 	}
+}
+
+// contactsBase parks the contacts screen over the standard frame with the
+// multi-account index the row tints resolve through (FR-A5 wording: tint
+// = account identity).
+func contactsBase(st State) State {
+	st.Accounts = fixtureAccounts()
+	st.Account = "Work"
+	st.AccountIndex = map[string]int{"work": 0, "personal": 1, "laptop": 2}
+	st.AccountNames = map[string]string{"work": "Work", "personal": "Personal", "laptop": "Old laptop"}
+	st.Contacts = contactsFixtureView()
+	return st
 }
 
 // fixtureAccounts is the multi-account chrome: two healthy accounts (the
@@ -568,6 +627,66 @@ func composeFixture(th Theme) *ComposeView {
 			th.Muted.Render("tab next") + th.Muted.Render(" · ") +
 			th.Muted.Render("esc close"),
 	}
+}
+
+// contactsFixtureView is a representative contacts screen: two accounts'
+// books on the left, name-sorted rows with owner tints in the middle, and
+// a filled detail column on the right.
+func contactsFixtureView() *ContactsView {
+	return &ContactsView{
+		Scope: "all accounts",
+		Books: []ContactBookRow{
+			{Label: "Work", Depth: 0, Account: "work", All: true, Count: 4},
+			{ID: "ab1", Label: "Address Book", Depth: 1, Account: "work", Count: 3},
+			{ID: "ab2", Label: "Team", Depth: 1, Account: "work", Count: 1},
+			{Label: "Personal", Depth: 0, Account: "personal", All: true, Count: 2},
+			{ID: "pb1", Label: "Friends", Depth: 1, Account: "personal", Count: 2},
+		},
+		BookSel: 1,
+		Rows: []ContactRow{
+			{Name: "Ada Lovelace", Email: "ada@example.com", Account: "work"},
+			{Name: "Alan Turing", Email: "alan@example.com", Account: "work"},
+			{Name: "Grace Hopper", Email: "grace@navy.example", Account: "personal"},
+			{Name: "Zoe Zebra", Email: "zoe@example.com", Account: "work"},
+		},
+		RowSel: 1,
+		Detail: &ContactDetailView{
+			Name:    "Alan Turing",
+			Account: "Work",
+			Emails:  []string{"alan@example.com", "work: a.turing@example.org"},
+			Phones:  []string{"+44 1234 567"},
+			Org:     "Bletchley Park",
+			Title:   "Cryptanalyst",
+			Note:    "Enigma.",
+		},
+		Focus: ContactList,
+	}
+}
+
+// contactFormFixture is the edit modal with every field row plus the
+// create-only book row (the focused row wears the wash).
+func contactFormFixture() *ContactFormView {
+	rows := []struct {
+		name, value string
+		focused     bool
+	}{
+		{"first", "Alan", false},
+		{"last", "Turing", false},
+		{"emails", "alan@example.com, a.turing@example.org", true},
+		{"phones", "+44 1234 567", false},
+		{"org", "Bletchley Park", false},
+		{"title", "Cryptanalyst", false},
+		{"note", "Enigma.", false},
+		{"book", "Address Book  (←/→)", false},
+	}
+	out := &ContactFormView{
+		Title: "new contact",
+		Hint:  "enter save · esc cancel · tab fields",
+	}
+	for _, r := range rows {
+		out.Fields = append(out.Fields, AdvField{Name: r.name, View: r.value, Focused: r.focused})
+	}
+	return out
 }
 
 var (

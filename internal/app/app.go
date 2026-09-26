@@ -148,6 +148,15 @@ type Model struct {
 	attachPick  *filepickState
 	pendingSend *pendingSend
 
+	// Contacts state (M9, FR-L): the full-screen view and the form modal
+	// are nil when closed (the overlay pattern); contactSnaps holds every
+	// account's latest contact store; pendingContactDelete is a held
+	// destroy inside its undo window (FR-L2).
+	contacts             *contactsState
+	contactForm          *contactFormState
+	contactSnaps         map[string]sync.ContactSnapshot
+	pendingContactDelete *pendingContactDelete
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -211,6 +220,7 @@ func New(opts Options) *Model {
 		activeID:       active,
 		engine:         hub.Engine(active),
 		snaps:          map[string]sync.Snapshot{},
+		contactSnaps:   map[string]sync.ContactSnapshot{},
 		prevBox:        map[string]mail.ID{},
 		focus:          ui.PaneList,
 		sidebarVisible: true,
@@ -351,6 +361,11 @@ func (m *Model) Init() tea.Cmd {
 		if c := m.waitUpdatesFor(a.ID); c != nil {
 			cmds = append(cmds, c)
 		}
+		// The contacts broadcast idles until the store warms (FR-L1) —
+		// one waiter per account, armed from the start like the mail one.
+		if c := m.waitContactsFor(a.ID); c != nil {
+			cmds = append(cmds, c)
+		}
 	}
 	m.hub.StartAll(m.ctx)
 	return tea.Batch(cmds...)
@@ -474,6 +489,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleUploadProgress()
 	case uploadDoneMsg:
 		return m.handleUploadDone(msg)
+
+	// --- contacts (M9, FR-L) ---
+	case contactMsg:
+		acct := m.resolve(msg.acct)
+		cmd := m.applyContactSnap(acct, msg.snap)
+		if msg.live {
+			return m, tea.Batch(cmd, m.waitContactsFor(acct))
+		}
+		return m, cmd
+	case contactOpMsg:
+		return m.handleContactOp(msg)
+	case contactDeleteCommitMsg:
+		return m.contactDeleteCommit(msg.seq)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -1048,6 +1076,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd, _ := m.filePickKey(msg)
 		return m, cmd
 	}
+	// The contact form modal (FR-L2) outranks the composer and the
+	// screen alike: it can open over either.
+	if m.contactForm != nil {
+		return m, m.contactFormKey(msg)
+	}
 	// The composer owns the keyboard while it is open (FR-H1); its own
 	// overlays (attach picker, discard confirm) are handled inside.
 	if m.compose != nil {
@@ -1058,6 +1091,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// pane keys apply (FR-F1).
 	if m.search != nil && (m.search.editing || m.search.adv != nil) {
 		return m, m.searchKey(msg)
+	}
+	// The contacts screen (FR-L1) owns the keyboard below every modal —
+	// esc, motion and its action keys never reach the mail keymap.
+	if m.contacts != nil {
+		return m.contactsKey(msg)
 	}
 
 	focus := m.focus
@@ -1095,6 +1133,10 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case ui.ActUnified:
 		return m.toggleUnified()
+	case ui.ActContacts:
+		return m.toggleContactsScreen()
+	case ui.ActContactNew:
+		return m.openContactNew()
 
 	case ui.ActCyclePane:
 		m.focus = m.nextPane(1)
@@ -1506,6 +1548,12 @@ func (m *Model) uiState() ui.State {
 	}
 	if m.switcher != nil {
 		st.AccountSwitch = &ui.SwitchView{Accounts: m.accountViews(), Sel: m.switcher.sel}
+	}
+	if m.contacts != nil {
+		st.Contacts = m.contactsView()
+	}
+	if m.contactForm != nil {
+		st.ContactForm = m.contactFormView()
 	}
 	return st
 }

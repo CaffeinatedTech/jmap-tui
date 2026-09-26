@@ -138,6 +138,12 @@ type composeState struct {
 	closeAfterSave bool
 	status         string
 	discard        bool // the discard confirmation is up (FR-H4)
+
+	// suggest is the recipient autocomplete popup under the focused
+	// address field (FR-L3); nil when closed, in another zone, or
+	// dismissed until the next edit (suggestOff).
+	suggest    *suggestPopup
+	suggestOff bool
 }
 
 // pendingSend holds a flushed draft through the undo window (FR-H5). The
@@ -247,13 +253,16 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 	m.compose = c
 	m.resizeComposer()
 
+	// Warm the suggestion source now so the address fields have data by
+	// the time the user reaches them (lazy load, FR-L3).
+	warm := m.ensureContacts()
 	switch mode {
 	case composeNew:
 		c.focus = ui.ZoneTo
-		return m, focusBlink(c.to.Focus())
+		return m, tea.Batch(focusBlink(c.to.Focus()), warm)
 	default:
 		c.focus = ui.ZoneBody
-		return m, tea.Batch(m.composePrepCmd(mode), focusBlink(c.body.Focus()))
+		return m, tea.Batch(m.composePrepCmd(mode), focusBlink(c.body.Focus()), warm)
 	}
 }
 
@@ -581,6 +590,25 @@ func (m *Model) composeKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.cancelUploadsCmd()
 	}
 
+	// The recipient dropdown owns the navigation keys while it shows a
+	// pick (FR-L3): esc dismisses it and never reaches the discard flow.
+	if c.suggest != nil && len(c.suggest.items) > 0 && isAddressZone(c.focus) {
+		switch key {
+		case "down":
+			c.suggest.sel = min(c.suggest.sel+1, len(c.suggest.items)-1)
+			return nil
+		case "up":
+			c.suggest.sel = max(c.suggest.sel-1, 0)
+			return nil
+		case "enter", "tab":
+			return m.acceptSuggest()
+		case "esc":
+			c.suggest = nil
+			c.suggestOff = true
+			return nil
+		}
+	}
+
 	switch key {
 	case "tab":
 		return m.focusZone(c.focus.Next())
@@ -590,6 +618,14 @@ func (m *Model) composeKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.startSend()
 	case "ctrl+a":
 		return m.openAttachPicker()
+	case "ctrl+g":
+		// Quick contact search inside an address field (FR-L3): the
+		// type-to-filter picker layers over the composer like the
+		// identity picker does.
+		if isAddressZone(c.focus) {
+			return m.openContactQuickPick()
+		}
+		return nil
 	case "ctrl+i":
 		if len(c.identities) > 1 {
 			m.openIdentityPicker()
@@ -623,7 +659,13 @@ func (m *Model) composeKey(msg tea.KeyPressMsg) tea.Cmd {
 	// independent: bubbles returns a command on almost every keystroke, so
 	// returning early here would skip markDirty and no autosave would ever
 	// fire. Batch them instead.
-	return tea.Batch(m.routeComposeInput(msg), m.markDirty())
+	cmd := tea.Batch(m.routeComposeInput(msg), m.markDirty())
+	if isAddressZone(c.focus) {
+		// A fresh keystroke re-opens the popup after an esc dismissal.
+		c.suggestOff = false
+		m.updateComposeSuggest()
+	}
+	return cmd
 }
 
 // routeComposeInput sends the key to the focused widget and reports
@@ -659,6 +701,9 @@ func (m *Model) routeComposeInput(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) focusZone(z ui.ComposeZone) tea.Cmd {
 	c := m.compose
 	old := c.focus
+	// Leaving a zone retires its suggestion popup (FR-L3).
+	c.suggest = nil
+	c.suggestOff = false
 	switch old {
 	case ui.ZoneTo:
 		c.to.Blur()
@@ -1403,7 +1448,7 @@ func (m *Model) composeView() *ui.ComposeView {
 		atts = append(atts, att)
 	}
 
-	return &ui.ComposeView{
+	v := &ui.ComposeView{
 		Title:       c.mode.title(),
 		From:        from,
 		To:          c.to.Value(),
@@ -1417,6 +1462,20 @@ func (m *Model) composeView() *ui.ComposeView {
 		Hint:        m.composeHint(),
 		Discard:     m.discardView(),
 	}
+	if c.suggest != nil {
+		sv := &ui.ContactSuggestView{
+			Field:   c.focus.ZoneName(),
+			Sel:     c.suggest.sel,
+			Loading: len(c.suggest.items) == 0,
+		}
+		for _, it := range c.suggest.items {
+			sv.Items = append(sv.Items, ui.ContactSuggestItem{
+				Name: it.Name, Email: it.Email, Suffix: it.Suffix,
+			})
+		}
+		v.Suggest = sv
+	}
+	return v
 }
 
 // discardView renders the confirmation box when it is up (FR-H4).

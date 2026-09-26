@@ -2,7 +2,7 @@
 
 > A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
 
-**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts — and M8 now flows every account's folder tree into one sidebar under tinted headers, with `ctrl+↑`/`ctrl+↓` reordering the account blocks). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts — and M8 now flows every account's folder tree into one sidebar under tinted headers, with `ctrl+↑`/`ctrl+↓` reordering the account blocks — and M9 adds JMAP contacts (RFC 9610): a full-screen contact list unified across accounts, contact create/edit/delete behind an undo toast, and recipient suggestions in the composer, verified against live Stalwart). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
 
 ---
 
@@ -30,6 +30,7 @@ IMAP support is a **future roadmap item**, designed for from day one via a provi
 - Server-side search with a fast, keyboard-driven query bar
 - Compose, reply, reply-all, forward — with drafts and identities
 - Send with undo (configurable delay before submission)
+- Contacts (JMAP for Contacts, RFC 9610) — full-screen list unified across accounts, address books, contact CRUD, recipient suggestions + quick search in the composer
 - Attachment download and upload
 - Credentials in the OS keyring (no plaintext secrets on disk)
 - Minimal & elegant UI — restrained palette, clean typography, vim-style keys
@@ -165,6 +166,12 @@ undo_delay = "5s"   # 0s submits immediately
 | Any | `Tab` / `Shift+Tab` | Cycle panes |
 | Any | `A` | Switch account (instant — every account stays warm) |
 | Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
+| Any | `c` | Contacts — full-screen list (books · contacts · detail), unified across accounts; `c` or `Esc` closes |
+| Any | `Shift+N` | Add contact — prefilled from the sender of the message under the cursor (opens edit mode if that address is already a contact) |
+| Contacts | `n` / `e` / `d` | New / edit / delete — delete waits 5s behind its toast, `ctrl+z` cancels |
+| Contacts | `Tab` / `Shift+Tab` | Cycle columns (books · contacts · detail) |
+| Contacts | `/` | Type-to-filter the list (`Esc` clears the filter, `Esc` again closes) |
+| Composer | `ctrl+g` | Quick contact search inside To/Cc/Bcc (type to filter, `Enter` inserts) |
 | Any | `ctrl+a` | Add or edit an account (opens the wizard; the TUI restarts) |
 | Any | `[` | Show/hide sidebar |
 | Any | `z` | Toggle pane layout: list beside preview ↔ stacked (list above, 50/50) — remembered in `prefs.toml` |
@@ -183,7 +190,13 @@ Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce
 
 Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
 
-The composer takes the whole screen: To/Cc/Bcc/Subject fields above a hairline, the body below it, `tab`/`shift+tab` moving between zones and `ctrl+i` choosing From when the account has more than one identity. Replies quote the original with an attribution line and `> `-prefixed lines; forwards carry a `---------- Forwarded message ----------` block. Drafts are written to the server on a two-second debounce, whenever you leave a field, and whenever you answer the discard prompt with `n` — so a draft survives a restart — editing one from the Drafts mailbox recreates it, because message content is immutable in JMAP (RFC 8621 §4.1.2). Attachments are picked with `ctrl+a`: a directory browser, not a path field — `j`/`k` move, `l` open, `h` back, `enter` attaches, `esc` cancels — and upload with a live percentage. Sending holds the submission for `[compose] undo_delay` (default 5s) and shows a toast: `ctrl+z` cancels and puts you back in the composer with the draft intact. When the window closes the message is submitted once, and the server files it into Sent.
+The composer takes the whole screen: To/Cc/Bcc/Subject fields above a hairline, the body below it, `tab`/`shift+tab` moving between zones and `ctrl+i` choosing From when the account has more than one identity. Typing in To/Cc/Bcc pops a recipient suggestion under the field — the contacts of **every** account, deduplicated by address; `↑`/`↓` pick, `Enter` (or `Tab`) inserts `Name <email>, `, `Esc` dismisses it before it dismisses anything else — and `ctrl+g` opens a full type-to-filter contact search for when you'd rather browse. Replies quote the original with an attribution line and `> `-prefixed lines; forwards carry a `---------- Forwarded message ----------` block. Drafts are written to the server on a two-second debounce, whenever you leave a field, and whenever you answer the discard prompt with `n` — so a draft survives a restart — editing one from the Drafts mailbox recreates it, because message content is immutable in JMAP (RFC 8621 §4.1.2). Attachments are picked with `ctrl+a`: a directory browser, not a path field — `j`/`k` move, `l` open, `h` back, `enter` attaches, `esc` cancels — and upload with a live percentage. Sending holds the submission for `[compose] undo_delay` (default 5s) and shows a toast: `ctrl+z` cancels and puts you back in the composer with the draft intact. When the window closes the message is submitted once, and the server files it into Sent.
+
+## Contacts
+
+`c` opens the contacts screen: address books on the left (per account, under the same tinted headers as the folder tree), contacts sorted by name in the middle — each row led by its owner's colour bar when accounts are merged — and the selected card's details on the right. The layout collapses like the reader (two columns below 100, one focused column below 60; `Tab` moves focus), `/` type-filters, and `Esc` walks back (clear filter → close). With more than one account supporting `urn:ietf:params:jmap:contacts` the view opens unified; an account without the capability simply contributes nothing.
+
+`n` creates and `e` edits through one form — name, emails, phones, organization, title, note, and (on create) the target address book, defaulting to the account's — and the save patches only what you changed, so properties the form never shows are untouched. `d` deletes, but the destroy is held for five seconds behind its toast: `ctrl+z` cancels before anything reaches the server. Outside the screen, `Shift+N` adds the sender of the message you're reading — prefilled, and opening in edit mode when that address is already a contact. Everything is in-memory and server-side: no contact data is ever written to disk, and live changes arrive over the same push stream as mail.
 
 ## Stack
 

@@ -176,7 +176,14 @@ func collectTypes(c mail.Change) map[string]bool {
 // pollOnce is the fallback tick (FR-B3): the same reconciliation path the
 // push handler uses, driven purely by the stored state strings (FR-B5).
 func (e *Engine) pollOnce(ctx context.Context) {
-	e.reconcileTypes(ctx, map[string]bool{"Email": true, "Mailbox": true})
+	types := map[string]bool{"Email": true, "Mailbox": true}
+	// Contacts poll only while the store is warm — an account whose user
+	// never opened contacts costs nothing (FR-L1).
+	if e.contactsWarm() {
+		types["ContactCard"] = true
+		types["AddressBook"] = true
+	}
+	e.reconcileTypes(ctx, types)
 }
 
 // reconcileTypes runs /changes for every changed type and marks the sync
@@ -187,6 +194,14 @@ func (e *Engine) reconcileTypes(ctx context.Context, types map[string]bool) {
 	}
 	if types["Email"] {
 		e.reconcileEmail(ctx)
+	}
+	// Contact types arrive on the same stream (types=*); both reconcilers
+	// no-op while the contact store is cold.
+	if types["ContactCard"] {
+		e.reconcileContacts(ctx)
+	}
+	if types["AddressBook"] {
+		e.reconcileAddressBooks(ctx)
 	}
 	e.markSynced()
 }

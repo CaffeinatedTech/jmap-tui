@@ -99,6 +99,10 @@ type ComposeView struct {
 	// Discard is non-nil while the discard confirmation is up; the box
 	// takes over the frame and the keyboard (FR-H4).
 	Discard *DiscardConfirm
+
+	// Suggest is the recipient autocomplete dropdown under the focused
+	// To/Cc/Bcc field (FR-L3); nil while closed or in another zone.
+	Suggest *ContactSuggestView
 }
 
 // composeChromeRows is the composer's fixed row count around the body:
@@ -181,6 +185,14 @@ func renderCompose(w, h int, st State) string {
 	}
 
 	frame := padLines(strings.TrimRight(b.String(), "\n"), w, h)
+	// The recipient dropdown hangs directly under its field (FR-L3): rows
+	// are title=0, To=1, Cc=2, Bcc=3, so the box starts one row below the
+	// focused field. Modals below still outrank it.
+	if c.Suggest != nil {
+		if row := suggestOverlayRow(c.Focus); row > 0 {
+			frame = renderContactSuggest(frame, w, h, row, c.Suggest, th)
+		}
+	}
 	// The discard confirmation is a true modal: it floats over the
 	// composer, which stays visible behind it (FR-H4). The attachment
 	// filepicker and the identity picker replace the frame, exactly as
@@ -195,6 +207,21 @@ func renderCompose(w, h int, st State) string {
 		return renderPicker(w, h, st)
 	}
 	return frame
+}
+
+// suggestOverlayRow is the frame row the dropdown's first line lands on:
+// one row under the focused address field (rows: title=0, To=1, Cc=2,
+// Bcc=3, Subject=4). -1 means "no dropdown here".
+func suggestOverlayRow(z ComposeZone) int {
+	switch z {
+	case ZoneTo:
+		return 2
+	case ZoneCc:
+		return 3
+	case ZoneBcc:
+		return 4
+	}
+	return -1
 }
 
 // renderDiscardConfirm draws the yes/no box (FR-H4).

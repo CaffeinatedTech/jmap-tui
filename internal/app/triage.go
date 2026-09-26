@@ -32,6 +32,7 @@ const (
 	pickerArchive
 	pickerIdentity // choose the From identity (FR-H1)
 	pickerSort     // choose the list order (FR-D8)
+	pickerContactQuick
 )
 
 // pickerState is the modal mailbox chooser (FR-G2, FR-G4). In unified
@@ -393,6 +394,11 @@ func (m *Model) undoAction() (tea.Model, tea.Cmd) {
 	if m.pendingSend != nil {
 		return m.cancelPendingSend()
 	}
+	// A held contact destroy is likewise cancelled before its window
+	// closes — the /set was never sent (FR-L2).
+	if m.undoContactDelete() {
+		return m, nil
+	}
 	t := m.toast
 	if t == nil {
 		return m, nil
@@ -565,6 +571,8 @@ func (m *Model) pickerView() *ui.PickerView {
 		title = "Send as"
 	case pickerSort:
 		title = "Sort by"
+	case pickerContactQuick:
+		title = "Add contact"
 	}
 	return &ui.PickerView{Title: title, Filter: p.filter, Items: p.items, Sel: p.sel}
 }
@@ -633,6 +641,10 @@ func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 	}
 	if p.mode == pickerSort {
 		return m.chooseSort(string(id))
+	}
+	if p.mode == pickerContactQuick {
+		m.picker = nil
+		return m.insertComposeAddress(label)
 	}
 	if m.pickLabel == "" {
 		m.pickLabel = label

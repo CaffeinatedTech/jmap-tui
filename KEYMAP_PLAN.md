@@ -261,3 +261,21 @@ Consequences, all landing in the same change:
   now collapses the *tree*, which is what the help string always said.
 - `Validate()` unchanged: `left`/`right` were free everywhere, `h`/`l`
   stay pane-scoped, and an unbound id still validates its remaps.
+
+## 11. Addendum — contacts actions (2026-09-26, M9)
+
+Two global actions joined the map with the contacts feature (FR-L),
+interviewed and `Validate()`-clean — neither `c` nor `shift+n` was bound
+anywhere (pane or global):
+
+| Key | Action id | Help |
+|---|---|---|
+| `c` | `ui.contacts` | contacts |
+| `shift+n` | `contacts.new` | add contact |
+
+Both stay outside the contacts screen's own key loop: `ui.contacts` is a
+toggle (`c` closes the screen too — implemented in `contactsKey`, since the
+screen's keys never reach the keymap), and `contacts.new` prefills from the
+message under the cursor (FR-L4). The screen's inner keys (`n`/`e`/`d`,
+`/`, `tab`, motion) and the composer's `ctrl+g` quick search are modal-loop
+keys, not keymap actions — §5.5's rule that modes own their loops.
