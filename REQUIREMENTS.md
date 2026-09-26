@@ -148,7 +148,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 - **[FR-K1] [M1]** All network ops context-cancellable; `ctrl-c` twice exits cleanly, cancelling in-flight work.
 - **[FR-K2] [M1]** Structured debug log (`--log-file`, `--log-level`) with **secrets redacted** (Authorization headers, passwords, full tokens). Log file never written unless requested.
-- **[FR-K3] [M1]** Panic recovery with a crash report path; the TUI always restores the terminal.
+- **[FR-K3] [M1]** Panic recovery with a crash report path; the TUI always restores the terminal. The TUI and wizard run in the **alternate screen buffer**: quitting (or crashing) restores the pre-launch screen exactly — no leftover frame under the shell prompt. *(Alternate-screen clause added 2026-09-26 per user request.)*
 - **[FR-K4] [M3]** Rate-limit courtesy: batch method calls per round-trip (JMAP's strength), debounce search/scroll fetches, single EventSource per account.
 
 ---

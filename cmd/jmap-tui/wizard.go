@@ -674,9 +674,12 @@ func (m *wizardModel) buildAccount() *config.Account {
 	return a
 }
 
-// View renders the active screen.
+// View renders the active screen. The wizard claims the alternate screen
+// buffer like the TUI (FR-K3): exiting restores the pre-launch screen.
 func (m *wizardModel) View() tea.View {
-	return tea.NewView(m.render())
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
 }
 
 // render draws the active screen as a plain frame (tests assert on it).

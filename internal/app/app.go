@@ -1470,7 +1470,9 @@ func (m *Model) uiState() ui.State {
 	return st
 }
 
-// View renders the frame.
+// View renders the frame. The view claims the alternate screen buffer
+// (FR-K3): quitting restores the pre-launch screen exactly, instead of
+// leaving the last frame on the scrollback under the shell prompt.
 func (m *Model) View() tea.View {
 	st := m.uiState()
 	if l, ok := m.layout(); ok && l.PreviewW > 0 && m.vpBodyID == m.cursorKey() {
@@ -1479,7 +1481,9 @@ func (m *Model) View() tea.View {
 	if m.err != "" && st.Err == "" {
 		st.Err = m.err
 	}
-	return tea.NewView(ui.Render(m.width, m.height, st))
+	v := tea.NewView(ui.Render(m.width, m.height, st))
+	v.AltScreen = true
+	return v
 }
 
 // ManageRequested reports that the user opened the account wizard from

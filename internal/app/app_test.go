@@ -123,8 +123,12 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 		t.Fatalf("total = %d, want 1 (thread collapsed)", m.snap.Total)
 	}
 
-	// View renders the loaded frame.
+	// View renders the loaded frame, in the alternate screen buffer so
+	// quitting restores the pre-launch screen (FR-K3).
 	view := m.View().Content
+	if !m.View().AltScreen {
+		t.Fatal("view does not claim the alternate screen (FR-K3)")
+	}
 	if !strings.Contains(stripANSI(view), "Inbox") || !strings.Contains(stripANSI(view), "thread starter") {
 		t.Fatalf("view missing expected content:\n%s", stripANSI(view))
 	}
