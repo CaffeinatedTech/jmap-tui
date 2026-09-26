@@ -198,25 +198,51 @@ func TestLiveReaderVerification(t *testing.T) {
 	}
 	t.Logf("collapsed query: total=%d state=%s first=%q", h.Total(), h.State(), sums[0].Subject)
 
-	// --- thread expansion through inThread ---
+	// --- thread expansion through Thread/get (RFC 8621 §3.1) ---
 	threadID := sums[0].ThreadID
 	for _, s := range sums {
 		if s.Subject == "live thread starter" {
 			threadID = s.ThreadID
 		}
 	}
-	th, thSums, err := c.OpenQuery(ctx, mail.QuerySpec{
-		ThreadID: threadID,
-		Sort:     []mail.SortCriterion{{Property: "receivedAt"}},
-		Limit:    50,
-	})
+	members, err := c.Threads(ctx, []mail.ID{threadID})
 	if err != nil {
-		t.Fatalf("OpenQuery(thread): %v", err)
+		t.Fatalf("Threads: %v", err)
 	}
-	if th.Total() != 2 {
-		t.Fatalf("thread members = %d, want 2", th.Total())
+	memberIDs := members[threadID]
+	if len(memberIDs) != 2 {
+		t.Fatalf("thread members = %d, want 2", len(memberIDs))
 	}
-	t.Logf("thread %s: %d members (oldest first: %q)", threadID, th.Total(), thSums[0].Subject)
+	thSums, err := c.FetchSummaries(ctx, memberIDs)
+	if err != nil {
+		t.Fatalf("FetchSummaries(thread): %v", err)
+	}
+	if len(thSums) != 2 {
+		t.Fatalf("thread summaries = %d, want 2", len(thSums))
+	}
+	// Thread.emailIds must arrive oldest-first: that order is what the
+	// expansion renders (FR-D2), so assert it rather than assume it.
+	byID := make(map[mail.ID]mail.EmailSummary, len(thSums))
+	for _, s := range thSums {
+		byID[s.ID] = s
+	}
+	prev, ok := byID[memberIDs[0]]
+	if !ok {
+		t.Fatalf("no summary for thread member %s", memberIDs[0])
+	}
+	oldest := prev.Subject
+	for _, id := range memberIDs[1:] {
+		cur, ok := byID[id]
+		if !ok {
+			t.Fatalf("no summary for thread member %s", id)
+		}
+		if cur.ReceivedAt.Before(prev.ReceivedAt) {
+			t.Fatalf("thread members out of order: %s (%s) before %s (%s)",
+				id, cur.ReceivedAt, prev.ID, prev.ReceivedAt)
+		}
+		prev = cur
+	}
+	t.Logf("thread %s: %d members, oldest first %q", threadID, len(memberIDs), oldest)
 
 	// --- HTML-only body through the FR-E2 preference path ---
 	var htmlID mail.ID
@@ -276,6 +302,10 @@ func ensureReaderMailbox(t *testing.T, c *Client, ctx context.Context) (readerID
 	}
 
 	var resp *mailbox.SetResponse
+	// Only a root this run created may be cleaned up (a named return,
+	// default empty): agent-test is shared — M4's search-fixture lives
+	// under it — so destroying it is never ours to do, and the Mailbox/set
+	// would only answer mailboxHasChild anyway.
 	if agentID == "" {
 		// Create the agent-test root first, then reader beneath it.
 		req := &jmap.Request{Context: ctx}
@@ -297,6 +327,7 @@ func ensureReaderMailbox(t *testing.T, c *Client, ctx context.Context) (readerID
 			t.Fatalf("agent-test root not created: %+v", resp.NotCreated)
 		}
 		agentID = string(cr.ID)
+		createdAgentRoot = agentID
 	}
 
 	req := &jmap.Request{Context: ctx}
@@ -323,7 +354,7 @@ func ensureReaderMailbox(t *testing.T, c *Client, ctx context.Context) (readerID
 	if mbs0 := len(mbs.Mailboxes); mbs0 == 0 {
 		t.Log("fresh account: created the full agent-test tree")
 	}
-	return string(cr.ID), agentID
+	return string(cr.ID), createdAgentRoot
 }
 
 // seedReaderFixtures creates the fixture emails in one batched /set.

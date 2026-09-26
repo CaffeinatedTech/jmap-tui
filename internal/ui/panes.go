@@ -227,6 +227,23 @@ func flags(s mail.EmailSummary, th Theme) string {
 	return unread + star + replied + att
 }
 
+// threadSlot is a row's two-cell thread slot in front of its subject
+// (FR-D1), the list's twin of foldSlot: "▸ " when a collapsed thread has
+// replies beneath it — Enter expands it — "▾ " while it is open, and two
+// spaces otherwise, so subjects stay aligned whether or not a row can
+// expand. Rows that cannot carry thread chrome (a fuzzy-scan match,
+// ThreadSize -1) and single-message threads get the blank slot.
+func threadSlot(r sync.Row) string {
+	switch {
+	case r.ThreadHeader:
+		return "▾ "
+	case r.ThreadMember, r.ThreadSize <= 1:
+		return "  "
+	default:
+		return "▸ "
+	}
+}
+
 // renderList draws the message list (FR-D1, FR-D3): flags, sender,
 // subject with thread markers, optional size, date. Sent mailboxes show
 // recipients in the sender column (FR-C3).
@@ -299,7 +316,7 @@ func renderList(l Layout, h int, st State) string {
 		focused := st.Focus == PaneList
 
 		// Row anatomy (FR-D1, FR-G3): owner bar (unified), selection
-		// gutter, flag cells, sender, subject with thread markers,
+		// gutter, flag cells, sender, subject with its thread slot,
 		// optional size, date.
 		subjectW := w - barW - 1 - (4 + 1) - fromW - 1 - dateW - sizeW
 		if subjectW < 4 {
@@ -307,14 +324,19 @@ func renderList(l Layout, h int, st State) string {
 		}
 
 		from := truncate(DisplayName(fromColumn(r.Summary, role)), fromW)
-		var prefix string
-		switch {
-		case r.ThreadHeader:
-			prefix = "▾ "
-		case r.ThreadMember:
-			prefix = "  └ "
+		// The subject leads with the row's two-cell thread slot (▸ when a
+		// collapsed thread has replies beneath it, ▾ while it is open) and
+		// then, for a member, the indent that nests it under that header —
+		// so a chevron never moves the subject column (FR-D1).
+		slot := threadSlot(r)
+		indent := ""
+		if r.ThreadMember {
+			indent = "└ "
 		}
-		subject := prefix + truncate(r.Summary.Subject, subjectW-len(prefix))
+		// One cell is always left in hand: a subject that exactly fills
+		// its budget would otherwise run into the size/date column, since
+		// truncate only steps aside when it actually elides.
+		subject := slot + indent + truncate(r.Summary.Subject, subjectW-runewidth.StringWidth(slot+indent)-1)
 		date := pad(RelativeDate(r.Summary.ReceivedAt, st.Now), dateW)
 
 		mark := " "

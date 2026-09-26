@@ -637,7 +637,39 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 			return eng.Snapshot(), nil
 		}))
 	}
+	cmds = append(cmds, m.threadSizesCmds(snap.Rows)...)
 	return m, tea.Batch(cmds...)
+}
+
+// threadSizesCmds asks each account with an unsized row in view for its
+// thread member counts (FR-D1) — the list marks which rows expand, and
+// that mark is fetched lazily, once per row set. Rows already sized and
+// flat fuzzy-scan rows (ThreadSize -1) are skipped, so a warm view never
+// issues a command at all.
+func (m *Model) threadSizesCmds(rows []sync.Row) []tea.Cmd {
+	var cmds []tea.Cmd
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.ThreadSize != 0 {
+			continue
+		}
+		acct := r.Account
+		if acct == "" {
+			acct = m.activeID
+		}
+		if seen[acct] {
+			continue
+		}
+		seen[acct] = true
+		if _, ok := m.engineFor(acct); !ok {
+			continue // credential-less accounts never load (FR-A3)
+		}
+		cmds = append(cmds, m.opOn(acct, "thread-sizes", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			eng.RefreshThreadSizes(ctx)
+			return eng.Snapshot(), nil
+		}))
+	}
+	return cmds
 }
 
 // applyUnified rebuilds the merged view (FR-A5) from every account's
@@ -709,6 +741,9 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 			}))
 		}
 	}
+	// Thread chevrons (FR-D1) fan out the same way, but only to the
+	// accounts whose rows are still unsized in the merge.
+	cmds = append(cmds, m.threadSizesCmds(snap.Rows)...)
 	return m, tea.Batch(cmds...)
 }
 
@@ -1112,8 +1147,13 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		owner := m.ownerAccount()
+		// Target the row we rendered, not the engine cursor: the unified
+		// cursor is app-side and no engine cursor ever moves there
+		// (PLAN §4.3), so a cursor-relative toggle expands whatever the
+		// engine last had selected — a different message entirely.
+		target := m.cursorID()
 		return m, m.opOn(owner, "toggle-thread", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
-			if err := eng.ToggleThread(ctx); err != nil {
+			if err := eng.ToggleThread(ctx, target); err != nil {
 				return sync.Snapshot{}, err
 			}
 			return eng.Snapshot(), nil

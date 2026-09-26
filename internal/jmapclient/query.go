@@ -2,7 +2,6 @@ package jmapclient
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -67,52 +66,25 @@ func (h *queryHandle) page(ctx context.Context, position, limit int) ([]mail.Ema
 		limit = 1
 	}
 	req := &jmap.Request{Context: ctx}
-	var qm jmap.Method
-	var queryName string
-	if h.spec.ThreadID != "" {
-		// inThread lives inside the filter object per RFC 8621 §4.4.1;
-		// v0.5.3's FilterCondition omits it, so the wrapper extends.
-		f, err := json.Marshal(map[string]string{"inThread": string(h.spec.ThreadID)})
-		if err != nil {
-			return nil, fmt.Errorf("jmapclient: encode inThread filter: %w", err)
-		}
-		tq := &threadQuery{
-			Account:         jmap.ID(h.c.accountID),
-			Filter:          f,
-			Sort:            sortFor(h.spec.Sort),
-			Position:        int64(position),
-			Limit:           uint64(limit),
-			CalculateTotal:  true,
-			CollapseThreads: h.spec.CollapseThreads,
-		}
-		if h.spec.AnchorID != "" {
-			tq.Position = 0
-			tq.Anchor = jmap.ID(h.spec.AnchorID)
-			tq.AnchorOffset = int64(h.spec.AnchorOffset)
-		}
-		qm, queryName = tq, tq.Name()
-	} else {
-		q := &email.Query{
-			Account:         jmap.ID(h.c.accountID),
-			Filter:          filterFor(h.spec),
-			Sort:            sortFor(h.spec.Sort),
-			CollapseThreads: h.spec.CollapseThreads,
-			Position:        int64(position),
-			Limit:           uint64(limit),
-			CalculateTotal:  true,
-		}
-		if h.spec.AnchorID != "" {
-			q.Position = 0
-			q.Anchor = jmap.ID(h.spec.AnchorID)
-			q.AnchorOffset = int64(h.spec.AnchorOffset)
-		}
-		qm, queryName = q, q.Name()
+	q := &email.Query{
+		Account:         jmap.ID(h.c.accountID),
+		Filter:          filterFor(h.spec),
+		Sort:            sortFor(h.spec.Sort),
+		CollapseThreads: h.spec.CollapseThreads,
+		Position:        int64(position),
+		Limit:           uint64(limit),
+		CalculateTotal:  true,
 	}
-	qID := req.Invoke(qm)
+	if h.spec.AnchorID != "" {
+		q.Position = 0
+		q.Anchor = jmap.ID(h.spec.AnchorID)
+		q.AnchorOffset = int64(h.spec.AnchorOffset)
+	}
+	qID := req.Invoke(q)
 	get := &email.Get{
 		Account:      jmap.ID(h.c.accountID),
 		Properties:   summaryProperties,
-		ReferenceIDs: &jmap.ResultReference{ResultOf: qID, Name: queryName, Path: "/ids"},
+		ReferenceIDs: &jmap.ResultReference{ResultOf: qID, Name: q.Name(), Path: "/ids"},
 	}
 	gID := req.Invoke(get)
 
@@ -261,25 +233,6 @@ func convertBody(e *email.Email) mail.EmailBody {
 	}
 	return body
 }
-
-// threadQuery carries an Email/query with an RFC 8621 §4.4.1 inThread
-// filter condition, which v0.5.3's FilterCondition struct omits (PLAN §9:
-// extend the wrapper, not the app). Filter is pre-marshalled so inThread
-// lands inside the filter object, where the RFC puts it.
-type threadQuery struct {
-	Account         jmap.ID                 `json:"accountId,omitempty"`
-	Filter          json.RawMessage         `json:"filter,omitempty"`
-	Sort            []*email.SortComparator `json:"sort,omitempty"`
-	Position        int64                   `json:"position,omitempty"`
-	Anchor          jmap.ID                 `json:"anchor,omitempty"`
-	AnchorOffset    int64                   `json:"anchorOffset,omitempty"`
-	Limit           uint64                  `json:"limit,omitempty"`
-	CalculateTotal  bool                    `json:"calculateTotal,omitempty"`
-	CollapseThreads bool                    `json:"collapseThreads,omitempty"`
-}
-
-func (tq *threadQuery) Name() string         { return "Email/query" }
-func (tq *threadQuery) Requires() []jmap.URI { return []jmap.URI{jmapmail.URI} }
 
 // filterFor maps a query spec onto the RFC 8621 §4.4.1 condition. Mailbox
 // browsing sends inMailbox alone; search queries (FR-F1) add the content

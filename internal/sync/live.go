@@ -260,11 +260,27 @@ func (e *Engine) reconcileEmail(ctx context.Context) {
 	// (FR-D5), and any overlay for a destroyed id is moot.
 	if len(all.Destroyed) > 0 {
 		e.window.RemoveIDs(all.Destroyed)
+		unnamed := false
 		for _, id := range all.Destroyed {
+			// Read the thread id before the summary goes: a vanished
+			// member retires its thread's expandable-row count (FR-D1).
+			threadID := mail.ID("")
+			if s, ok := e.summaries[id]; ok {
+				threadID = s.ThreadID
+			} else {
+				unnamed = true
+			}
 			delete(e.summaries, id)
 			delete(e.fresh, id)
 			e.dropOverlayLocked(id)
-			e.dropThreadMemberLocked(id)
+			e.dropThreadMemberLocked(id, threadID)
+		}
+		if unnamed {
+			// A message we never fetched could belong to any thread on
+			// screen, and a chevron promising a reply that is gone is
+			// worse than no chevron: retire every count and let one
+			// batched refresh re-learn them (FR-D1).
+			clear(e.threadSizes)
 		}
 	}
 
@@ -308,6 +324,12 @@ func (e *Engine) absorbUpdatedSummaryLocked(w *Window, s mail.EmailSummary) {
 	// whether the message matches the open search is only knowable
 	// server-side, so unknown ids wait for the next re-anchor (PLAN §4.1
 	// case 3 is a mailbox-browsing behaviour).
+	//
+	// Whatever happens below, a new message is a new member of its
+	// thread, so the count behind that thread's chevron is now stale —
+	// drop it and let the next size refresh learn the truth (FR-D1). A
+	// thread outside the view has no count to drop.
+	delete(e.threadSizes, s.ThreadID)
 	if w.query.Filter.Search != nil {
 		return
 	}
@@ -322,14 +344,54 @@ func (e *Engine) absorbUpdatedSummaryLocked(w *Window, s mail.EmailSummary) {
 		return
 	}
 	if e.windowShouldSlide(w, s) {
-		if w.InsertTop(s.ID) {
+		// One row per thread: a collapsed window represents a thread by a
+		// single id, so a reply arriving into a thread already in the
+		// window supersedes that row rather than adding a second chevron
+		// beside it — the server would return only the newest member for
+		// the thread (RFC 8621 §4.4.3). The row follows its conversation
+		// to the top, where the date-desc sort now puts it.
+		if old := e.windowThreadRow(w, s.ThreadID); old != "" && w.start == 0 {
+			if _, cached := e.threads[s.ThreadID]; cached {
+				if oldSum, ok := e.summaries[old]; ok {
+					e.insertThreadMemberLocked(oldSum)
+				}
+			}
+			// The cursor rides the conversation to its new home (FR-D5).
+			follows := w.CursorID() == old
+			w.RemoveIDs([]mail.ID{old})
+			if w.InsertTop(s.ID) {
+				e.fresh[s.ID] = time.Now()
+				if follows {
+					w.SeekID(s.ID)
+				}
+			}
+		} else if w.InsertTop(s.ID) {
 			e.fresh[s.ID] = time.Now()
 		}
 	} else {
 		w.MarkNewAbove()
 	}
-	// Store the summary so the row renders once it is in the window.
+	// Store the summary so the row renders once it is in the window. A
+	// cached thread gains the new member too, so an expanded block shows
+	// the reply in place instead of hiding it.
 	e.summaries[s.ID] = e.reapplyOverlayLocked(s)
+	if _, cached := e.threads[s.ThreadID]; cached {
+		e.insertThreadMemberLocked(s)
+	}
+}
+
+// windowThreadRow returns the window id already standing for thread t, if
+// any — the row a fresh arrival must supersede. Caller holds mu.
+func (e *Engine) windowThreadRow(w *Window, t mail.ID) mail.ID {
+	if t == "" {
+		return ""
+	}
+	for _, id := range w.IDs() {
+		if s, ok := e.summaries[id]; ok && s.ThreadID == t {
+			return id
+		}
+	}
+	return ""
 }
 
 // windowShouldSlide reports whether s is newer than the window head, or the
@@ -413,37 +475,39 @@ func (e *Engine) insertThreadMemberLocked(s mail.EmailSummary) {
 	copy(members[pos+1:], members[pos:])
 	members[pos] = s.ID
 	e.threads[s.ThreadID] = members
+	e.threadSizes[s.ThreadID] = len(members)
 }
 
-// dropThreadMemberLocked forgets an id in every cached thread. Caller holds
-// mu.
-func (e *Engine) dropThreadMemberLocked(id mail.ID) {
-	tid, found := mail.ID(""), false
-	for threadID, members := range e.threads {
-		for _, mid := range members {
-			if mid == id {
-				tid, found = threadID, true
-				break
-			}
-		}
-		if found {
-			break
-		}
-	}
-	if !found {
+// dropThreadMemberLocked forgets an id in its cached thread and retires
+// the thread's member count: a destroy can take a thread from two members
+// to one, and a chevron promising a reply under a message that no longer
+// has one is a lie (FR-D1). threadID comes from the summary the caller is
+// about to delete — an id with no summary was never a cached member (the
+// cache keeps its members' summaries alive), so there is nothing stale to
+// retire. Caller holds mu.
+func (e *Engine) dropThreadMemberLocked(id, threadID mail.ID) {
+	if threadID == "" {
 		return
 	}
-	members := e.threads[tid][:0]
-	for _, mid := range e.threads[tid] {
+	if _, cached := e.threads[threadID]; !cached {
+		// Collapsed thread: only the count is known to be wrong, and the
+		// next size refresh re-learns it.
+		delete(e.threadSizes, threadID)
+		return
+	}
+	members := e.threads[threadID][:0]
+	for _, mid := range e.threads[threadID] {
 		if mid != id {
 			members = append(members, mid)
 		}
 	}
 	if len(members) == 0 {
-		delete(e.threads, tid)
+		delete(e.threads, threadID)
+		delete(e.threadSizes, threadID)
 		return
 	}
-	e.threads[tid] = members
+	e.threads[threadID] = members
+	e.threadSizes[threadID] = len(members)
 }
 
 // reconcileMailbox folds Mailbox/changes into the tree (FR-B6). Count and

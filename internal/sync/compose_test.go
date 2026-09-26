@@ -287,13 +287,20 @@ func TestSendRequiresDraftsMailbox(t *testing.T) {
 	}
 }
 
-// countingProvider tallies FetchBody calls so cache behaviour is observable.
+// countingProvider tallies FetchBody and Thread/get calls so cache and
+// refresh behaviour is observable.
 type countingProvider struct {
 	mail.Provider
 	fetches int
+	threads int
 }
 
 func (p *countingProvider) FetchBody(ctx context.Context, id mail.ID) (mail.EmailBody, error) {
 	p.fetches++
 	return p.Provider.FetchBody(ctx, id)
+}
+
+func (p *countingProvider) Threads(ctx context.Context, threadIDs []mail.ID) (map[mail.ID][]mail.ID, error) {
+	p.threads++
+	return p.Provider.Threads(ctx, threadIDs)
 }

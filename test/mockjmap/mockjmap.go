@@ -403,6 +403,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 			args = emailQueryResponse(snap, call.Args)
 		case "Email/get":
 			args = emailGetResponse(snap, call.Args, results)
+		case "Thread/get":
+			args = threadGetResponse(snap, call.Args)
 		case "Email/changes":
 			args = s.changesResponse("Email", call.Args)
 		case "Email/set":

@@ -45,6 +45,11 @@ type Engine struct {
 	summaries   map[mail.ID]mail.EmailSummary
 	threads     map[mail.ID][]mail.ID // threadID → member ids, oldest first
 	threadOrder []mail.ID             // thread cache insertion order (bounded)
+	// threadSizes is the member count per thread behind the list's
+	// expandable-row chevron (FR-D1): 0 = not yet known (the row renders
+	// unmarked and the app asks for a size refresh), >1 = press Enter and
+	// something comes out. Bounded with the window it was fetched for.
+	threadSizes map[mail.ID]int
 	expanded    map[mail.ID]bool
 	bodies      *bodyCache
 	body        *BodyView
@@ -108,7 +113,11 @@ type Row struct {
 	Summary      mail.EmailSummary
 	ThreadHeader bool // has an expanded thread beneath it
 	ThreadMember bool // rendered inside an expanded thread
-	Fresh        bool // arrived via live sync; highlighted until cleared
+	// ThreadSize is the thread's member count: 0 while unknown (the row
+	// renders without a chevron until a size refresh lands), 1 for a
+	// single-message thread, >1 for a thread Enter can expand (FR-D1).
+	ThreadSize int
+	Fresh      bool // arrived via live sync; highlighted until cleared
 	// Account is the owning account id, stamped only on unified-view rows
 	// (FR-A5); empty in single-account views. JMAP ids are unique per
 	// account, so actions route by (account, id).
@@ -186,16 +195,17 @@ type BodyView struct {
 func NewEngine(p mail.Provider, cfg Config) *Engine {
 	c := cfg.withDefaults()
 	return &Engine{
-		p:         p,
-		cfg:       c,
-		sort:      c.Sort,
-		summaries: map[mail.ID]mail.EmailSummary{},
-		threads:   map[mail.ID][]mail.ID{},
-		expanded:  map[mail.ID]bool{},
-		bodies:    newBodyCache(c.BodyCache),
-		fresh:     map[mail.ID]time.Time{},
-		overlay:   map[mail.ID]*pendingOp{},
-		updates:   make(chan Snapshot, 1),
+		p:           p,
+		cfg:         c,
+		sort:        c.Sort,
+		summaries:   map[mail.ID]mail.EmailSummary{},
+		threads:     map[mail.ID][]mail.ID{},
+		threadSizes: map[mail.ID]int{},
+		expanded:    map[mail.ID]bool{},
+		bodies:      newBodyCache(c.BodyCache),
+		fresh:       map[mail.ID]time.Time{},
+		overlay:     map[mail.ID]*pendingOp{},
+		updates:     make(chan Snapshot, 1),
 		liveCfg: liveConfig{
 			pollInterval: c.PollInterval,
 			pushRetries:  c.PushRetries,
@@ -707,8 +717,6 @@ func (e *Engine) querySpecLocked(position, limit int) mail.QuerySpec {
 		if q.Filter.MailboxID != "" {
 			spec.MailboxID = q.Filter.MailboxID
 		}
-	case q.Filter.ThreadID != "":
-		spec.ThreadID = q.Filter.ThreadID
 	default:
 		spec.MailboxID = q.Filter.MailboxID
 	}
@@ -798,21 +806,39 @@ func (e *Engine) alignCursorWithWindowLocked() {
 	}
 }
 
-// ToggleThread expands or collapses the cursor message's thread in place
-// (FR-D2). Expansion is a sub-list — window math is untouched (PLAN §4.1).
-// Scan results are flat rows; threads do not expand there.
-func (e *Engine) ToggleThread(ctx context.Context) error {
+// ToggleThread expands or collapses the thread of target — the message the
+// user pressed (FR-D2). Expansion is a sub-list — window math is untouched
+// (PLAN §4.1) — and an empty target falls back to the engine cursor, which
+// single-account views track exactly. The app passes the row it rendered:
+// in the unified view no engine cursor ever moves (PLAN §4.3), so a
+// cursor-relative toggle would expand a different account's row 0 and put
+// the chevron on a message nobody pressed. Scan results are flat rows;
+// threads do not expand there.
+func (e *Engine) ToggleThread(ctx context.Context, target mail.ID) error {
 	e.mu.Lock()
 	if e.window == nil || e.scan != nil {
 		e.mu.Unlock()
 		return nil
 	}
 	rows := e.renderedRowsLocked()
-	if e.cursorRow < 0 || e.cursorRow >= len(rows) {
+	idx := -1
+	if target == "" {
+		if e.cursorRow >= 0 && e.cursorRow < len(rows) {
+			idx = e.cursorRow
+		}
+	} else {
+		for i, r := range rows {
+			if r.ID == target {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
 		e.mu.Unlock()
 		return nil
 	}
-	id := rows[e.cursorRow].ID
+	id := rows[idx].ID
 	sum, ok := e.summaries[id]
 	if !ok || id == "" {
 		e.mu.Unlock()
@@ -824,27 +850,81 @@ func (e *Engine) ToggleThread(ctx context.Context) error {
 		e.mu.Unlock()
 		return nil
 	}
-	if _, cached := e.threads[sum.ThreadID]; !cached {
-		// Fetch thread members oldest-first for natural reading order.
-		// The mutex is released for the network hop and re-taken after.
-		spec := mail.QuerySpec{
-			ThreadID: sum.ThreadID,
-			Sort:     []mail.SortCriterion{{Property: "receivedAt"}},
-			Limit:    1000,
-		}
+	members, cached := e.threads[sum.ThreadID]
+	if cached && len(members) <= 1 {
+		// Everything this thread could show is the row itself (its other
+		// members were destroyed): no chevron over nothing — and the count
+		// the list is acting on was stale, so correct it (FR-D1).
+		e.rememberThreadSizeLocked(sum.ThreadID, len(members))
 		e.mu.Unlock()
-		handle, sums, err := e.p.OpenQuery(ctx, spec)
-		if err != nil {
+		return nil
+	}
+	win := e.window
+	e.mu.Unlock()
+
+	var sums []mail.EmailSummary
+	if !cached {
+		var err error
+		if members, sums, err = e.loadThread(ctx, sum.ThreadID); err != nil {
 			return err
 		}
-		e.mu.Lock()
-		e.rememberThreadLocked(sum.ThreadID, append([]mail.ID(nil), handle.IDs()...))
+		if len(members) <= 1 {
+			// The server says this thread is the row itself. Record it:
+			// a chevron that promised a reply has to go (FR-D1), whatever
+			// view the fetch outlived.
+			e.mu.Lock()
+			e.rememberThreadSizeLocked(sum.ThreadID, len(members))
+			e.mu.Unlock()
+			return nil
+		}
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// The window is swapped wholesale by a mailbox switch or a search
+	// opening/closing while the fetch was in flight; planting an
+	// expansion from the old view would mark whichever row of the new
+	// one happens to share this threadId — the chevron on a message the
+	// user never pressed.
+	if e.window != win || e.scan != nil {
+		return nil
+	}
+	if !cached {
+		// Remember before absorbing: a member that lives outside the
+		// window survives eviction only because the thread cache keeps it
+		// (PLAN §3), so the cache must exist first.
+		e.rememberThreadLocked(sum.ThreadID, members)
 		e.absorbSummariesLocked(sums)
+	}
+	if len(e.threads[sum.ThreadID]) <= 1 {
+		// Re-checked under the lock: the cache can shrink while the fetch
+		// is out — a concurrent destroy drops members, the LRU evicts the
+		// entry — and an expansion with nothing beneath it is a chevron
+		// over empty space.
+		return nil
 	}
 	e.expanded[sum.ThreadID] = true
 	e.publishLocked()
-	e.mu.Unlock()
 	return nil
+}
+
+// loadThread fetches a thread's member ids and their summaries from the
+// provider (FR-D2), oldest-first. It runs without mu held; the caller
+// re-checks the view, caches the ids, then absorbs the summaries.
+func (e *Engine) loadThread(ctx context.Context, threadID mail.ID) ([]mail.ID, []mail.EmailSummary, error) {
+	m, err := e.p.Threads(ctx, []mail.ID{threadID})
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := m[threadID]
+	if len(ids) <= 1 {
+		return ids, nil, nil // nothing beneath the pressed row
+	}
+	sums, err := e.p.FetchSummaries(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ids, sums, nil
 }
 
 // LoadBody fetches (or reuses) the body for id and converts HTML to text
@@ -924,7 +1004,10 @@ func (e *Engine) renderedRowsLocked() []Row {
 			if op, pending := e.overlay[id]; pending && op.ov.Destroy {
 				continue // pending delayed destroy: hidden until commit/cancel
 			}
-			rows = append(rows, Row{ID: id, Summary: sum})
+			// Flat view: no thread chrome to wear and nothing to expand
+			// (FR-F1), so -1 tells the list and the size refresh alike
+			// that this row is not "unknown", it is "never".
+			rows = append(rows, Row{ID: id, Summary: sum, ThreadSize: -1})
 		}
 		return rows
 	}
@@ -941,31 +1024,53 @@ func (e *Engine) renderedRowsLocked() []Row {
 		if op, pending := e.overlay[id]; pending && op.ov.Destroy {
 			continue // pending delayed destroy: hidden until commit/cancel
 		}
-		r := Row{ID: id, Summary: sum}
+		r := Row{ID: id, Summary: sum, ThreadSize: e.threadSizes[sum.ThreadID]}
 		if _, fresh := e.fresh[id]; fresh {
 			r.Fresh = true
 		}
 		if e.expanded[sum.ThreadID] {
+			members := e.threadMembersLocked(sum.ThreadID, id)
+			if len(members) == 0 {
+				// Nothing renders beneath: a single-message thread, or
+				// every other member is gone. A chevron over empty space
+				// is a lie, so the row stays plain (FR-D2).
+				rows = append(rows, r)
+				continue
+			}
 			// The header (the thread's collapsed representative — its
 			// newest member) renders first; remaining members follow,
 			// oldest-first, so the header is never duplicated.
 			r.ThreadHeader = true
 			rows = append(rows, r)
-			for _, mid := range e.threads[sum.ThreadID] {
-				if mid == id {
-					continue
-				}
-				ms, ok := e.summaries[mid]
-				if !ok {
-					continue
-				}
-				rows = append(rows, Row{ID: mid, Summary: ms, ThreadMember: true})
-			}
+			rows = append(rows, members...)
 			continue
 		}
 		rows = append(rows, r)
 	}
 	return rows
+}
+
+// threadMembersLocked builds the rows rendered beneath an expanded
+// thread's header: every cached member except the header itself, in cache
+// order (oldest first), skipping ids whose summary has not arrived and
+// rows already carrying a pending destroy. Caller holds mu.
+func (e *Engine) threadMembersLocked(threadID, header mail.ID) []Row {
+	memberIDs := e.threads[threadID]
+	out := make([]Row, 0, max(len(memberIDs)-1, 0))
+	for _, mid := range memberIDs {
+		if mid == header {
+			continue
+		}
+		ms, ok := e.summaries[mid]
+		if !ok {
+			continue
+		}
+		if op, pending := e.overlay[mid]; pending && op.ov.Destroy {
+			continue
+		}
+		out = append(out, Row{ID: mid, Summary: ms, ThreadMember: true, ThreadSize: e.threadSizes[threadID]})
+	}
+	return out
 }
 
 // absorbSummariesLocked stores page summaries (id-keyed, last wins), then
@@ -989,14 +1094,21 @@ func (e *Engine) absorbSummariesLocked(sums []mail.EmailSummary) {
 // Caller holds mu.
 func (e *Engine) evictSummariesLocked() {
 	keep := map[mail.ID]bool{}
+	keepThreads := map[mail.ID]bool{}
+	noteThread := func(id mail.ID) {
+		keep[id] = true
+		if s, ok := e.summaries[id]; ok && s.ThreadID != "" {
+			keepThreads[s.ThreadID] = true
+		}
+	}
 	if e.window != nil {
 		for _, id := range e.window.IDs() {
-			keep[id] = true
+			noteThread(id)
 		}
 	}
 	if e.saved != nil && e.saved.win != nil {
 		for _, id := range e.saved.win.IDs() {
-			keep[id] = true
+			noteThread(id)
 		}
 	}
 	if e.scan != nil {
@@ -1004,13 +1116,22 @@ func (e *Engine) evictSummariesLocked() {
 			keep[id] = true
 		}
 	}
-	for _, members := range e.threads {
+	for tid, members := range e.threads {
+		keepThreads[tid] = true
 		for _, mid := range members {
 			keep[mid] = true
 		}
 	}
 	for id := range e.overlay {
-		keep[id] = true
+		noteThread(id)
+	}
+	// Thread sizes ride with the rows that showed them (FR-D1): a thread
+	// no live row belongs to has nothing left to mark, so its count goes
+	// too — the next refresh re-learns it if the row comes back.
+	for tid := range e.threadSizes {
+		if !keepThreads[tid] {
+			delete(e.threadSizes, tid)
+		}
 	}
 	for id := range e.summaries {
 		if !keep[id] {
@@ -1027,6 +1148,7 @@ const maxThreadCache = 64
 // eviction. Caller holds mu.
 func (e *Engine) rememberThreadLocked(threadID mail.ID, members []mail.ID) {
 	e.threads[threadID] = members
+	e.threadSizes[threadID] = len(members)
 	e.threadOrder = append(e.threadOrder, threadID)
 	for len(e.threadOrder) > maxThreadCache {
 		oldest := e.threadOrder[0]

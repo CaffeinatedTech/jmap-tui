@@ -165,10 +165,16 @@ func (e *Engine) forgetEmailLocked(id mail.ID) {
 	if e.saved != nil && e.saved.win != nil {
 		e.saved.win.RemoveIDs([]mail.ID{id})
 	}
+	// The summary names the thread whose count a removal retires (FR-D1),
+	// so read it before it goes.
+	threadID := mail.ID("")
+	if s, ok := e.summaries[id]; ok {
+		threadID = s.ThreadID
+	}
 	delete(e.summaries, id)
 	delete(e.fresh, id)
 	e.dropOverlayLocked(id)
-	e.dropThreadMemberLocked(id)
+	e.dropThreadMemberLocked(id, threadID)
 }
 
 // mailboxRoleLocked resolves a mailbox id to its role; empty when unknown.

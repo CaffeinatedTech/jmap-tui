@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
 
@@ -92,6 +93,89 @@ func TestLiveNewMailSlidesInAtTop(t *testing.T) {
 	e.ClearFresh()
 	if fresh := e.Snapshot().Rows[0].Fresh; fresh {
 		t.Error("ClearFresh left the highlight on")
+	}
+}
+
+// TestLiveReplySupersedesThreadRow: a reply lands in a conversation the
+// window already shows. A collapsed window holds one row per thread
+// (RFC 8621 §4.4.3), so the row follows its conversation to the top —
+// growing a second chevron beside it would put thread chrome on a
+// message the user never pressed.
+func TestLiveReplySupersedesThreadRow(t *testing.T) {
+	e, srv := newLiveEngine(t)
+
+	// Cursor on the thread's row (e2, second of two) so it rides along.
+	if id := e.CursorID(); id != "e3" {
+		t.Fatalf("cursor = %q, want e3", id)
+	}
+	e.MoveCursor(1)
+	if id := e.CursorID(); id != "e2" {
+		t.Fatalf("cursor = %q, want e2", id)
+	}
+
+	srv.CreateEmails([]mockjmap.Email{{
+		ID: "e9", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
+		From:       []mockjmap.Address{{Name: "Bob", Email: "bob@example.test"}},
+		Subject:    "Re: thread starter",
+		ReceivedAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
+		TextBody:   "Second reply.\n",
+	}})
+	srv.Notify()
+
+	waitFor(t, 2*time.Second, func() bool {
+		snap := e.Snapshot()
+		return len(snap.Rows) == 2 && snap.Rows[0].Summary.ID == "e9"
+	})
+	snap := e.Snapshot()
+	for i, r := range snap.Rows {
+		if r.Summary.ThreadID == "t1" && r.ID != "e9" {
+			t.Errorf("row %d is a second t1 row: %+v", i, r)
+		}
+	}
+	if !snap.Rows[0].Fresh {
+		t.Error("the superseding reply must carry the fresh highlight")
+	}
+	if id := e.CursorID(); id != "e9" {
+		t.Errorf("cursor = %q, want e9 — the conversation it was on", id)
+	}
+	if snap.Total != 2 {
+		t.Errorf("total = %d, want 2", snap.Total)
+	}
+}
+
+// rowSize reads one rendered row's thread member count (FR-D1).
+func rowSize(e *Engine, id mail.ID) int {
+	for _, r := range e.Snapshot().Rows {
+		if r.ID == id {
+			return r.ThreadSize
+		}
+	}
+	return -1
+}
+
+// TestLiveDestroyRetiresThreadChevron (FR-D1): a reply that disappears can
+// take a thread from two members to one, and the mark promising a reply
+// under the survivor has to go with it rather than promise an expansion
+// that returns nothing.
+func TestLiveDestroyRetiresThreadChevron(t *testing.T) {
+	e, srv := newLiveEngine(t)
+	ctx := context.Background()
+
+	e.RefreshThreadSizes(ctx)
+	if s := rowSize(e, "e2"); s != 2 {
+		t.Fatalf("thread size = %d, want 2 before the destroy", s)
+	}
+
+	// e1 was never fetched (it sits collapsed under e2), so the destroy
+	// arrives as a bare id — the refresh has to start over, not trust a
+	// count it can no longer verify.
+	srv.DestroyEmails([]string{"e1"})
+	srv.Notify()
+	waitFor(t, 2*time.Second, func() bool { return rowSize(e, "e2") == 0 })
+
+	e.RefreshThreadSizes(ctx)
+	if s := rowSize(e, "e2"); s != 1 {
+		t.Fatalf("thread size = %d, want 1 after the reply was destroyed", s)
 	}
 }
 

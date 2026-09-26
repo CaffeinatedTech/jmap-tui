@@ -44,13 +44,15 @@ Three panes (≥100 cols) — sidebar · list · preview, one accent. Every colu
 ```text
 jmap-tui  Inbox  1432 messages · 3 unread
 ─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
-█ ▾ Work                █│  ★   Dana Ops         Deploy pipeline is… 35m    │From: Eve Security <from@example.test>
-  Inbox                 3│   ↩  Eve Security     Quarterly audit re… 3h     │To: me@example.test
-  Sent Items             │      Bob Thread       ▾ Re: planning s…   1d     │Date: Mon, 21 Sep 2026 07:00
+█ ▾ Work                █│  ★   Dana Ops         ▸ Deploy pipeline…  35m    │From: Eve Security <from@example.test>
+  Inbox                 3│   ↩  Eve Security       Quarterly audit…  3h     │To: me@example.test
+  Sent Items             │      Bob Thread       ▾ Re: planning sync 1d     │Date: Mon, 21 Sep 2026 07:00
 ▾ Archive                │ ●    Alice Root         └ planning sync   1d     │Subject: Quarterly audit report attached
     agent-test           │↓ more                                            │──────────────────────────────────────────
                          │                                                  │Hello,
 ```
+
+List rows that can expand say so: a collapsed thread with replies beneath it wears a `▸` in the two-cell slot in front of its subject, which reads `▾` while the thread is open — so you always know which rows `Enter` will open. A message with no replies, and one whose size has not been fetched yet, wears nothing.
 
 Trees fold: `h`/`←` shuts a folder's subtree — or a whole account's, when the cursor is on its header — and with nothing to fold it jumps to the parent row instead; `l`/`→` unfolds. Rows that have a subtree wear a dim `▸`/`▾` chevron, a folded folder's unread count rolls up over everything it hides, and `Enter` alone opens a mailbox. The fold state is remembered in `prefs.toml`.
 
@@ -59,9 +61,9 @@ The unified inbox (`i`) interleaves every account's mail by date, each row led b
 ```text
 jmap-tui  unified inbox  4 messages
 ─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
-█ Work                  █│█  ★   Dana Ops         Deploy pipeline i… 35m    │Account: Personal
-Inbox                   3│▓   ↩  Eve Security     Quarterly audit r… 3h     │From: Eve Security <from@example.test>
-Sent Items               │█      Bob Thread       ▾ Re: planning …   1d     │To: me@example.test
+█ Work                  █│█  ★   Dana Ops         ▸ Deploy pipelin…  35m    │Account: Personal
+Inbox                   3│▓   ↩  Eve Security       Quarterly audi…  3h     │From: Eve Security <from@example.test>
+Sent Items               │█      Bob Thread       ▾ Re: planning s…  1d     │To: me@example.test
   agent-test             │█ ●    Alice Root         └ planning sync  1d     │Date: Mon, 21 Sep 2026 07:00
 Archive                  │↓ more                                            │Subject: Quarterly audit report attached
 ▓ Personal              ▓│                                                  │──────────────────────────────────────────
@@ -142,6 +144,7 @@ undo_delay = "5s"   # 0s submits immediately
 | List | `d` / `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
 | List | `s` / `o` | Sort by… (picker: newest, oldest, sender, subject, size — remembered per account in `prefs.toml`) |
 | List | `S` | Show/hide sizes |
+| List | `Enter` | Expand / collapse the thread under the cursor (rows wearing `▸`) |
 | Message | `s` | Save attachments… |
 | Message | `v` | Full-screen message (hides sidebar + list) |
 | Folders | `Enter` | Open the mailbox (focus moves to the list); on an account header, activate that account |

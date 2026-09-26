@@ -326,6 +326,111 @@ func TestUnifiedActionsRouteToOwner(t *testing.T) {
 	}
 }
 
+// TestUnifiedToggleThreadExpandsPressedRow: the unified cursor is app-side
+// and no engine cursor ever moves there (PLAN §4.3), so Enter must expand
+// the row it rendered. A cursor-relative toggle expands whatever the owner
+// engine last had selected — the chevron landing on a message nobody
+// pressed, often a different subject.
+func TestUnifiedToggleThreadExpandsPressedRow(t *testing.T) {
+	mailboxes := []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 3, UnreadEmails: 3},
+	}
+	base := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	addr := func(name string) []mockjmap.Address {
+		return []mockjmap.Address{{Name: name, Email: name + "@example.test"}}
+	}
+
+	// work: a standalone at 10:00, plus a two-member thread at 08:00/07:00.
+	srvWork := mockjmap.New("work@example.com", "pw", mailboxes)
+	srvWork.SetEmails([]mockjmap.Email{
+		{
+			ID: "w3", ThreadID: "t3", MailboxIDs: []string{"mb-inbox"},
+			From: addr("solo"), Subject: "standalone work",
+			ReceivedAt: base.Add(10 * time.Hour), TextBody: "solo\n",
+		},
+		{
+			ID: "w2", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
+			From: addr("bob"), Subject: "Re: thread",
+			ReceivedAt: base.Add(8 * time.Hour), TextBody: "reply\n",
+		},
+		{
+			ID: "w1", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"},
+			From: addr("alice"), Subject: "thread",
+			ReceivedAt: base.Add(7 * time.Hour), TextBody: "original\n",
+		},
+	})
+	t.Cleanup(srvWork.Close)
+
+	// personal: two standalones that interleave around it.
+	srvPersonal := mockjmap.New("personal@example.com", "pw", mailboxes)
+	srvPersonal.SetEmails([]mockjmap.Email{
+		{
+			ID: "p2", ThreadID: "pt2", MailboxIDs: []string{"mb-inbox"},
+			From: addr("carol"), Subject: "newer personal",
+			ReceivedAt: base.Add(9 * time.Hour), TextBody: "hi\n",
+		},
+		{
+			ID: "p1", ThreadID: "pt1", MailboxIDs: []string{"mb-inbox"},
+			From: addr("dave"), Subject: "older personal",
+			ReceivedAt: base.Add(5 * time.Hour), TextBody: "hi\n",
+		},
+	})
+	t.Cleanup(srvPersonal.Close)
+
+	connect := func(srv *mockjmap.Server, user string) *jmapclient.Client {
+		c := jmapclient.New(jmapclient.Options{ServerURL: srv.URL(), Username: user, Password: "pw"})
+		if err := c.Connect(context.Background()); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		return c
+	}
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("KeyMap: %v", err)
+	}
+	m := New(Options{
+		Accounts: []AccountOpt{
+			{ID: "work", Name: "Work", Provider: connect(srvWork, "work@example.com"), Connected: true},
+			{ID: "personal", Name: "Personal", Provider: connect(srvPersonal, "personal@example.com"), Connected: true},
+		},
+		Keys:  km,
+		Theme: ui.NewTheme(ui.DarkTheme()),
+	})
+	m.width, m.height = 120, 40
+	loadAll(t, m)
+
+	_, cmd := m.handleKey(key("i"))
+	pump(t, m, cmd)
+
+	// Merged by date: w3 10:00, p2 09:00, w2 08:00, p1 05:00.
+	rows := m.snap.Rows
+	if len(rows) != 4 {
+		t.Fatalf("merged rows = %d: %+v", len(rows), rows)
+	}
+
+	// Cursor onto w2 (the thread) — engine cursors stay put at row 0.
+	_, _ = m.moveCursor(2)
+	if id := m.cursorID(); id != "w2" {
+		t.Fatalf("unified cursor = %q, want w2", id)
+	}
+	_, cmd = m.handleKey(keyEnter())
+	pump(t, m, cmd)
+
+	rows = m.snap.Rows
+	if len(rows) != 5 {
+		t.Fatalf("rows after Enter = %d: %+v", len(rows), rows)
+	}
+	if !rows[2].ThreadHeader || rows[2].ID != "w2" {
+		t.Fatalf("chevron not on the pressed row: %+v", rows[2])
+	}
+	if !rows[3].ThreadMember || rows[3].ID != "w1" {
+		t.Fatalf("thread's second member not rendered under the header: %+v", rows[3])
+	}
+	if rows[0].ThreadHeader {
+		t.Fatalf("chevron on the unpressed standalone row: %+v", rows[0])
+	}
+}
+
 // TestUnifiedSelectionQualifiesIds: with identical ids across accounts,
 // x on one row must not select the other account's row (FR-G3 + FR-A5).
 func TestUnifiedSelectionQualifiesIds(t *testing.T) {

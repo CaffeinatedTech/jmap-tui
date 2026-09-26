@@ -154,12 +154,7 @@ type QuerySpec struct {
 	// queries it is the search scope; empty means all mailboxes.
 	MailboxID ID
 
-	// ThreadID scopes the query to a thread (inThread); it overrides
-	// MailboxID when non-empty.
-	ThreadID ID
-
-	// Search applies content filters (FR-F1); nil for mailbox browsing
-	// and thread expansion.
+	// Search applies content filters (FR-F1); nil for mailbox browsing.
 	Search *SearchFilter
 
 	// CollapseThreads asks the server to collapse thread members into
@@ -350,6 +345,14 @@ type Provider interface {
 
 	// FetchSummaries fetches list-window summaries for the given ids.
 	FetchSummaries(ctx context.Context, ids []ID) ([]EmailSummary, error)
+
+	// Threads returns the member ids of each requested thread (Thread/get),
+	// oldest first — RFC 8621 §3 orders Thread.emailIds by receivedAt,
+	// which is the order a thread expands in (FR-D2). The map is keyed by
+	// thread id; a thread the server does not know is simply absent. One
+	// batched call backs both expansion and the list's expandable-thread
+	// chevron (FR-D1), so callers size a whole view in one round trip.
+	Threads(ctx context.Context, threadIDs []ID) (map[ID][]ID, error)
 
 	// FetchBody fetches the full body of one message.
 	FetchBody(ctx context.Context, id ID) (EmailBody, error)

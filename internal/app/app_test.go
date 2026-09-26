@@ -104,6 +104,30 @@ func key(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Text: s, Code: rune(s[0])}
 }
 
+// TestThreadSizesArriveWithTheView (FR-D1): the list's "which of these
+// rows can I press Enter on?" mark is fetched as the view renders — no
+// keystroke, no manual refresh — and a collapsed two-member thread reads
+// as expandable while nothing claims to be expandable before it lands.
+func TestThreadSizesArriveWithTheView(t *testing.T) {
+	m, _ := newTestModel(t)
+
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		pump(t, m, cmd)
+	}
+	pump(t, m, m.loadAccountCmd())
+
+	if m.snap.ActiveMailbox != "mb-inbox" {
+		t.Fatalf("active mailbox = %q, want mb-inbox", m.snap.ActiveMailbox)
+	}
+	if len(m.snap.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1 (the thread is collapsed)", len(m.snap.Rows))
+	}
+	if got := m.snap.Rows[0].ThreadSize; got != 2 {
+		t.Fatalf("thread size = %d, want 2 (the reply sits beneath it)", got)
+	}
+}
+
 func TestAppEndToEndReaderFlow(t *testing.T) {
 	m, _ := newTestModel(t)
 
@@ -147,8 +171,9 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 
 	// Expand the thread (FR-D2), move to the HTML member, load it: the
 	// body goes through the FR-E2 converter.
+	target := m.cursorID()
 	toggle := m.engineOp("toggle-thread", func(ctx context.Context) (sync.Snapshot, error) {
-		if err := m.engine.ToggleThread(ctx); err != nil {
+		if err := m.engine.ToggleThread(ctx, target); err != nil {
 			return sync.Snapshot{}, err
 		}
 		return m.engine.Snapshot(), nil

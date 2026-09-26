@@ -136,21 +136,35 @@ func TestQueryPageExtends(t *testing.T) {
 	}
 }
 
-func TestQueryThreadScope(t *testing.T) {
+// TestThreadSizes pins the batched Thread/get (FR-D1 + FR-D2): members
+// come back oldest-first for expansion, counts for the list's expandable
+// chevron, in one call — and a thread the server does not know is simply
+// absent rather than an error.
+func TestThreadSizes(t *testing.T) {
 	c, _ := newEmailTestClient(t)
 	ctx := context.Background()
 
-	h, sums, err := c.OpenQuery(ctx, mail.QuerySpec{ThreadID: "t1", Limit: 50})
+	threads, err := c.Threads(ctx, []mail.ID{"t1", "t2", "no-such-thread"})
 	if err != nil {
-		t.Fatalf("OpenQuery: %v", err)
+		t.Fatalf("Threads: %v", err)
 	}
-	// inThread ascends by receivedAt (default sort desc — but with only
-	// two members either order must contain both, newest first).
-	if ids := h.IDs(); len(ids) != 2 || ids[0] != "e2" || ids[1] != "e1" {
-		t.Fatalf("ids = %v, want [e2 e1]", ids)
+	ids := threads["t1"]
+	if len(ids) != 2 || ids[0] != "e1" || ids[1] != "e2" {
+		t.Fatalf("t1 members = %v, want [e1 e2] (oldest first)", ids)
+	}
+	if got := len(threads["t2"]); got != 1 {
+		t.Fatalf("t2 members = %d, want 1 (a single-message thread)", got)
+	}
+	if _, ok := threads["no-such-thread"]; ok {
+		t.Error("unknown thread must be absent, not present")
+	}
+
+	sums, err := c.FetchSummaries(ctx, ids)
+	if err != nil {
+		t.Fatalf("FetchSummaries: %v", err)
 	}
 	if len(sums) != 2 {
-		t.Fatalf("summaries = %d", len(sums))
+		t.Fatalf("summaries = %d, want 2", len(sums))
 	}
 }
 

@@ -337,9 +337,15 @@ func (e *Engine) Triage(ctx context.Context, spec TriageSpec) (Receipt, error) {
 		e.dropOverlayLocked(id)
 	}
 	for _, id := range res.Destroyed {
+		// The summary names the thread whose count a destroy retires
+		// (FR-D1), so read it before it goes.
+		threadID := mail.ID("")
+		if s, ok := e.summaries[id]; ok {
+			threadID = s.ThreadID
+		}
 		delete(e.summaries, id)
 		e.dropOverlayLocked(id)
-		e.dropThreadMemberLocked(id)
+		e.dropThreadMemberLocked(id, threadID)
 		delete(e.fresh, id)
 	}
 	rcpt := Receipt{Undo: plan.undo}

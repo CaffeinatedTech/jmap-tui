@@ -17,7 +17,8 @@ import (
 var update = flag.Bool("update", false, "regenerate golden files")
 
 // fixtureSnapshot exercises every row variant: unread bold row, selected
-// row, expanded thread header + member, replied flag, attachment.
+// row, a collapsed thread that can expand (▸), a single-message thread
+// that cannot, expanded thread header + member, replied flag, attachment.
 func fixtureSnapshot() sync.Snapshot {
 	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 	sum := func(id, threadID, from, subject string, at time.Time, kw ...string) mail.EmailSummary {
@@ -44,6 +45,12 @@ func fixtureSnapshot() sync.Snapshot {
 	// thread t1 is expanded: e2 is the header (newest member), e1 the member
 	rows[2].ThreadHeader = true
 	rows[3].ThreadMember = true
+	// Member counts (FR-D1): t4 has replies beneath it (▸), t3 is a
+	// single message, t1 is the open two-member thread.
+	rows[0].ThreadSize = 3
+	rows[1].ThreadSize = 1
+	rows[2].ThreadSize = 2
+	rows[3].ThreadSize = 2
 
 	snap := sync.Snapshot{
 		Version: 7,

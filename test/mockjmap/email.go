@@ -204,10 +204,10 @@ type resultRef struct {
 }
 
 // queryFilter is the subset of Email/query FilterCondition the fake
-// honours (FR-F1): mailbox/thread scoping plus the search fields.
+// honours (FR-F1): mailbox scoping plus the search fields. Thread
+// membership is not a filter — Thread/get answers it (RFC 8621 §3).
 type queryFilter struct {
 	InMailbox     string     `json:"inMailbox"`
-	InThread      string     `json:"inThread"`
 	Text          string     `json:"text"`
 	From          string     `json:"from"`
 	To            string     `json:"to"`
@@ -261,8 +261,8 @@ func emailSortLess(a, b scopedEmail, prop string) bool {
 }
 
 // hasSearchFilter reports whether the filter carries content conditions
-// beyond mailbox/thread scoping — the signal to materialise and match
-// full emails instead of riding the cheap tuple fast-path.
+// beyond mailbox scoping — the signal to materialise and match full
+// emails instead of riding the cheap tuple fast-path.
 func (f queryFilter) hasSearchFilter() bool {
 	return f.Text != "" || f.From != "" || f.To != "" || f.Subject != "" ||
 		f.After != nil || f.Before != nil || f.HasKeyword != "" ||
@@ -360,13 +360,6 @@ func (snap *emailSnapshot) scoped(f queryFilter) []scopedEmail {
 		})
 	}
 	switch {
-	case f.InThread != "":
-		// The client passes the threadId directly; match members by it.
-		for i := range snap.emails {
-			if snap.emails[i].ThreadID == f.InThread {
-				add(snap.emails[i])
-			}
-		}
 	case snap.synthetic != nil && f.InMailbox == snap.synthetic.MailboxID:
 		for i := 0; i < snap.synthetic.Count; i++ {
 			add(syntheticEmail(*snap.synthetic, i))
@@ -464,6 +457,62 @@ func emailQueryResponse(snap *emailSnapshot, args json.RawMessage) map[string]an
 		"ids":                 ids,
 		"total":               len(cands),
 	}
+}
+
+// threadGetResponse answers Thread/get (RFC 8621 §3.1): the member ids of
+// each requested thread, sorted receivedAt ascending exactly as the RFC
+// orders Thread.emailIds — oldest first, so a client can expand in
+// reading order without a second sort. A thread nothing belongs to is
+// reported notFound, never an empty list at an existing index.
+func threadGetResponse(snap *emailSnapshot, args json.RawMessage) map[string]any {
+	var g struct {
+		IDs []string `json:"ids"`
+	}
+	_ = json.Unmarshal(args, &g)
+
+	list := []map[string]any{}
+	notFound := []string{}
+	for _, id := range g.IDs {
+		members := snap.threadMembers(id)
+		if len(members) == 0 {
+			notFound = append(notFound, id)
+			continue
+		}
+		ids := make([]string, 0, len(members))
+		for _, e := range members {
+			ids = append(ids, e.ID)
+		}
+		list = append(list, map[string]any{"id": id, "emailIds": ids})
+	}
+	resp := map[string]any{
+		"accountId": "acc1",
+		"state":     fmt.Sprintf("t-%d", snap.emailVersion),
+		"list":      list,
+	}
+	if len(notFound) > 0 {
+		resp["notFound"] = notFound
+	}
+	return resp
+}
+
+// threadMembers collects a thread's fixtures oldest-first. Synthetic
+// messages are each their own thread (ThreadID == id), so a synthetic id
+// resolves to exactly itself — the single-message case the client must
+// render without a chevron.
+func (snap *emailSnapshot) threadMembers(threadID string) []Email {
+	var out []Email
+	for i := range snap.emails {
+		if snap.emails[i].ThreadID == threadID {
+			out = append(out, snap.emails[i])
+		}
+	}
+	if len(out) == 0 {
+		if e, ok := snap.lookup(threadID); ok && e.ThreadID == threadID {
+			out = append(out, e)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ReceivedAt.Before(out[j].ReceivedAt) })
+	return out
 }
 
 func emailGetResponse(snap *emailSnapshot, args json.RawMessage, results map[string]map[string]any) map[string]any {

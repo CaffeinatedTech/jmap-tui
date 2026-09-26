@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
+	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
 
@@ -39,6 +40,12 @@ func emailFixtures() []mockjmap.Email {
 }
 
 func newTestEngine(t *testing.T, syn *mockjmap.SyntheticMailbox) (*Engine, *mockjmap.Server) {
+	return newTestEngineWithProvider(t, syn, func(p mail.Provider) mail.Provider { return p })
+}
+
+// newTestEngineWithProvider builds the usual fixture engine with the
+// provider wrapped — the seam tests use to stall a fetch mid-flight.
+func newTestEngineWithProvider(t *testing.T, syn *mockjmap.SyntheticMailbox, wrap func(mail.Provider) mail.Provider) (*Engine, *mockjmap.Server) {
 	t.Helper()
 	srv := mockjmap.New("tester@example.com", "correct-horse", []mockjmap.Mailbox{
 		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 3, UnreadEmails: 2},
@@ -55,7 +62,7 @@ func newTestEngine(t *testing.T, syn *mockjmap.SyntheticMailbox) (*Engine, *mock
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	return NewEngine(c, Config{}), srv
+	return NewEngine(wrap(c), Config{}), srv
 }
 
 func TestEngineMailboxTreeAndOpen(t *testing.T) {
@@ -164,7 +171,7 @@ func TestEngineThreadExpandCollapse(t *testing.T) {
 
 	// Move to the thread representative (e2, oldest collapsed row).
 	e.MoveCursor(1)
-	if err := e.ToggleThread(ctx); err != nil {
+	if err := e.ToggleThread(ctx, "e2"); err != nil {
 		t.Fatalf("ToggleThread: %v", err)
 	}
 	snap := e.Snapshot()
@@ -184,11 +191,188 @@ func TestEngineThreadExpandCollapse(t *testing.T) {
 		t.Fatalf("cursor moved to %q", id)
 	}
 
-	if err := e.ToggleThread(ctx); err != nil {
+	if err := e.ToggleThread(ctx, "e2"); err != nil {
 		t.Fatalf("ToggleThread(collapse): %v", err)
 	}
 	if snap := e.Snapshot(); len(snap.Rows) != 2 {
 		t.Fatalf("collapsed rows = %d", len(snap.Rows))
+	}
+}
+
+// TestEngineToggleThreadTargetsPressedRow pins the contract the app relies
+// on: the toggle expands the row the user pressed, whatever the engine's
+// own cursor points at. The unified view never moves an engine cursor
+// (PLAN §4.3), so a cursor-relative toggle expands the wrong message —
+// the chevron landing on a different subject.
+func TestEngineToggleThreadTargetsPressedRow(t *testing.T) {
+	e, _ := newTestEngine(t, nil)
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-inbox"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+
+	// Cursor sits on row 0 (e3); press Enter on row 1 (e2) instead.
+	if id := e.CursorID(); id != "e3" {
+		t.Fatalf("cursor = %q, want e3", id)
+	}
+	if err := e.ToggleThread(ctx, "e2"); err != nil {
+		t.Fatalf("ToggleThread(e2): %v", err)
+	}
+	rows := e.Snapshot().Rows
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d: %+v", len(rows), rows)
+	}
+	if rows[0].ThreadHeader {
+		t.Fatalf("chevron landed on the unpressed row: %+v", rows[0])
+	}
+	if !rows[1].ThreadHeader || rows[1].ID != "e2" {
+		t.Fatalf("pressed row must carry the chevron: %+v", rows[1])
+	}
+
+	// A target that is not rendered expands nothing — never a fallback
+	// onto whatever the engine cursor happens to select.
+	if err := e.ToggleThread(ctx, "ghost"); err != nil {
+		t.Fatalf("ToggleThread(ghost): %v", err)
+	}
+	if got := e.Snapshot().Rows; len(got) != 3 || !got[1].ThreadHeader {
+		t.Fatalf("unknown target changed the view: %+v", got)
+	}
+}
+
+// TestEngineSingleMessageThreadHasNoChevron: a thread of one has nothing
+// to put beneath its row, so Enter must leave it plain. Every synthetic
+// message is its own thread, which is exactly the shape that used to
+// render a down-carrot over empty space.
+func TestEngineSingleMessageThreadHasNoChevron(t *testing.T) {
+	e, _ := newTestEngine(t, &mockjmap.SyntheticMailbox{MailboxID: "mb-big", Prefix: "syn", Count: 20})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-big"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+	if len(e.Snapshot().Rows) == 0 {
+		t.Fatal("no rows")
+	}
+
+	if err := e.ToggleThread(ctx, e.CursorID()); err != nil {
+		t.Fatalf("ToggleThread: %v", err)
+	}
+	rows := e.Snapshot().Rows
+	if len(rows) != 20 {
+		t.Fatalf("rows = %d, want 20 (nothing expanded)", len(rows))
+	}
+	for i, r := range rows {
+		if r.ThreadHeader || r.ThreadMember {
+			t.Fatalf("row %d wore thread chrome on a one-message thread: %+v", i, r)
+		}
+	}
+}
+
+// TestEngineThreadSizesMarkExpandableRows (FR-D1): the list has to know
+// which collapsed rows have replies beneath them — Enter on those expands,
+// Enter on the rest does nothing — and the count is fetched once per view,
+// never re-asked while the view is already sized.
+func TestEngineThreadSizesMarkExpandableRows(t *testing.T) {
+	counter := &countingProvider{}
+	e, _ := newTestEngineWithProvider(t, nil, func(p mail.Provider) mail.Provider {
+		counter.Provider = p
+		return counter
+	})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-inbox"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+
+	sizes := func() map[mail.ID]int {
+		out := map[mail.ID]int{}
+		for _, r := range e.Snapshot().Rows {
+			out[r.ID] = r.ThreadSize
+		}
+		return out
+	}
+	for id, s := range sizes() {
+		if s != 0 {
+			t.Fatalf("row %s sized %d before the refresh", id, s)
+		}
+	}
+
+	e.RefreshThreadSizes(ctx)
+	got := sizes()
+	if got["e2"] != 2 {
+		t.Errorf("thread row e2 size = %d, want 2 (e1 sits beneath it)", got["e2"])
+	}
+	if got["e3"] != 1 {
+		t.Errorf("single-message row e3 size = %d, want 1", got["e3"])
+	}
+	if counter.threads != 1 {
+		t.Errorf("Thread/get calls = %d, want 1", counter.threads)
+	}
+
+	e.RefreshThreadSizes(ctx)
+	if counter.threads != 1 {
+		t.Errorf("Thread/get calls = %d, want 1 (a sized view is not re-asked)", counter.threads)
+	}
+}
+
+// gateProvider stalls the member fetch so a test can swap the view while
+// it is in flight — the window is released for the network hop (NFR-1),
+// which is exactly when a mailbox switch can race it.
+type gateProvider struct {
+	mail.Provider
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *gateProvider) Threads(ctx context.Context, threadIDs []mail.ID) (map[mail.ID][]mail.ID, error) {
+	p.entered <- struct{}{}
+	<-p.release
+	return p.Provider.Threads(ctx, threadIDs)
+}
+
+// TestEngineToggleThreadAbandonsOnViewSwitch: a mailbox switch mid-fetch
+// swaps the window wholesale, so the in-flight result belongs to a view
+// nobody is looking at any more. Installing it would mark whichever row of
+// the new view happens to share that threadId — a chevron on a message the
+// user never pressed.
+func TestEngineToggleThreadAbandonsOnViewSwitch(t *testing.T) {
+	gate := &gateProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	e, _ := newTestEngineWithProvider(t, nil, func(p mail.Provider) mail.Provider {
+		gate.Provider = p
+		return gate
+	})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-inbox"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- e.ToggleThread(ctx, "e2") }()
+
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("member fetch never started")
+	}
+	// The user opens another mailbox while the fetch is in flight.
+	if err := e.OpenMailbox(ctx, "mb-archive"); err != nil {
+		t.Fatalf("OpenMailbox(archive): %v", err)
+	}
+	close(gate.release)
+	if err := <-done; err != nil {
+		t.Fatalf("ToggleThread: %v", err)
+	}
+
+	e.mu.Lock()
+	expanded, cached := e.expanded["t1"], e.threads["t1"]
+	e.mu.Unlock()
+	if expanded {
+		t.Error("expansion from the old view survived the mailbox switch")
+	}
+	if len(cached) > 0 {
+		t.Error("thread cache from the old view survived the mailbox switch")
 	}
 }
 
