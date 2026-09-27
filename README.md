@@ -1,46 +1,19 @@
 # jmap-tui
 
-> A beautiful, fast, JMAP-first terminal email client. Live-synced, zero local storage, built for the modern mail protocol.
+> **Your email, in the terminal.** Fast, live, and easy on the eyes — a modern
+> mail client for people who'd rather type than click.
 
-**Status: pre-alpha — M7 landed (reader, live sync, triage, search, composer, multi-account, and now the first-run account wizard: `jmap-tui login` adds an account — test the connection, pick the mailbox that opens first, secret to the OS keyring — a bare `jmap-tui` with no config launches it for you, and `ctrl+a` reopens it any time to add or edit an account; verified against two live Stalwart accounts — and M8 now flows every account's folder tree into one sidebar under tinted headers, with `ctrl+↑`/`ctrl+↓` reordering the account blocks — and M9 adds JMAP contacts (RFC 9610): a full-screen contact list unified across accounts, contact create/edit/delete behind an undo toast, and recipient suggestions in the composer, verified against live Stalwart). Release packaging and the Fastmail verification pass are the next milestone.** See [REQUIREMENTS.md](REQUIREMENTS.md) for scope, [PLAN.md](PLAN.md) for the build plan, and [AGENTS.md](AGENTS.md) for AI-agent contribution rules.
+jmap-tui is a full email client that lives in your terminal. Read, reply,
+search, archive, and send — across as many accounts as you like — with a
+keyboard-first interface that stays out of your way. It talks **JMAP**, the
+modern email protocol, which means mail updates arrive *live* and nothing is
+ever copied to your hard drive.
 
----
-
-## Why another mail client?
-
-Most terminal mail clients are built on IMAP — a protocol designed in the 1980s, retrofitted for decades. [JMAP](https://jmap.io) (RFC 8620/8621) is the modern replacement: JSON, batchable, state-synced, with server-side push.
-
-**jmap-tui is built for JMAP first, not converted to it.** That means:
-
-- **Live sync** — push events from the server keep the UI current in real time. New mail appears, flags change, mail moves — no manual refresh, no polling firehose.
-- **Zero local mail storage** — the server is the database. State lives in memory, synchronised via JMAP's incremental `/changes`. Closing the client discards nothing important; reopening rebuilds in seconds.
-- **Server-side everything** — search, sorting, threading, and unread counts run on the server. The client stays thin and fast.
-- **Endless scroll that never chugs** — a rolling window over a server-side query. The list feels infinite; memory stays bounded no matter how big the mailbox.
-
-IMAP support is a **future roadmap item**, designed for from day one via a provider interface — but v1 is JMAP only, using the full feature set.
-
-## Features (v1 target)
-
-- Multi-account — instant switcher, unified inbox, per-account status and failure isolation (JMAP servers: Stalwart, Fastmail, Cyrus, Apache James)
-- Three-pane layout: mailbox sidebar · message list · reading pane
-- Threaded view with collapse/expand
-- Rolling-window message list — endless scroll, bounded memory
-- Live sync via JMAP push (EventSource), with polling fallback
-- Read/unread, star/flag, move, copy, delete (to trash), keywords
-- Server-side search with a fast, keyboard-driven query bar
-- Compose, reply, reply-all, forward — with drafts and identities
-- Send with undo (configurable delay before submission)
-- Contacts (JMAP for Contacts, RFC 9610) — full-screen list unified across accounts, address books, contact CRUD, recipient suggestions + quick search in the composer
-- Attachment download and upload
-- Credentials in the OS keyring (no plaintext secrets on disk)
-- Minimal & elegant UI — restrained palette, clean typography, vim-style keys
-- Full keybinding help (`?`) and first-run account wizard
-
-## Screenshots
-
-> Rendered output from the golden test suite (real UI frames, ANSI colours in the terminal):
-
-Three panes (≥100 cols) — sidebar · list · preview, one accent. Every column leads with a top rule: heavy and accent-coloured under the focused column, a hairline under the others — the focus indicator, readable even without colour. The sidebar flows every connected account as one column — a header per account, bracketed by end-cells in that account's colour tint (the same tint its rows wear in the unified view), so a header can't be mistaken for a mailbox:
+- **Instant.** Every keystroke draws immediately. No spinners, no lag, no jank — even with 100,000 messages in a folder.
+- **Live.** New mail, flag changes, and moves appear within a second. You never press refresh.
+- **Private.** Your mail is never written to disk. Your password lives in your OS keyring. Quit, and not a trace of your mail is left behind.
+- **Multi-account.** One sidebar for all your accounts, an instant switcher, and a unified inbox that merges everything by date.
+- **Beautiful.** Clean typography, one accent colour, dark and light themes that follow your terminal.
 
 ```text
 jmap-tui  Inbox  1432 messages · 3 unread
@@ -53,132 +26,264 @@ jmap-tui  Inbox  1432 messages · 3 unread
                          │                                                  │Hello,
 ```
 
-List rows that can expand say so: a collapsed thread with replies beneath it wears a `▸` in the two-cell slot in front of its subject, which reads `▾` while the thread is open — so you always know which rows `Enter` will open. A message with no replies, and one whose size has not been fetched yet, wears nothing.
+Folders on the left, messages in the middle, the message itself on the right.
+The heavy line under a column shows where your keyboard is.
 
-Trees fold: `h`/`←` shuts a folder's subtree — or a whole account's, when the cursor is on its header — and with nothing to fold it jumps to the parent row instead; `l`/`→` unfolds. Rows that have a subtree wear a dim `▸`/`▾` chevron, a folded folder's unread count rolls up over everything it hides, and `Enter` alone opens a mailbox. The fold state is remembered in `prefs.toml`.
+**Works with** any JMAP server — [Stalwart](https://stalwartlabs.xyz/) is
+verified today, [Fastmail](https://fastmail.com) is next, and Cyrus, Apache
+James, and friends speak the same protocol. (IMAP is on the roadmap.)
 
-The unified inbox (`i`) interleaves every account's mail by date, each row led by a one-cell **colour bar** naming its owner (six tints, assigned in account order — shown here as `█` / `▓`), and the preview header spells the account out in text. The folder column is untouched by the merge: every account's tree stays under its own tinted header, in your chosen order. Actions always route to the owning account:
+**Everything you'd expect from a mail client, and then some:**
 
-```text
-jmap-tui  unified inbox  4 messages
-─────────────────────────│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│──────────────────────────────────────────
-█ Work                  █│█  ★   Dana Ops         ▸ Deploy pipelin…  35m    │Account: Personal
-Inbox                   3│▓   ↩  Eve Security       Quarterly audi…  3h     │From: Eve Security <from@example.test>
-Sent Items               │█      Bob Thread       ▾ Re: planning s…  1d     │To: me@example.test
-  agent-test             │█ ●    Alice Root         └ planning sync  1d     │Date: Mon, 21 Sep 2026 07:00
-Archive                  │↓ more                                            │Subject: Quarterly audit report attached
-▓ Personal              ▓│                                                  │──────────────────────────────────────────
-unified  live  synced 10:00:00                                                        Old laptop: connect: auth rejected
-```
+- Read threads, expand and collapse replies
+- Archive, delete, move, copy, star, mark unread — with a 5-second undo on anything destructive
+- Server-side search across one folder or all of them, plus a filter form
+- Compose, reply, reply-all, forward — with attachments, drafts that live on the server, and a send delay you can cancel
+- Contacts, unified across accounts, with autocomplete in the composer
+- Multi-account with an instant switcher and a unified inbox
+- Credentials in your OS keyring, never on disk
+- Rebind any key, pick your layout, dark or light
 
-Two panes at 60–99 cols (preview swaps in via `Tab`); single pane below 60. `z` toggles the layout: side-by-side (default) or **stacked** — the list above the preview at a 50/50 split, with the sidebar unchanged; stacked shows both panes at medium widths instead of swapping. The choice persists in `prefs.toml` (the app-managed file — `config.toml` is never rewritten). Dark and light palettes are terminal-adaptive.
-
-A footer status line reports the sync state: connection mode (`live` / `polling` / `connecting…`), last-sync time, retry count and errors, and the active mailbox's unread/total counts. With several accounts it leads with the active account's name (or `unified`), and any account in error shows a named, right-aligned error. New mail slides in at the top of the list with a brief highlight.
+---
 
 ## Install
 
+One command, on Linux or macOS:
+
 ```sh
-# v0.1 goal
+curl -fsSL https://raw.githubusercontent.com/CaffeinatedTech/jmap-tui/master/install.sh | bash
+```
+
+It downloads the latest binary for your machine into `~/.local/bin` and tells
+you if that folder isn't on your `PATH` yet.
+
+<details>
+<summary>Other ways to install</summary>
+
+**Prefer Go?**
+
+```sh
 go install github.com/CaffeinatedTech/jmap-tui/cmd/jmap-tui@latest
+```
+
+**Build from source**
+
+```sh
+git clone https://github.com/CaffeinatedTech/jmap-tui
+cd jmap-tui && go build ./cmd/jmap-tui
+```
+
+**Manual download** — grab the archive for your OS from the
+[releases page](https://github.com/CaffeinatedTech/jmap-tui/releases), unpack
+it, and put `jmap-tui` somewhere on your `PATH`.
+
+**Uninstall**
+
+```sh
+rm ~/.local/bin/jmap-tui            # wherever you installed it
+rm -rf ~/.config/jmap-tui           # optional: config + preferences
+```
+
+</details>
+
+> **Status:** pre-release and under active development. It already does
+> everything described on this page; the Fastmail verification pass and the
+> `v0.1.0` tag are what's left before the v1.0 release.
+
+## Getting started
+
+**1. Install it** with the one-liner above, then run:
+
+```sh
 jmap-tui
 ```
 
-Pre-built binaries for Linux, macOS, and Windows are planned for the v0.1 release (goreleaser config is a release-milestone item); until then build from source.
-
-## Quick start
-
-First run starts the account wizard (re-runnable at any time with `jmap-tui login`):
+**2. The account wizard opens.** Nothing to configure by hand — it walks you
+through four short screens:
 
 ```text
 Add an account                       1 of 4 · details
 Server URL     https://mail.example.com    (or https://api.fastmail.com)
 Username       you@example.com
-Password       ••••••••                     → stored in your OS keyring, never on disk
-Account name   agent-test1                     (defaults to your username)
+Password       ••••••••••••••             → saved to your OS keyring, never to disk
+Account name   Work                        (defaults to your username)
 
-2 of 4 · connection        tests the session and lists your mailboxes
-3 of 4 · opening mailbox   picks what opens first (saved as initial_mailbox)
-4 of 4 · save              keyring write + config — password_file is offered
-                           if no OS keyring is available (SSH/headless)
+2 of 4 · connection        tests the login and lists your mailboxes
+3 of 4 · opening mailbox   picks the folder that opens first (Inbox is fine)
+4 of 4 · save              writes the config — you're done
 ```
 
-The wizard writes `config.toml` (never `prefs.toml`), pins `default_account` on a first account, and leaves any existing config content — comments included — untouched. A password supplied via `JMAP_TUI_PASSWORD_<ACCOUNT>` is used as-is and not stored.
+Use an **app password** (Fastmail: *Settings → Passwords → New password*;
+Stalwart: any credential your admin gives you) — not your real login password.
 
-Once an account exists, `jmap-tui login` — or `ctrl+a` from the running TUI (the TUI exits, runs the wizard, and restarts) — opens an **account picker**: choose an account to edit it in place (re-test the connection, rotate the password, re-pick the opening mailbox) or pick `+ add a new account`. Edits keep everything the wizard didn't ask about — `session_url`, `default_identity`, your comments — and leaving the password field empty keeps the current secret.
+**3. Mail.** The wizard closes and your inbox appears. That's it.
 
-Advanced config lives at `$XDG_CONFIG_HOME/jmap-tui/config.toml` (default `~/.config/jmap-tui/config.toml`) — see [docs/config](REQUIREMENTS.md#fr-j--configuration--credentials). Several `[accounts.*]` tables configure every account (`default_account` picks the one that opens first; `S` switches, `i` toggles the unified inbox):
+Anything you can do in the wizard you can do again any time: run
+`jmap-tui login`, or press <kbd>ctrl+a</kbd> inside the app to add another
+account or edit this one.
 
-```toml
-default_account = "work"
+## Guides
 
-[accounts.work]
-display_name  = "Work"
-url           = "https://mail.example.com"
-username      = "you@work.example.com"
-default_identity = "you@work.example.com"   # optional: the composer's From
-initial_mailbox  = "mb-abc123"              # optional: wizard-chosen; defaults to Inbox
+### Read your mail
 
-[accounts.personal]
-display_name = "Personal"
-url          = "https://mail.example.com"
-username     = "you@example.com"
+1. Move around the folder list with <kbd>j</kbd>/<kbd>k</kbd>, press <kbd>Enter</kbd> to open a folder. Focus jumps to the message list automatically.
+2. <kbd>j</kbd>/<kbd>k</kbd> walks the list; the preview pane follows along as you go.
+3. <kbd>Tab</kbd> moves focus into the preview to scroll it, or press <kbd>v</kbd> to read full-screen.
+4. Threads show a `▸` in front of the subject — <kbd>Enter</kbd> expands the replies, <kbd>Enter</kbd> again collapses them.
+5. <kbd>PgUp</kbd>/<kbd>PgDn</kbd> pages the message from *anywhere* — focus never moves.
 
-[compose]
-undo_delay = "5s"   # 0s submits immediately
-```
+### Triage your inbox
 
-## Keys (default, remappable)
+1. <kbd>J</kbd> / <kbd>K</kbd> jumps to the next / previous **unread** message.
+2. <kbd>e</kbd> archives, <kbd>d</kbd> deletes (to Trash), <kbd>*</kbd> stars, <kbd>u</kbd> marks read/unread. The list closes the gap, so you're straight onto the next message.
+3. Made a mistake? A toast appears for five seconds — <kbd>ctrl+z</kbd> undoes it.
+4. Doing several at once? <kbd>x</kbd> selects messages (they show a `×`), then hit <kbd>e</kbd> or <kbd>d</kbd> to act on the whole selection in one go.
+5. <kbd>m</kbd> moves to another folder, <kbd>y</kbd> copies. Start typing to filter the folder picker.
 
-| Context | Key | Action |
+### Find anything
+
+1. Press <kbd>/</kbd> and type. Results stream in as you type — the search runs on the server, so it's fast even across 50,000 messages.
+2. <kbd>Enter</kbd> confirms the search and drops you into the results; <kbd>Tab</kbd> widens the scope from this folder to *all* folders.
+3. Need filters? <kbd>ctrl+s</kbd> opens a form: from, to, subject, dates, keywords, has-attachments.
+4. <kbd>Esc</kbd> backs out — close the search, exit full-screen, clear your selection — one key, in that order.
+
+### Write, reply, and send
+
+1. Press <kbd>n</kbd> for a new message, <kbd>r</kbd> to reply, <kbd>a</kbd> reply-all, <kbd>f</kbd> forward. Replies quote the original for you.
+2. <kbd>Tab</kbd> moves between To / Cc / Bcc / Subject / body. In an address field, contacts are suggested as you type — <kbd>Enter</kbd> accepts one. <kbd>ctrl+g</kbd> opens a full contact search.
+3. <kbd>ctrl+a</kbd> attaches a file (a directory browser: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>Enter</kbd> attaches), <kbd>ctrl+i</kbd> picks the From address if your account has several.
+4. <kbd>ctrl+s</kbd> sends — and then you have **five seconds to change your mind**: <kbd>ctrl+z</kbd> cancels the send and puts you back in the composer with everything intact.
+5. Drafts save themselves to the *server* every couple of seconds, so you can quit and pick the draft up later (it's in your Drafts folder).
+
+### Add more accounts
+
+1. Press <kbd>ctrl+a</kbd> (the app restarts into the wizard) or run `jmap-tui login` — choose **+ add a new account** and go through the same four steps.
+2. <kbd>A</kbd> switches accounts instantly — everything stays warm in the background, so there's no reload.
+3. <kbd>i</kbd> toggles the **unified inbox**: every account's mail, interleaved by date, each row tagged with a colour for its account. Actions always go to the account that owns the message.
+4. Every account's folder tree sits in one sidebar under its own tinted header. With a folder selected, <kbd>ctrl+↑</kbd>/<kbd>ctrl+↓</kbd> moves that whole account block up or down — the order is remembered.
+5. One account offline? It shows a quiet error in the status bar and the others keep working.
+
+### Contacts
+
+1. <kbd>c</kbd> opens the contacts screen — address books, contact list, and details, merged across every account that supports contacts.
+2. <kbd>n</kbd> new, <kbd>e</kbd> edit, <kbd>d</kbd> delete (held five seconds behind an undo toast), <kbd>/</kbd> filters the list.
+3. Reading a message from someone new? <kbd>Shift+N</kbd> adds them as a contact, already filled in.
+4. The composer's address fields suggest from these same contacts automatically.
+
+### Make it yours
+
+- <kbd>[</kbd> hides the sidebar for a distraction-free view; <kbd>z</kbd> flips between side-by-side and stacked panes.
+- <kbd>s</kbd> sorts (newest, oldest, sender, subject, size) — remembered per account. <kbd>S</kbd> shows message sizes.
+- `--theme dark`, `--theme light`, or the default, which follows your terminal.
+- Every key can be rebound in config (see [Configuration](#configuration)).
+- <kbd>?</kbd> shows the full key help, always contextual to where your cursor is.
+
+## Keys
+
+Everything is keyboard-driven. Keys are grouped by **where your focus is** —
+press <kbd>?</kbd> at any time for the same list inside the app.
+
+### Sidebar (folders)
+
+| Key | What it does |
+|---|---|
+| <kbd>j</kbd> / <kbd>k</kbd> · <kbd>↑</kbd> / <kbd>↓</kbd> | Next / previous folder |
+| <kbd>g</kbd> / <kbd>G</kbd> | Top / bottom of the tree |
+| <kbd>Enter</kbd> | Open the folder (focus moves to the message list) |
+| <kbd>h</kbd> / <kbd>←</kbd> | Fold a folder's subfolders — or the whole account |
+| <kbd>l</kbd> / <kbd>→</kbd> | Unfold (never opens — that's <kbd>Enter</kbd>) |
+| <kbd>ctrl+↑</kbd> / <kbd>ctrl+↓</kbd> | Move the account's block up / down |
+
+### Message list
+
+| Key | What it does |
+|---|---|
+| <kbd>j</kbd> / <kbd>k</kbd> · <kbd>↑</kbd> / <kbd>↓</kbd> | Next / previous message |
+| <kbd>g</kbd> / <kbd>G</kbd> | First / last message |
+| <kbd>Space</kbd> or <kbd>ctrl+f</kbd> / <kbd>ctrl+b</kbd> | Page down / page up |
+| <kbd>ctrl+d</kbd> / <kbd>ctrl+u</kbd> | Half page down / up |
+| <kbd>J</kbd> / <kbd>K</kbd> | Next / previous **unread** |
+| <kbd>Enter</kbd> | Expand / collapse the thread |
+| <kbd>u</kbd> | Toggle read / unread |
+| <kbd>\*</kbd> | Toggle star |
+| <kbd>x</kbd> | Select for a batch action |
+| <kbd>e</kbd> | Archive |
+| <kbd>d</kbd> (or <kbd>#</kbd>) | Delete — to Trash |
+| <kbd>m</kbd> / <kbd>y</kbd> | Move / copy to another folder |
+| <kbd>s</kbd> (or <kbd>o</kbd>) | Sort by… (remembered per account) |
+| <kbd>S</kbd> | Show / hide message sizes |
+| <kbd>n</kbd> / <kbd>r</kbd> / <kbd>a</kbd> / <kbd>f</kbd> | Compose / reply / reply-all / forward |
+
+### Reading pane
+
+| Key | What it does |
+|---|---|
+| <kbd>j</kbd> / <kbd>k</kbd> | Scroll a line |
+| <kbd>d</kbd> / <kbd>u</kbd> | Half page down / up |
+| <kbd>ctrl+f</kbd> / <kbd>ctrl+b</kbd> | Page down / page up |
+| <kbd>g</kbd> / <kbd>G</kbd> | Top / bottom of the message |
+| <kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Page the message — works from *any* pane |
+| <kbd>s</kbd> | Save attachments… |
+| <kbd>v</kbd> | Full-screen message (press <kbd>Esc</kbd> to leave) |
+
+### Composer
+
+| Key | What it does |
+|---|---|
+| <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Next / previous field (To → Cc → Bcc → Subject → body → attachments) |
+| <kbd>Enter</kbd> | Next field (in the body: new line) |
+| type | Contact suggestions pop up under address fields — <kbd>↑</kbd>/<kbd>↓</kbd> choose, <kbd>Enter</kbd> inserts |
+| <kbd>ctrl+g</kbd> | Full contact search inside an address field |
+| <kbd>ctrl+i</kbd> | Choose the From identity (if the account has more than one) |
+| <kbd>ctrl+a</kbd> | Attach a file — <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>l</kbd> open, <kbd>h</kbd> back, <kbd>Enter</kbd> attach, <kbd>Esc</kbd> cancel |
+| <kbd>ctrl+x</kbd> | Remove the highlighted attachment |
+| <kbd>ctrl+s</kbd> | Send — then <kbd>ctrl+z</kbd> within 5s to cancel |
+| <kbd>Esc</kbd> | Close (asks before discarding; <kbd>n</kbd> keeps the draft) |
+
+### Contacts screen
+
+| Key | What it does |
+|---|---|
+| <kbd>j</kbd> / <kbd>k</kbd> · <kbd>g</kbd> / <kbd>G</kbd> | Move through the list |
+| <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Cycle columns (books · contacts · details) |
+| <kbd>/</kbd> | Type-to-filter (<kbd>Esc</kbd> clears, <kbd>Esc</kbd> again closes) |
+| <kbd>n</kbd> / <kbd>e</kbd> / <kbd>d</kbd> | New / edit / delete (delete waits 5s — <kbd>ctrl+z</kbd> cancels) |
+| <kbd>Enter</kbd> | Show the selected contact |
+| <kbd>c</kbd> | Close |
+
+### Search bar, pickers & dialogs
+
+| Where | Key | What it does |
 |---|---|---|
-| List | `j` / `k`, `↓` / `↑` | Next / previous message |
-| List | `g` / `G` | Top / bottom |
-| List | `ctrl+f` / `Space` (and `ctrl+b`) | Page down / page up |
-| List | `ctrl+d` / `ctrl+u` | Half page down / up |
-| List | `J` / `K` | Next / previous unread |
-| List | `u` | Toggle read/unread |
-| List | `*` | Toggle star/flag |
-| List | `x` | Select (multi-select; batched actions) |
-| List | `e` | Archive |
-| List | `m` | Move to mailbox… |
-| List | `y` | Copy to mailbox… |
-| List | `d` / `#` | Delete (to Trash; permanent inside Trash, `ctrl+z` cancels) |
-| List | `s` / `o` | Sort by… (picker: newest, oldest, sender, subject, size — remembered per account in `prefs.toml`) |
-| List | `S` | Show/hide sizes |
-| List | `Enter` | Expand / collapse the thread under the cursor (rows wearing `▸`) |
-| Message | `s` | Save attachments… |
-| Message | `v` | Full-screen message (hides sidebar + list) |
-| Folders | `Enter` | Open the mailbox (focus moves to the list); on an account header, activate that account |
-| Folders | `h` / `←` | Fold the folder's subtree (or the account's) shut; with nothing to fold, jump to the parent row |
-| Folders | `l` / `→` | Unfold — never opens (that's `Enter`); a folded folder shows its subtree's rolled-up unread |
-| Folders | `ctrl+↑` / `ctrl+↓` | Move the cursor's account block up / down — the order is remembered in `prefs.toml` |
-| Any | `PgUp` / `PgDn` | Page the preview — from any pane, focus stays put |
-| List | `n` | Compose a new message |
-| List | `r` | Reply |
-| List | `a` | Reply to all |
-| List | `f` | Forward |
-| Drafts | `Enter` | Edit the draft in the composer |
-| Any | `/` | Search — server-side query bar; `Enter` confirms and jumps into the results, `/` re-focuses the bar |
-| Any | `ctrl+s` | Advanced search (fielded form — works from the query bar or anywhere else) |
-| Any | `Esc` | Back: close the search → exit full-screen → clear the selection |
-| Query bar | `Tab` | Toggle scope: current mailbox ↔ all mailboxes |
-| Any | `ctrl+z` | Undo last action (while its toast shows) |
-| Any | `Tab` / `Shift+Tab` | Cycle panes |
-| Any | `A` | Switch account (instant — every account stays warm) |
-| Any | `i` | Toggle the unified inbox (all accounts, interleaved by date) |
-| Any | `c` | Contacts — full-screen list (books · contacts · detail), unified across accounts; `c` or `Esc` closes |
-| Any | `Shift+N` | Add contact — prefilled from the sender of the message under the cursor (opens edit mode if that address is already a contact) |
-| Contacts | `n` / `e` / `d` | New / edit / delete — delete waits 5s behind its toast, `ctrl+z` cancels |
-| Contacts | `Tab` / `Shift+Tab` | Cycle columns (books · contacts · detail) |
-| Contacts | `/` | Type-to-filter the list (`Esc` clears the filter, `Esc` again closes) |
-| Composer | `ctrl+g` | Quick contact search inside To/Cc/Bcc (type to filter, `Enter` inserts) |
-| Any | `ctrl+a` | Add or edit an account (opens the wizard; the TUI restarts) |
-| Any | `[` | Show/hide sidebar |
-| Any | `z` | Toggle pane layout: list beside preview ↔ stacked (list above, 50/50) — remembered in `prefs.toml` |
-| Any | `?` | Help overlay |
-| Any | `q` | Quit (or `ctrl+c` twice — cancels in-flight work first) |
+| Search bar | type | Search runs as you type |
+| | <kbd>Enter</kbd> | Confirm and jump into the results |
+| | <kbd>Tab</kbd> | Scope: this folder ↔ all folders |
+| | <kbd>Esc</kbd> | Close (position restored) |
+| | <kbd>ctrl+s</kbd> | Advanced search form |
+| Folder / mailbox picker | type | Type-to-filter |
+| | <kbd>j</kbd> / <kbd>k</kbd> · <kbd>Enter</kbd> · <kbd>Esc</kbd> | Choose / confirm / cancel |
+| Account switcher (<kbd>A</kbd>) | <kbd>j</kbd> / <kbd>k</kbd> · <kbd>Enter</kbd> · <kbd>Esc</kbd> | Pick an account |
+| Help (<kbd>?</kbd>) | <kbd>?</kbd> / <kbd>q</kbd> / <kbd>Esc</kbd> | Close |
 
-Every key above is remappable: `[keys]` maps an action id — the action's dotted name (`list.down`, `ui.quit`, `list.archive`, …; the `?` overlay shows what each action does) — to a keystroke. Conflicts are rejected at startup — a global key rebound onto a pane key is an error, not a silent shadow:
+### Anywhere (global)
+
+| Key | What it does |
+|---|---|
+| <kbd>/</kbd> · <kbd>ctrl+s</kbd> | Search · advanced search |
+| <kbd>Esc</kbd> | Back — closes search, then full-screen, then clears selection |
+| <kbd>A</kbd> | Switch account |
+| <kbd>i</kbd> | Toggle the unified inbox |
+| <kbd>c</kbd> · <kbd>Shift+N</kbd> | Contacts · add the sender as a contact |
+| <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Cycle panes |
+| <kbd>[</kbd> · <kbd>z</kbd> | Show/hide sidebar · switch pane layout |
+| <kbd>ctrl+a</kbd> | Add or edit an account |
+| <kbd>ctrl+z</kbd> | Undo the last action (while its toast shows) |
+| <kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Page the reading pane |
+| <kbd>?</kbd> | Key help |
+| <kbd>q</kbd> | Quit (<kbd>ctrl+c</kbd> twice cancels in-flight work first) |
+
+Rebinding a key is one line in your config — the action name is what you see in
+<kbd>?</kbd>:
 
 ```toml
 [keys]
@@ -186,37 +291,81 @@ Every key above is remappable: `[keys]` maps an action id — the action's dotte
 "ui.quit"   = "ctrl+d"
 ```
 
-Search runs server-side (`Email/query` filters) with a 300 ms keystroke debounce; results use the same rolling-window list, so huge result sets scroll like any mailbox. `Enter` confirms a search and moves the cursor into the filtered list — `j`/`k` navigate, `/` re-focuses the bar, `Esc` clears the search and restores the mailbox view with position preserved. The advanced modal (`ctrl+s`) composes fielded filters — text, from, to, subject, after/before dates, keyword, attachments — and every field is contains-style. Servers index whole words only, so when a search matches nothing server-side (e.g. a partial word like `0008`), the client automatically falls back to a fuzzy scan: it walks the scope newest-first and matches the chosen fields in memory (keyword, attachment and date filters still apply), streaming matches in with a `scanning n/N` indicator — `Esc` cancels.
+Conflicts are rejected at startup with a clear error rather than silently
+shadowing each other.
 
-Multi-selected rows show a `×` marker in the list; actions apply to the selection as one batched server call. Destructive actions show an undo toast for five seconds — `ctrl+z` reverses them (delete-inside-Trash is held for the same window before destroying).
+## Configuration
 
-The composer takes the whole screen: To/Cc/Bcc/Subject fields above a hairline, the body below it, `tab`/`shift+tab` moving between zones and `ctrl+i` choosing From when the account has more than one identity. Typing in To/Cc/Bcc pops a recipient suggestion under the field — the contacts of **every** account, deduplicated by address; `↑`/`↓` pick, `Enter` (or `Tab`) inserts `Name <email>, `, `Esc` dismisses it before it dismisses anything else — and `ctrl+g` opens a full type-to-filter contact search for when you'd rather browse. Replies quote the original with an attribution line and `> `-prefixed lines; forwards carry a `---------- Forwarded message ----------` block. Drafts are written to the server on a two-second debounce, whenever you leave a field, and whenever you answer the discard prompt with `n` — so a draft survives a restart — editing one from the Drafts mailbox recreates it, because message content is immutable in JMAP (RFC 8621 §4.1.2). Attachments are picked with `ctrl+a`: a directory browser, not a path field — `j`/`k` move, `l` open, `h` back, `enter` attaches, `esc` cancels — and upload with a live percentage. Sending holds the submission for `[compose] undo_delay` (default 5s) and shows a toast: `ctrl+z` cancels and puts you back in the composer with the draft intact. When the window closes the message is submitted once, and the server files it into Sent.
+Two small files live in `~/.config/jmap-tui/` (`$XDG_CONFIG_HOME` honoured).
 
-## Contacts
+**`config.toml` — your accounts and settings.** The wizard writes the account
+bits for you; the parts you might edit yourself:
 
-`c` opens the contacts screen: address books on the left (per account, under the same tinted headers as the folder tree), contacts sorted by name in the middle — each row led by its owner's colour bar when accounts are merged — and the selected card's details on the right. The layout collapses like the reader (two columns below 100, one focused column below 60; `Tab` moves focus), `/` type-filters, and `Esc` walks back (clear filter → close). With more than one account supporting `urn:ietf:params:jmap:contacts` the view opens unified; an account without the capability simply contributes nothing.
+- `default_account` — which account opens first
+- `[accounts.<id>]` — server URL, username, display name, optional
+  `initial_mailbox` (the folder that opens at startup) and `default_identity`
+  (the From address the composer defaults to)
+- `[keys]` — rebind any key to an action id (see [Keys](#keys))
+- `theme` — `dark`, `light`, or `auto` (follow your terminal)
+- `[compose] undo_delay` — how long you get to cancel a send
+- `[window]` — list chunk/prefetch sizes; rarely worth touching
 
-`n` creates and `e` edits through one form — name, emails, phones, organization, title, note, and (on create) the target address book, defaulting to the account's — and the save patches only what you changed, so properties the form never shows are untouched. `d` deletes, but the destroy is held for five seconds behind its toast: `ctrl+z` cancels before anything reaches the server. Outside the screen, `Shift+N` adds the sender of the message you're reading — prefilled, and opening in edit mode when that address is already a contact. Everything is in-memory and server-side: no contact data is ever written to disk, and live changes arrive over the same push stream as mail.
+```toml
+default_account = "work"
 
-## Stack
+[accounts.work]
+display_name = "Work"
+url          = "https://mail.example.com"
+username     = "you@work.example.com"
 
-- **Go** (≥ 1.24)
-- [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) + [Lipgloss v2](https://github.com/charmbracelet/lipgloss) + [Bubbles v2](https://github.com/charmbracelet/bubbles) — `charm.land/*` module paths
-- [go-jmap](https://git.sr.ht/~rockorager/go-jmap) (RFC 8620 core + mail + push) with a thin in-repo client layer on top
+[accounts.personal]
+display_name = "Personal"
+url          = "https://mail.example.com"
+username     = "you@example.com"
 
-## Docs
+[compose]
+undo_delay = "5s"   # how long you get to cancel a send; "0s" sends instantly
+```
 
-| Doc | Purpose |
+Passwords never land in this file — the wizard stores them in your OS keyring
+(or a `password_file` you pick on headless machines, or an environment variable
+that isn't stored at all). And if you'd rather not edit TOML at all,
+`jmap-tui login` edits an account through the wizard instead.
+
+**`prefs.toml` — your in-app choices, saved as you make them.** Pane layout,
+the order of account blocks in the sidebar, which folders are folded shut, and
+per-account sort order and archive destination. You shouldn't need to edit it;
+delete it if you ever want those choices back to defaults.
+
+## Troubleshooting
+
+| Symptom | Fix |
 |---|---|
-| [REQUIREMENTS.md](REQUIREMENTS.md) | What we're building — functional & non-functional requirements |
-| [PLAN.md](PLAN.md) | How we're building it — architecture, milestones, risks |
-| [AGENTS.md](AGENTS.md) | Rules for AI agents (and humans) contributing to the repo |
+| "connection failed" in the wizard | Check the server URL (it should be the JMAP URL — `https://api.fastmail.com` for Fastmail) and that you're using an **app password**, not your login password. |
+| No OS keyring (SSH session, minimal container) | The wizard offers a `password_file` fallback, or set `JMAP_TUI_PASSWORD_<ACCOUNT>` in the environment and it's used without being stored. |
+| Folders look stale | The status bar shows `live`, `polling`, or `connecting…`. `polling` means push dropped and it's falling back — it recovers on its own. |
+| A search finds nothing | Server search matches whole words; jmap-tui then falls back to a fuzzy scan with a `scanning n/N` indicator. <kbd>Esc</kbd> cancels it. |
+| Need details for a bug report | `jmap-tui --log-file /tmp/jmap-tui.log --log-level debug` writes a **redacted** log (secrets never appear in it). |
 
 ## Roadmap
 
-- **v0.1** — feature-complete (everything above landed); the release milestone finishes it: Fastmail verification pass, goreleaser artifacts, tag `v0.1.0`
-- **v0.2+** — push subscriptions, Sieve script management (RFC 9291), vacation responder, quota display (RFC 9425), advanced theming
-- **Later** — IMAP provider behind the same provider interface (will use a local cache; see [PLAN.md](PLAN.md#imap-future))
+- **v0.1** — release binaries, Fastmail verification pass, `v0.1.0`
+- **v0.2+** — push subscriptions, Sieve script management, vacation responder, quota display, richer theming
+- **Later** — an IMAP provider behind the same interface (will use a local cache; JMAP never does)
+
+## Development
+
+jmap-tui is written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea),
+[Lipgloss](https://github.com/charmbracelet/lipgloss), and
+[go-jmap](https://git.sr.ht/~rockorager/go-jmap). The repo is built for
+AI-assisted development — read the rules before contributing:
+
+| Doc | Purpose |
+|---|---|
+| [REQUIREMENTS.md](REQUIREMENTS.md) | What we're building — scope & requirements |
+| [PLAN.md](PLAN.md) | How we're building it — architecture & milestones |
+| [AGENTS.md](AGENTS.md) | Contribution rules (for agents and humans) |
+| [KEYMAP_PLAN.md](KEYMAP_PLAN.md) | The reasoning behind the keymap |
 
 ## License
 
