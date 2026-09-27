@@ -13,19 +13,50 @@ plus one approved live probe against the Stalwart test account (D-7).
 **Result: 21 probe failures → 17 distinct findings (4 High, 9 Medium, 4 Low),
 12 controls verified holding, 0 data races, 0 reachable vulnerabilities.**
 
-**Remediation status (2026-09-27, follow-up session):** **F-1, F-2, F-3,
-F-4 and the grouped F-9 are fixed.** Credentials are now origin-gated to
-the configured `ServerURL`/`SessionURL` origins and cross-origin redirects
-are refused (F-1); session URLs on another origin are fetched without
-credentials and logged as such (F-2); a single `Sanitize` choke point
-(`mailtext.Sanitize`, applied at `ui.Render`/`RenderWizard`, the smoke
-dumps, the stderr printer, `HTMLToText`, and the styled-widget sources)
-strips C0/C1/format controls (F-3); attachment names are validated,
-`uniquePath` is bounded and `O_EXCL`-guarded, and download-URL names are
-reduced to a safe final segment (F-4, F-9). Appendix tests A.1 (C-1, C-2,
-S-1, S-2), A.2, A.3 (W-1/W-2), A.4 (`FuzzUniquePath`), A.5, A.6, A.10 (T-5),
-A.12 and A.13 ship in the repo and pass. **F-5…F-8, F-10…F-17 remain
-open**, to be worked in the §5 order.
+**Remediation status (2026-09-27, follow-up sessions): all 17 findings
+are dispositioned; none remain open.**
+
+- **Fixed — High:** F-1/F-2 (credentials origin-gated to the configured
+  `ServerURL`/`SessionURL` origins, cross-origin redirects refused;
+  cross-origin session URLs fetched unauthenticated and logged as such);
+  F-3 (single `mailtext.Sanitize` choke point at `ui.Render`/
+  `RenderWizard`, the smoke dumps, the stderr printer, `HTMLToText`, and
+  the styled-widget sources); F-4 + grouped F-9 (attachment names
+  validated, `uniquePath` bounded and `O_EXCL`-guarded, download-URL
+  names reduced to a safe final segment).
+- **Fixed — Medium:** F-5/F-6 (`config.ValidateServerURL`: https-only
+  beyond loopback, userinfo rejected — enforced at `validateAccount` for
+  `url`/`session_url`, on the `--url`/`smoke` flag paths, and in the
+  wizard; the debug log strips URL userinfo); F-7/F-8 (32 MiB JSON /
+  100 MiB attachment caps per D-4, clean size-limit errors, never a
+  truncated decode or file); F-10/F-11 (`os.CreateTemp` O_EXCL random
+  names for crash reports; `writeAtomic` now shared by config and prefs
+  with `f.Chmod` on the owned descriptor); F-12 (README "Verifying your
+  binary" + NFR-6 clause, documentation-only per D-5); F-13
+  (`mailtext.Truncate`: rune-safe, control-free truncation in
+  `truncateErr`/`truncateStatusErr`).
+- **Fixed — Low:** F-14 (debug log re-chmod 0600 after open), F-16 (CR
+  splits fields and NUL fields are dropped in `parseAddressList`),
+  F-17 (`golang.org/x/oauth2` → v0.27.0; `govulncheck ./...` reports no
+  vulnerabilities).
+- **Accepted by decision — F-15:** the user decided (2026-09-27) that
+  `JMAP_TUI_PASSWORD_*` env vars are **testing only** and ever only hold
+  test-account credentials. `EnvVar` therefore stays as-is (its
+  non-injectivity can only ever affect test ids), and the remediation is
+  the scrub: deployment guidance removed from README, FR-J2 now declares
+  the testing-only policy, and the keyring/wizard/plaintext-password
+  error guidance no longer points real accounts at env vars. Appendix
+  A.9/C-7 is **deliberately not shipped** — it encodes the rejected
+  hash-suffix fix; A.9's W-6/W-6b password_file control probes do ship.
+
+Appendix tests shipping in the repo: A.1 (C-1, C-2, C-4, S-1, S-2, S-3,
+S-4), A.2, A.3 (W-1/W-2, T-7 — app, plus an adapted real
+`truncateStatusErr` assertion in `internal/sync` replacing the
+appendix's log-only pattern probe — and I-6), A.4 (`FuzzUniquePath`,
+`FuzzTruncateErr`), A.5, A.6, A.7 (C-3, C-3b, W-5, plus a
+`ValidateServerURL` table covering the shared flag/wizard paths), A.9
+(W-6/W-6b controls only), A.10 (T-5, W-4, W-7), A.12, A.13. Beyond the
+appendix, `TestValidateServerURL` pins the URL policy for every caller.
 
 ---
 
