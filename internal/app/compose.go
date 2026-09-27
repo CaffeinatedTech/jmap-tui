@@ -175,6 +175,10 @@ type draftSavedMsg struct {
 	id   mail.ID
 	acct string
 	snap sync.Snapshot
+	// atts carries the saved draft's attachment metadata as the server
+	// now knows it — empty when the draft had none. The composer adopts
+	// it so the next save references live blob ids (message-scoped).
+	atts []mail.Attachment
 	err  error
 }
 
@@ -348,6 +352,19 @@ func (m *Model) handleComposePrep(msg composePrepMsg) (tea.Model, tea.Cmd) {
 		c.body.SetValue(ui.Sanitize(b.Text))
 		c.inReplyTo = append([]string(nil), b.InReplyTo...)
 		c.references = append([]string(nil), b.References...)
+		// Attachments ride along: an edit recreates the Email, so
+		// without them the first save of an opened draft would silently
+		// drop them (FR-H4 — the edit writes a *new* Email carrying the
+		// same content). Their blob ids are message-scoped; saveDraftCmd
+		// re-reads them after every save.
+		for _, a := range b.Attachments {
+			c.atts = append(c.atts, composeAttachment{
+				att:   a,
+				name:  a.Name,
+				size:  a.Size,
+				state: attReady,
+			})
+		}
 		// The server already holds exactly this, so nothing is dirty.
 		c.savedFP = composeFingerprint(c)
 		c.dirty = false
@@ -784,8 +801,9 @@ func composeFingerprint(c *composeState) string {
 		b.WriteByte(0)
 		b.WriteString(a.name)
 		b.WriteByte(0)
-		b.WriteString(string(a.att.BlobID))
-		b.WriteByte(0)
+		// Deliberately NOT the blob id: servers re-derive it on every
+		// save (message-scoped), and the composer adopts the fresh id
+		// after each save — content identity is name + state.
 		b.WriteString(string(rune('0' + int(a.state))))
 	}
 	return b.String()
@@ -829,7 +847,19 @@ func (m *Model) saveDraftCmd() tea.Cmd {
 			return draftSavedMsg{seq: seq, fp: fp, acct: acct, err: fmt.Errorf("account %q is not connected", acct)}
 		}
 		id, snap, err := eng.SaveDraft(m.ctx, d)
-		return draftSavedMsg{seq: seq, fp: fp, id: id, acct: acct, snap: snap, err: err}
+		// Draft blob ids are message-scoped (the recreate stores them
+		// anew and the old ids die with their message), so re-read the
+		// saved attachment ids before the next save carries them —
+		// otherwise the second save of a draft with attachments fails
+		// with blobNotFound. Best effort: the save itself already
+		// succeeded and must not be reported as failed over this.
+		var atts []mail.Attachment
+		if err == nil && len(d.Attachments) > 0 {
+			if a, ferr := eng.DraftAttachments(m.ctx, id); ferr == nil {
+				atts = a
+			}
+		}
+		return draftSavedMsg{seq: seq, fp: fp, id: id, acct: acct, snap: snap, atts: atts, err: err}
 	}
 }
 
@@ -858,6 +888,12 @@ func (m *Model) handleDraftSaved(msg draftSavedMsg) (tea.Model, tea.Cmd) {
 		c.status = "autosave failed: " + shortErr(msg.err)
 		return m, tea.Batch(cmd, m.showToast("Draft not saved", shortErr(msg.err), nil, nil))
 	}
+	// Adopt the server's post-save blob ids before any queued save can
+	// build a draft from stale ones: draft blobs are message-scoped, and
+	// carrying an id from a replaced message fails with blobNotFound.
+	if len(msg.atts) > 0 {
+		patchDraftAttachments(c, msg.atts)
+	}
 	c.draftID = msg.id
 	c.savedFP = msg.fp
 	c.saving = false
@@ -878,6 +914,29 @@ func (m *Model) handleDraftSaved(msg draftSavedMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.closeComposer(false))
 	}
 	return m, cmd
+}
+
+// patchDraftAttachments swaps the composer's ready attachment blob ids
+// for the ones the server just stored. Matching is by name+size (the
+// metadata a recreate preserves); an unmatched composer entry keeps its
+// old id and the next save will surface any real problem as an error
+// rather than silently dropping the attachment.
+func patchDraftAttachments(c *composeState, saved []mail.Attachment) {
+	used := make([]bool, len(saved))
+	for i := range c.atts {
+		a := &c.atts[i]
+		if a.state != attReady || a.att.BlobID == "" {
+			continue
+		}
+		for j := range saved {
+			if used[j] || saved[j].Name != a.att.Name || saved[j].Size != a.att.Size {
+				continue
+			}
+			a.att.BlobID = saved[j].BlobID
+			used[j] = true
+			break
+		}
+	}
 }
 
 // composeDraft builds the provider draft from the composer's current

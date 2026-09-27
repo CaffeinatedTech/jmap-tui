@@ -111,9 +111,11 @@ func TestLiveM5Gate(t *testing.T) {
 	}
 
 	// --- draft survives a restart (the gate's third clause) ---
-	if m.compose.draftID == "" {
-		pump(t, m, m.saveDraftCmd())
-	}
+	// Flush unconditionally: an earlier blur autosave may have adopted a
+	// draft id while the body/attachment save is still debounce-pending
+	// (f64830b made the empty-body autosave succeed), and the assert
+	// below reads the server, not the composer.
+	pump(t, m, m.saveDraftCmd())
 	if m.compose.status != "" && strings.HasPrefix(m.compose.status, "autosave failed") {
 		t.Fatalf("autosave failed: %s", m.compose.status)
 	}
@@ -455,4 +457,120 @@ func mailboxesByRole(t *testing.T, c *jmapclient.Client) map[mail.Role]mail.ID {
 		}
 	}
 	return out
+}
+
+// TestLiveDraftEditKeepsAttachment drives the draft-edit flow against
+// live Stalwart: create a draft with an attachment, reopen it through
+// FR-C3's edit path, and save it twice more. Draft blobs are
+// message-scoped (Stalwart derives fresh ids at write and frees them
+// with their message), so the composer must load attachments on open —
+// or the edit silently drops them — and adopt the fresh ids after every
+// save — or the second save answers blobNotFound. Artifact destroyed.
+func TestLiveDraftEditKeepsAttachment(t *testing.T) {
+	url, user, pass := liveCreds(t)
+
+	oldAuto, oldBlink := composeAutosaveDelay, runCursorBlink
+	composeAutosaveDelay = 250 * time.Millisecond
+	runCursorBlink = false
+	t.Cleanup(func() {
+		composeAutosaveDelay, runCursorBlink = oldAuto, oldBlink
+	})
+
+	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := client.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("KeyMap: %v", err)
+	}
+	m := New(Options{
+		Provider:  client,
+		Keys:      km,
+		Theme:     ui.NewTheme(ui.DarkTheme()),
+		UndoDelay: 2 * time.Second,
+	})
+	m.width, m.height = 120, 40
+	t.Cleanup(m.Cancel)
+
+	pump(t, m, m.loadAccountCmd())
+	if m.snap.ActiveMailbox == "" {
+		t.Fatal("no mailbox opened")
+	}
+
+	// --- create a draft with an attachment ---
+	_, cmd := m.handleKey(key("n"))
+	pump(t, m, cmd)
+	if m.compose == nil {
+		t.Fatal("n did not open the composer")
+	}
+	composeType(t, m, ui.ZoneTo, user)
+	composeType(t, m, ui.ZoneSubject, "draft edit carry")
+	composeType(t, m, ui.ZoneBody, "body before edit — safe to ignore, auto-cleaned.\n")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "carry.txt")
+	if err := os.WriteFile(path, []byte("carry payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pump(t, m, m.uploadAttachmentCmd(path))
+	if len(m.compose.atts) != 1 || m.compose.atts[0].state != attReady {
+		t.Fatalf("attachment not uploaded: %+v", m.compose.atts)
+	}
+	pump(t, m, m.saveDraftCmd())
+	if m.compose.draftID == "" || strings.HasPrefix(m.compose.status, "autosave failed") {
+		t.Fatalf("first save: id=%q status=%q", m.compose.draftID, m.compose.status)
+	}
+	first := m.compose.draftID
+	t.Cleanup(func() {
+		for _, id := range []mail.ID{m.compose.draftID, first} {
+			if id == "" {
+				continue
+			}
+			if _, err := m.opts.Provider.Mutate(m.ctx, mail.Mutation{Destroy: []mail.ID{id}}); err != nil {
+				t.Logf("cleanup: destroy %s: %v", id, err)
+			}
+		}
+	})
+
+	// --- reopen through the draft-edit path (FR-C3) ---
+	m.compose = nil
+	body, err := m.opts.Provider.FetchBody(ctx, first)
+	if err != nil {
+		t.Fatalf("FetchBody: %v", err)
+	}
+	_, _ = m.openCompose(composeDraft)
+	_, _ = m.handleComposePrep(composePrepMsg{mode: composeDraft, body: body})
+	if len(m.compose.atts) != 1 || m.compose.atts[0].state != attReady {
+		t.Fatalf("attachments not loaded on draft edit: %+v", m.compose.atts)
+	}
+
+	// --- two more saves; each must carry the live blob ids ---
+	for i, subject := range []string{"draft edit carry (2)", "draft edit carry (3)"} {
+		m.compose.subject.SetValue(subject)
+		pump(t, m, m.saveDraftCmd())
+		if m.compose.status != "" && strings.HasPrefix(m.compose.status, "autosave failed") {
+			t.Fatalf("save %d failed: %q", i+2, m.compose.status)
+		}
+		if m.compose.draftID == "" {
+			t.Fatalf("save %d produced no draft id", i+2)
+		}
+	}
+
+	final, err := m.opts.Provider.FetchBody(ctx, m.compose.draftID)
+	if err != nil {
+		t.Fatalf("FetchBody final: %v", err)
+	}
+	if len(final.Attachments) != 1 {
+		t.Fatalf("final draft attachments = %d, want 1 (edit must not drop it)", len(final.Attachments))
+	}
+	rc, err := m.opts.Provider.DownloadBlob(ctx, mail.ID(final.Attachments[0].BlobID),
+		final.Attachments[0].Name, final.Attachments[0].Type)
+	if err != nil {
+		t.Fatalf("DownloadBlob of live derived id: %v", err)
+	}
+	_ = rc.Close()
 }

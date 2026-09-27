@@ -434,14 +434,6 @@ func TestLiveM5ProbeDraftRoundTrip(t *testing.T) {
 	if len(got.Attachments) != 1 {
 		t.Fatalf("attachment not persisted: %d parts", len(got.Attachments))
 	}
-	// The server derives its own blob id when it writes the message; that
-	// id is what every later save of this draft must reference.
-	saved := mail.Attachment{
-		BlobID: mail.ID(got.Attachments[0].BlobID),
-		Name:   got.Attachments[0].Name,
-		Type:   got.Attachments[0].Type,
-		Size:   int64(got.Attachments[0].Size),
-	}
 
 	// An edit recreates: new Email with the new content, old one retired.
 	d.ID = id
@@ -476,13 +468,21 @@ func TestLiveM5ProbeDraftRoundTrip(t *testing.T) {
 		t.Errorf("recreate misfiled the draft: %v", mailboxList(got))
 	}
 
-	// Third save, attachment carried over by the server's own blob id: the
-	// reference must still resolve after its message was replaced.
-	d.Attachments = []mail.Attachment{saved}
+	// Third save, attachment re-attached the way the composer does after
+	// an edit: a fresh upload. The replaced message's blob ids are dead —
+	// servers scope draft blobs per message — so carrying them here would
+	// be blobNotFound by design; the carried-across-saves flow lives in
+	// the app gate (composer refreshes ids after every save).
+	reblob, err := c.UploadBlob(ctx, "probe.txt", "text/plain", int64(len("probe bytes")),
+		strings.NewReader("probe bytes"))
+	if err != nil {
+		t.Fatalf("UploadBlob for re-attach: %v", err)
+	}
+	d.Attachments = []mail.Attachment{reblob}
 	d.Text = "third body\n"
 	id3, err := c.SaveDraft(ctx, d)
 	if err != nil {
-		t.Fatalf("SaveDraft with carried attachment: %v", err)
+		t.Fatalf("SaveDraft with re-attached upload: %v", err)
 	}
 	destroyEmails(t, ctx, c, id)
 	id = id3

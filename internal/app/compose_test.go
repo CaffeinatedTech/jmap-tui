@@ -794,3 +794,73 @@ func TestAutosaveBeforeSubjectOrBody(t *testing.T) {
 		t.Fatalf("drafts on the server = %d, want 1", got)
 	}
 }
+
+// TestDraftEditKeepsAttachmentAcrossSaves is the regression for draft
+// editing losing attachments or dying on the second save. Both halves
+// are exercised: opening a draft must load its attachments (FR-H4 — an
+// edit writes a *new* Email carrying the same content), and every save
+// must adopt the server's freshly derived blob ids — draft blobs are
+// message-scoped, so carrying the replaced message's id answers
+// blobNotFound.
+func TestDraftEditKeepsAttachmentAcrossSaves(t *testing.T) {
+	m, _ := composeTestModel(t)
+
+	// Create a draft with an attachment the way the composer does.
+	_, cmd := m.handleKey(key("n"))
+	pump(t, m, cmd)
+	path := writeAttachFile(t)
+	pump(t, m, m.uploadAttachmentCmd(path))
+	if m.compose.atts[0].state != attReady {
+		t.Fatalf("upload: %v %q", m.compose.atts[0].state, m.compose.atts[0].err)
+	}
+	m.compose.to.SetValue("alice@example.test")
+	m.compose.subject.SetValue("carry")
+	m.compose.body.SetValue("body one\n")
+	pump(t, m, m.saveDraftCmd())
+	if m.compose.draftID == "" || strings.HasPrefix(m.compose.status, "autosave failed") {
+		t.Fatalf("first save: id=%q status=%q", m.compose.draftID, m.compose.status)
+	}
+	first := m.compose.draftID
+
+	// Close and reopen through the draft-edit path (FR-C3): the prep
+	// message carries the server's view, attachments included.
+	m.compose = nil
+	body, err := m.opts.Provider.FetchBody(m.ctx, first)
+	if err != nil {
+		t.Fatalf("FetchBody: %v", err)
+	}
+	_, _ = m.openCompose(composeDraft)
+	_, _ = m.handleComposePrep(composePrepMsg{mode: composeDraft, body: body})
+	if len(m.compose.atts) != 1 || m.compose.atts[0].state != attReady {
+		t.Fatalf("attachments not loaded on draft edit: %+v", m.compose.atts)
+	}
+
+	// Save twice: the first recreate retires `first`, the second must
+	// still resolve the attachment's blob (fails with blobNotFound if
+	// the composer keeps the replaced message's ids).
+	for i, subject := range []string{"carry 2", "carry 3"} {
+		m.compose.subject.SetValue(subject)
+		pump(t, m, m.saveDraftCmd())
+		if m.compose.status != "" && strings.HasPrefix(m.compose.status, "autosave failed") {
+			t.Fatalf("save %d failed: %q", i+2, m.compose.status)
+		}
+		if m.compose.draftID == "" {
+			t.Fatalf("save %d produced no draft id", i+2)
+		}
+	}
+
+	got, err := m.opts.Provider.FetchBody(m.ctx, m.compose.draftID)
+	if err != nil {
+		t.Fatalf("FetchBody final: %v", err)
+	}
+	if len(got.Attachments) != 1 {
+		t.Fatalf("final draft attachments = %d, want 1 (edit must not drop it)", len(got.Attachments))
+	}
+	// The live derived id must resolve for download, not just metadata.
+	rc, err := m.opts.Provider.DownloadBlob(m.ctx, mail.ID(got.Attachments[0].BlobID),
+		got.Attachments[0].Name, got.Attachments[0].Type)
+	if err != nil {
+		t.Fatalf("DownloadBlob of live derived id: %v", err)
+	}
+	_ = rc.Close()
+}

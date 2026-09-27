@@ -149,6 +149,15 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 		if e.ThreadID == "" {
 			e.ThreadID = "th-" + e.ID
 		}
+		// Draft blob ids are message-scoped (Stalwart): validate the
+		// source blob and re-register the bytes under ids owned by this
+		// message, so destroying the message releases them and a later
+		// reference answers blobNotFound — the semantics the composer's
+		// post-save refresh exists for.
+		if err := s.deriveAttachmentBlobsLocked(e); err != nil {
+			notCreated[handle] = setError{"type": "blobNotFound", "description": err.Error()}
+			continue
+		}
 		s.emails = append(s.emails, *e)
 		for _, d := range deltas(mbs) {
 			d.total++
@@ -270,6 +279,7 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 			}
 		}
 		s.emails = append(s.emails[:idx], s.emails[idx+1:]...)
+		s.releaseOwnedBlobsLocked(id)
 		destroyed = append(destroyed, id)
 	}
 	sort.Strings(destroyed)
@@ -464,6 +474,42 @@ func (s *Server) SetBlob(id string, data []byte) {
 		s.blobs = map[string][]byte{}
 	}
 	s.blobs[id] = append([]byte(nil), data...)
+}
+
+// deriveAttachmentBlobsLocked validates every one of e's attachment blob
+// ids against the blob set and re-registers the bytes under fresh ids
+// owned by e — real servers scope message blobs to their message
+// (Stalwart derives new ids at write and frees them with the message), so
+// a replaced message's old ids answer blobNotFound. Caller holds s.mu.
+func (s *Server) deriveAttachmentBlobsLocked(e *Email) error {
+	for i := range e.Attachments {
+		src := e.Attachments[i].BlobID
+		data, ok := s.blobs[src]
+		if !ok {
+			return fmt.Errorf("blobId %s does not exist on this server", src)
+		}
+		s.derivedSeq++
+		derived := fmt.Sprintf("dm%08d", s.derivedSeq)
+		if s.blobOwner == nil {
+			s.blobOwner = map[string]string{}
+		}
+		s.blobs[derived] = data
+		s.blobOwner[derived] = e.ID
+		e.Attachments[i].BlobID = derived
+	}
+	return nil
+}
+
+// releaseOwnedBlobsLocked frees the derived blob ids owned by emailID —
+// the message-scoped GC that makes a stale reference fail. Caller holds
+// s.mu.
+func (s *Server) releaseOwnedBlobsLocked(emailID string) {
+	for bid, owner := range s.blobOwner {
+		if owner == emailID {
+			delete(s.blobOwner, bid)
+			delete(s.blobs, bid)
+		}
+	}
 }
 
 // handleDownload serves /jmap/download/{accountId}/{blobId}/{name} from the

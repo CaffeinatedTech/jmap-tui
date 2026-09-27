@@ -95,6 +95,20 @@ func (e *Engine) SaveDraft(ctx context.Context, d mail.Draft) (mail.ID, Snapshot
 	return id, e.Snapshot(), nil
 }
 
+// DraftAttachments re-reads id's attachment metadata from the server.
+// Draft blob ids are message-scoped: every recreate stores the bytes
+// under fresh ids and the previous ids die with their message, so a
+// composer that keeps carrying the ids from an earlier save eventually
+// references a dead blob and the save fails with blobNotFound. Callers
+// refresh after every successful save (FR-H4).
+func (e *Engine) DraftAttachments(ctx context.Context, id mail.ID) ([]mail.Attachment, error) {
+	body, err := e.p.FetchBody(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("sync: draft attachments: %w", err)
+	}
+	return body.Attachments, nil
+}
+
 // Send submits the message (FR-H5). The caller has already flushed the
 // draft, so d.ID names server-side content that matches the composer.
 // Afterwards the draft row leaves the store and — when the Sent mailbox is

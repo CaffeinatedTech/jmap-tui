@@ -69,6 +69,8 @@ type Server struct {
 	emails         []Email
 	synthetic      *SyntheticMailbox
 	blobs          map[string][]byte
+	blobOwner      map[string]string // derived message blob id → owning email id
+	derivedSeq     uint64            // mints derived (message-scoped) blob ids
 	identities     []Identity
 	mailboxVersion int
 	emailVersion   int

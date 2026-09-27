@@ -192,6 +192,7 @@ func (s *Server) emailSubmissionSetResponse(args json.RawMessage, callID string,
 					s.adjustCountsLocked(mb, -1, unreadDelta(&e))
 				}
 				s.emails = append(s.emails[:idx], s.emails[idx+1:]...)
+				s.releaseOwnedBlobsLocked(emailID)
 				destroyed = append(destroyed, emailID)
 			}
 		}
