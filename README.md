@@ -86,6 +86,22 @@ rm -rf ~/.config/jmap-tui           # optional: config + preferences
 
 </details>
 
+### Verifying your binary
+
+The one-liner trusts this repository and GitHub: `install.sh` picks the
+release asset matching your machine and checks no signature or checksum —
+a checksum shipped next to the binary would prove download integrity, not
+origin, so none is offered. If "HTTPS from GitHub" isn't enough assurance:
+
+- **Build from source** — the `git clone` + `go build` steps above; the Go
+  toolchain verifies every dependency against `go.sum`.
+- **Download directly** — fetch the archive yourself from the
+  [releases page](https://github.com/CaffeinatedTech/jmap-tui/releases)
+  instead of piping a script to your shell.
+- **Compare out of band** — if you obtain a SHA-256 from a trusted channel
+  (signed tag, separately verified announcement), compare it with
+  `sha256sum jmap-tui` on the file you downloaded.
+
 > **Status:** pre-release and under active development. It already does
 > everything described on this page; the Fastmail verification pass and the
 > `v0.1.0` tag are what's left before the v1.0 release.
@@ -328,8 +344,8 @@ undo_delay = "5s"   # how long you get to cancel a send; "0s" sends instantly
 ```
 
 Passwords never land in this file — the wizard stores them in your OS keyring
-(or a `password_file` you pick on headless machines, or an environment variable
-that isn't stored at all). And if you'd rather not edit TOML at all,
+or, on headless machines, in a `password_file` you pick. And if you'd rather
+not edit TOML at all,
 `jmap-tui login` edits an account through the wizard instead.
 
 **`prefs.toml` — your in-app choices, saved as you make them.** Pane layout,
@@ -342,7 +358,7 @@ delete it if you ever want those choices back to defaults.
 | Symptom | Fix |
 |---|---|
 | "connection failed" in the wizard | Check the server URL (it should be the JMAP URL — `https://api.fastmail.com` for Fastmail) and that you're using an **app password**, not your login password. |
-| No OS keyring (SSH session, minimal container) | The wizard offers a `password_file` fallback, or set `JMAP_TUI_PASSWORD_<ACCOUNT>` in the environment and it's used without being stored. |
+| No OS keyring (SSH session, minimal container) | The wizard offers a `password_file` fallback — a chmod-600 file holding the app password. |
 | Folders look stale | The status bar shows `live`, `polling`, or `connecting…`. `polling` means push dropped and it's falling back — it recovers on its own. |
 | A search finds nothing | Server search matches whole words; jmap-tui then falls back to a fuzzy scan with a `scanning n/N` indicator. <kbd>Esc</kbd> cancels it. |
 | Need details for a bug report | `jmap-tui --log-file /tmp/jmap-tui.log --log-level debug` writes a **redacted** log (secrets never appear in it). |

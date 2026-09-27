@@ -92,7 +92,7 @@ func TestPasswordKeyringNotFoundIsActionable(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error")
 	}
-	for _, want := range []string{"no secret for account", "JMAP_TUI_PASSWORD_ACCT", "password_file"} {
+	for _, want := range []string{"no secret for account", "OS keyring", "password_file"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}

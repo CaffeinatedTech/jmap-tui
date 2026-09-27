@@ -1,7 +1,9 @@
 // Package keyring resolves account passwords without ever letting plaintext
 // land in config (FR-J2). Resolution order:
 //
-//  1. the JMAP_TUI_PASSWORD_<ACCOUNT> environment variable (headless/CI)
+//  1. the JMAP_TUI_PASSWORD_<ACCOUNT> environment variable — for automated
+//     testing only (FR-J2); never a deployment technique, and only ever
+//     test-account credentials
 //  2. the account's password_file (opt-in escape hatch, chmod 600, warned)
 //  3. the OS keyring, service "jmap-tui", entry per account id
 package keyring
@@ -56,7 +58,9 @@ func Set(accountID, secret string, store Store) error {
 }
 
 // EnvVar derives the password environment variable name for an account id:
-// characters outside [A-Z0-9] become underscores. FR-J2.
+// characters outside [A-Z0-9] become underscores. FR-J2: the env var is a
+// testing mechanism, not a deployment technique — only test-account
+// credentials belong in it.
 func EnvVar(accountID string) string {
 	var b strings.Builder
 	b.WriteString("JMAP_TUI_PASSWORD_")
@@ -76,7 +80,7 @@ func EnvVar(accountID string) string {
 func Password(accountID, passwordFile string, backend Backend) (secret string, warnings []string, err error) {
 	if envVar := EnvVar(accountID); os.Getenv(envVar) != "" {
 		return os.Getenv(envVar), []string{
-			fmt.Sprintf("using password for account %q from %s (headless mode)", accountID, envVar),
+			fmt.Sprintf("using password for account %q from %s (testing)", accountID, envVar),
 		}, nil
 	}
 
@@ -96,7 +100,7 @@ func Password(accountID, passwordFile string, backend Backend) (secret string, w
 	secret, err = backend(Service, accountID)
 	if err != nil {
 		if err == keyring.ErrNotFound {
-			return "", nil, fmt.Errorf("keyring: no secret for account %q in service %q; store it in the OS keyring, set %s, or configure password_file", accountID, Service, EnvVar(accountID))
+			return "", nil, fmt.Errorf("keyring: no secret for account %q in service %q; store it in the OS keyring or configure password_file", accountID, Service)
 		}
 		return "", nil, fmt.Errorf("keyring: account %q: %w", accountID, err)
 	}

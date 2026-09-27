@@ -586,7 +586,10 @@ func (m *wizardModel) startTest() tea.Cmd {
 		}
 	}
 	if m.testSecret == "" {
-		m.err = fmt.Sprintf("password is required (or set %s)", keyring.EnvVar(m.accountID))
+		// No env/password_file/keyring secret anywhere: ask for the app
+		// password. The env var is a testing mechanism (FR-J2) and is
+		// deliberately not suggested here as a credential path.
+		m.err = "password is required"
 		m.step = wizForm
 		return m.refocus(2)
 	}

@@ -167,7 +167,7 @@ func validate(cfg *Config, md toml.MetaData) error {
 	undecoded := md.Undecoded()
 	for _, key := range undecoded {
 		if len(key) > 0 && key[len(key)-1] == "password" {
-			return fmt.Errorf("%s: plaintext passwords are not allowed in config; use the OS keyring (default), password_file, or the JMAP_TUI_PASSWORD_<ACCOUNT> env var", key)
+			return fmt.Errorf("%s: plaintext passwords are not allowed in config; use the OS keyring (default) or a password_file", key)
 		}
 	}
 	if len(undecoded) > 0 {

@@ -142,7 +142,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 ## FR-J — Configuration & credentials
 
 - **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app. App-managed preferences (remembered in-app choices, e.g. the archive destination per account, the sidebar/switcher account order, FR-C5) live in `prefs.toml` next to the config file; the app owns and writes only that file, never `config.toml`.
-- **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless use. Plaintext-in-config is a config-error, not a fallback.
+- **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned). The `JMAP_TUI_PASSWORD_<ACCOUNT>` env var exists **for automated testing only** (interviewed 2026-09-27): it must only ever hold test-account credentials, is documented nowhere as a deployment technique, and headless use is `password_file`. Plaintext-in-config is a config-error, not a fallback.
 - **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors. Server and session URLs are part of that validation (SECURITY_AUDIT_PLAN D-1/D-2, findings F-5/F-6): absolute `https://` — `http://` only for loopback hosts (`127.0.0.1`, `::1`, `localhost`, for mockjmap/local dev), never `user:pass@` userinfo — and the same policy is enforced on the `--url`/`smoke --url` flag paths and in the wizard, so credentials can never travel cleartext or embed in a URL.
 
 ## FR-K — Reliability, safety, observability
@@ -172,7 +172,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 | **NFR-3** | Cold start to interactive (config valid, server reachable): ≤ 1.5 s on broadband; mailbox tree renders before first query resolves. |
 | **NFR-4** | Zero disk writes from mail data. Audit: no message content in config/log/cache unless user saves an attachment or export. |
 | **NFR-5** | No secrets in memory dumps/logs/`%v` of config. Keyring accessed only at auth time. |
-| **NFR-6** | Single static binary; `go install` and goreleaser artifacts. |
+| **NFR-6** | Single static binary; `go install` and goreleaser artifacts. README documents the install trust model and how to verify a binary (SECURITY_AUDIT_PLAN D-5, finding F-12). |
 | **NFR-7** | Graceful degradation matrix documented per server (Stalwart, Fastmail) in PLAN.md §7. |
 | **NFR-8** | Test coverage: protocol/sync layers ≥ 80%; UI golden tests for all major screens. |
 

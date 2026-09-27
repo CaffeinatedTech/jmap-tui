@@ -78,7 +78,7 @@ password = "hunter2"
 	if err == nil {
 		t.Fatal("want error for plaintext password")
 	}
-	for _, want := range []string{"plaintext", "keyring", "JMAP_TUI_PASSWORD_"} {
+	for _, want := range []string{"plaintext", "keyring", "password_file"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
