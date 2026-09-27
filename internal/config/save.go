@@ -58,7 +58,10 @@ func SaveAccount(path, id string, a *Account, defaultAccount string) error {
 			return fmt.Errorf("config: encode: %w", err)
 		}
 		data = []byte(strings.TrimRight(string(data), "\n") + "\n")
-		return writeAtomic(path, data, 0o600)
+		if err := writeAtomic(path, data, 0o600); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		return nil
 	}
 
 	text := string(existing)
@@ -71,7 +74,10 @@ func SaveAccount(path, id string, a *Account, defaultAccount string) error {
 	if fi, statErr := os.Stat(path); statErr == nil {
 		mode = fi.Mode().Perm()
 	}
-	return writeAtomic(path, []byte(text), mode)
+	if err := writeAtomic(path, []byte(text), mode); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	return nil
 }
 
 // upsertAccountBlock replaces the [accounts.<id>] section of text, or
@@ -187,15 +193,35 @@ func hasDefaultAccount(text string) bool {
 }
 
 // writeAtomic writes data to path via a temp file + rename so a crash
-// mid-write never truncates the config.
+// mid-write never truncates the config. The temp file is created with
+// O_EXCL under a random name in the destination directory, so a symlink
+// planted at a predictable "<path>.tmp" can never be followed and
+// clobbered (finding F-11); the mode is applied to the file descriptor
+// we own, never re-opened by path. Callers wrap the error with their own
+// package prefix.
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return fmt.Errorf("config: write %s: %w", path, err)
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	tmp := f.Name()
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("config: rename %s: %w", path, err)
+		return fmt.Errorf("rename %s: %w", path, err)
 	}
 	return nil
 }

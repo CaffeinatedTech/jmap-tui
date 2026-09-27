@@ -1,15 +1,18 @@
 package main
 
-// Audit probe for SECURITY_AUDIT_PLAN.md §4.4 T-5: smoke's stdout dump
-// must be escape-free even when the server is hostile (username, account
-// names, API URLs are all server-controlled). FAIL = finding F-3
-// confirmed at that sink. Copied verbatim from SECURITY_AUDIT_FINDINGS.md
-// appendix A.10 (the W-4/W-7 probes belong to F-10/F-14; T-6's stderr
-// probe is inspection-only — main() now strips at the print site).
+// Audit probes for SECURITY_AUDIT_FINDINGS.md appendix A.10: T-5 (smoke's
+// stdout dump must be escape-free even when the server is hostile —
+// finding F-3) and W-4 (the crash report must not follow a planted
+// symlink in a shared tmp dir — finding F-10). FAIL = finding confirmed.
+// T-6's stderr probe is inspection-only — main() strips at the print
+// site; W-7 (log mode) lands with F-14.
 
 import (
 	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
@@ -38,6 +41,43 @@ func TestAuditT5SmokeStdoutEscapeFree(t *testing.T) {
 
 	if containsControl(out) {
 		t.Errorf("FINDING T-5: smoke stdout carries control bytes from server data: %q", snippet(out))
+	}
+}
+
+// W-4: crash report must not follow a planted symlink in a shared tmp
+// dir (appendix A.10). writeCrashReport now uses a random O_EXCL name,
+// so the planted predictable names can never be opened.
+func TestAuditW4CrashReportDoesNotFollowSymlink(t *testing.T) {
+	tmp := t.TempDir() // stands in for $TMPDIR
+	victim := filepath.Join(t.TempDir(), "victim.txt")
+	if err := os.WriteFile(victim, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The old implementation named the file by unix seconds; plant
+	// symlinks for this second and the next so the race cannot dodge a
+	// name check.
+	now := time.Now().Unix()
+	var planted string
+	for _, sec := range []int64{now, now + 1} {
+		p := filepath.Join(tmp, "jmap-tui-crash-"+strconv.FormatInt(sec, 10)+".log")
+		if err := os.Symlink(victim, p); err == nil {
+			planted = p
+		}
+	}
+	if planted == "" {
+		t.Skip("could not plant symlink")
+	}
+
+	orig := os.Getenv("TMPDIR")
+	_ = os.Setenv("TMPDIR", tmp)
+	defer func() { _ = os.Setenv("TMPDIR", orig) }()
+
+	if _, err := writeCrashReport("boom", []byte("stack")); err != nil {
+		t.Logf("writeCrashReport error: %v", err)
+	}
+	data, _ := os.ReadFile(victim)
+	if string(data) != "precious" {
+		t.Errorf("FINDING W-4: crash report followed the symlink; victim now holds %q", snippet(string(data)))
 	}
 }
 

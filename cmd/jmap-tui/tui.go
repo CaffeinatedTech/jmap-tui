@@ -446,13 +446,26 @@ func setupLogger(path, level string) (*slog.Logger, func(), error) {
 
 // writeCrashReport dumps a panic report to the temp directory. The report
 // contains the panic value and stack only — never message content or
-// credentials (NFR-4, NFR-5).
+// credentials (NFR-4, NFR-5). os.CreateTemp gives the file a random name
+// with O_EXCL at mode 0600: a symlink planted at a predictable $TMPDIR
+// name can never be opened, so the report can't clobber a victim file
+// (finding F-10).
 func writeCrashReport(v any, stack []byte) (string, error) {
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("jmap-tui-crash-%d.log", time.Now().Unix()))
+	f, err := os.CreateTemp(os.TempDir(), "jmap-tui-crash-*.log")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
 	var b strings.Builder
 	fmt.Fprintf(&b, "jmap-tui crash report — %s\n\npanic: %v\n\n", time.Now().Format(time.RFC3339), v)
 	b.Write(stack)
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+	if _, err := f.WriteString(b.String()); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
 		return "", err
 	}
 	return path, nil
