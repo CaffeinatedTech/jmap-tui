@@ -363,6 +363,57 @@ delete it if you ever want those choices back to defaults.
 | A search finds nothing | Server search matches whole words; jmap-tui then falls back to a fuzzy scan with a `scanning n/N` indicator. <kbd>Esc</kbd> cancels it. |
 | Need details for a bug report | `jmap-tui --log-file /tmp/jmap-tui.log --log-level debug` writes a **redacted** log (secrets never appear in it). |
 
+## Security
+
+A hostile-server / hostile-mail / hostile-filesystem audit (2026-09-27 —
+17 findings, 4 High / 9 Medium / 4 Low) probed the client end to end.
+Every vector below is mitigated in code with regression tests; full
+dispositions and evidence are in
+[SECURITY_AUDIT_FINDINGS.md](SECURITY_AUDIT_FINDINGS.md).
+
+**Credentials & transport**
+
+- [x] `Authorization` following cross-origin redirects (C-1)
+- [x] Credentials sent to session-supplied cross-origin URLs; hostile
+      blob names in the authenticated download path (C-2, S-2)
+- [x] Cleartext `http://` to non-loopback hosts (C-3)
+- [x] `user:pass@` userinfo accepted by config/flags or written to the
+      debug log (C-3b, C-4)
+- [x] Redirect loops; untrusted TLS failing open (S-1, S-8)
+- [x] Unbounded JSON responses and attachment downloads — capped at
+      32 MiB / 100 MiB (S-3, S-4)
+
+**Mail → terminal**
+
+- [x] Terminal escape/control injection via subject, preview, sender and
+      mailbox names, body, error lines (T-1, T-3, T-5, T-6)
+- [x] HTML entities decoding to controls after conversion (T-2)
+- [x] UTF-8-splitting truncation in status/error lines (T-7)
+
+**Files on disk**
+
+- [x] Attachment path traversal and filename-driven save hangs (W-1, W-2)
+- [x] Symlink clobber via crash reports and config/prefs writes —
+      `O_EXCL` random temp names (W-4, W-5)
+- [x] Pre-existing world-writable debug log (W-7)
+- [x] `password_file` FIFOs, directories, and loose symlink targets (W-6)
+
+**Config & identity**
+
+- [x] Plaintext passwords smuggled into config (I-1)
+- [x] CR/NUL carried through parsed address fields (I-6)
+- [x] Env-var name collisions (C-7) — env vars are test-only (FR-J2)
+
+**Supply chain**
+
+- [x] `install.sh` `curl | bash` trust model — documented residual;
+      verification options under [Install](#verifying-your-binary)
+- [x] Dependency vulnerabilities — `govulncheck ./...` clean (F-17)
+
+Also probed and holding: SSE overlong-line recovery, HTML conversion
+termination, goroutine hygiene under churn, config fuzzing, and a
+race-free test suite.
+
 ## Roadmap
 
 - **v0.1** — release binaries, Fastmail verification pass, `v0.1.0`
