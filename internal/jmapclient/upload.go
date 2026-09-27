@@ -2,7 +2,6 @@ package jmapclient
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,7 +58,7 @@ func (c *Client) UploadBlob(ctx context.Context, name, mediaType string, size in
 		Type   string `json:"type"`
 		Size   int64  `json:"size"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeJSON(resp.Body, &out); err != nil {
 		return mail.Attachment{}, fmt.Errorf("jmapclient: decode upload response: %w", err)
 	}
 	if out.BlobID == "" {

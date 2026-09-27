@@ -1,15 +1,16 @@
 package jmapclient
 
-// Audit regression tests for SECURITY_AUDIT_FINDINGS.md findings F-1, F-2
-// and F-9, plus the F-3 live probe: appendix A.1 and A.12 copied verbatim
-// (minus the probes for Medium/Low findings, which land with their own
-// remediations). Every test encodes the SECURE behavior decided in
-// SECURITY_AUDIT_PLAN.md §6 (D-2, D-3, D-7); a FAIL means the finding is
-// back.
+// Audit regression tests for SECURITY_AUDIT_FINDINGS.md findings F-1, F-2,
+// F-7, F-8 and F-9, plus the F-3 live probe: appendix A.1 and A.12 copied
+// verbatim (minus the probes for findings whose remediations have not
+// landed yet). Every test encodes the SECURE behavior decided in
+// SECURITY_AUDIT_PLAN.md §6 (D-2, D-3, D-4, D-7); a FAIL means the finding
+// is back.
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,6 +209,74 @@ func TestAuditS1RedirectLoopFailsFast(t *testing.T) {
 	}
 	if time.Since(start) > 12*time.Second {
 		t.Errorf("redirect loop took %v; want fast failure (default 10-hop limit)", time.Since(start))
+	}
+}
+
+// --- S-3: JSON responses must be size-capped (plan D-4: 32 MiB) ---
+// (Shipped with F-7.)
+
+func TestAuditS3JSONResponseSizeCap(t *testing.T) {
+	const cap32MiB = 32 << 20
+	// A valid session whose username field alone exceeds the cap.
+	huge := strings.Repeat("a", cap32MiB+8<<20)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"username":%q,"capabilities":{"urn:ietf:params:jmap:mail":{}},"accounts":{"acc1":{"name":"t"}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc1"},"apiUrl":"http://127.0.0.1:1/api","state":"s"}`, huge)
+	}))
+	defer srv.Close()
+
+	c := New(Options{ServerURL: srv.URL, Username: "tester", Password: "pw"})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := c.Connect(ctx)
+	if err == nil {
+		t.Errorf("FINDING S-3: >32MiB JSON response accepted (no size cap on decode); want a size-limit error per plan D-4")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "too large") &&
+		!strings.Contains(strings.ToLower(err.Error()), "size") &&
+		!strings.Contains(strings.ToLower(err.Error()), "limit") {
+		t.Logf("note: response rejected, but error does not name a size limit: %v", err)
+	}
+}
+
+// --- S-4: attachment download reads must be capped (plan D-4: 100 MiB) ---
+// (Shipped with F-8: the cap lives in DownloadBlob so both the TUI save
+// path and direct callers inherit it.)
+
+func TestAuditS4AttachmentSizeCap(t *testing.T) {
+	const cap100MiB = 100 << 20
+	const stream = cap100MiB + 1<<20
+
+	download := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		chunk := make([]byte, 1<<20)
+		for sent := 0; sent < stream; sent += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer download.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(sessionBody("http://127.0.0.1:1/api", download.URL+"/{accountId}/{blobId}/{name}?type={type}"))
+	}))
+	defer download.Close()
+
+	c := New(Options{ServerURL: origin.URL, Username: "tester", Password: "pw"})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	rc, err := c.DownloadBlob(ctx, "blob1", "big.bin", "application/octet-stream")
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	n, err := io.Copy(io.Discard, rc)
+	if err == nil && n > cap100MiB {
+		t.Errorf("FINDING S-4: read %d bytes (>%d) with no error; plan D-4 requires a 100MiB cap that fails the save", n, cap100MiB)
 	}
 }
 

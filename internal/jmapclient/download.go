@@ -55,7 +55,9 @@ func (c *Client) DownloadBlob(ctx context.Context, blobID mail.ID, name, mediaTy
 		_ = resp.Body.Close()
 		return nil, &ServerError{Status: resp.StatusCode}
 	}
-	return resp.Body, nil
+	// The D-4 attachment cap (finding F-8): the caller's reads fail past
+	// 100 MiB with a clean error — never a silent truncation.
+	return newCappedReader(resp.Body, maxAttachment, errAttachmentTooLarge), nil
 }
 
 // safeURLName neutralizes a server-supplied attachment name before it is

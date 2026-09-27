@@ -366,7 +366,7 @@ func (c *Client) post(ctx context.Context, req *jmap.Request) (*jmap.Response, e
 	}
 
 	resp := &jmap.Response{}
-	if err := json.NewDecoder(httpResp.Body).Decode(resp); err != nil {
+	if err := decodeJSON(httpResp.Body, resp); err != nil {
 		return nil, fmt.Errorf("jmapclient: decode response: %w", err)
 	}
 	return resp, nil
@@ -392,7 +392,7 @@ func (c *Client) fetchSession(ctx context.Context, sessionURL string) (*jmap.Ses
 	}
 
 	s := &jmap.Session{}
-	if err := json.NewDecoder(httpResp.Body).Decode(s); err != nil {
+	if err := decodeJSON(httpResp.Body, s); err != nil {
 		return nil, fmt.Errorf("jmapclient: decode session from %s: %w", sessionURL, err)
 	}
 	return s, nil
