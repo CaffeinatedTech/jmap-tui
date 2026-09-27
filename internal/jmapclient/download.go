@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
@@ -30,6 +31,7 @@ func (c *Client) DownloadBlob(ctx context.Context, blobID mail.ID, name, mediaTy
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
+	name = safeURLName(name)
 	u := strings.NewReplacer(
 		"{accountId}", url.PathEscape(c.accountID),
 		"{blobId}", url.PathEscape(string(blobID)),
@@ -54,4 +56,21 @@ func (c *Client) DownloadBlob(ctx context.Context, blobID mail.ID, name, mediaTy
 		return nil, &ServerError{Status: resp.StatusCode}
 	}
 	return resp.Body, nil
+}
+
+// safeURLName neutralizes a server-supplied attachment name before it is
+// spliced into the download URL template (finding F-9): url.PathEscape
+// leaves '.' unescaped, so a name like "../../admin" would put
+// dot-segments into the path of an authenticated request for a server or
+// proxy to normalize somewhere unexpected. The blob id identifies the
+// object — {name} only suggests a filename — so reducing the name to its
+// final path segment is always safe. Windows separators are folded to '/'
+// first (a backslash must not act as one), and a name that reduces to a
+// dot segment falls back to "attachment".
+func safeURLName(name string) string {
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if name == "." || name == ".." {
+		return "attachment"
+	}
+	return name
 }

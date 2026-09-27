@@ -14,6 +14,7 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/keyring"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
+	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
 )
 
 // runSmoke is the M0 gate: connect to a JMAP account and dump the session
@@ -109,25 +110,30 @@ func runSmoke(args []string) error {
 	return nil
 }
 
+// printSession dumps the connected session. Every field it prints is
+// server-controlled, so each goes through ui.Sanitize — smoke output
+// bypasses the TUI's render boundary and writes straight to stdout (D-3).
 func printSession(info jmapclient.SessionInfo) {
+	s := ui.Sanitize
 	fmt.Println("Session")
-	fmt.Printf("  state:         %s\n", info.State)
-	fmt.Printf("  username:      %s\n", info.Username)
-	fmt.Printf("  capabilities:  %s\n", strings.Join(info.Capabilities, ", "))
+	fmt.Printf("  state:         %s\n", s(info.State))
+	fmt.Printf("  username:      %s\n", s(info.Username))
+	fmt.Printf("  capabilities:  %s\n", s(strings.Join(info.Capabilities, ", ")))
 	fmt.Printf("  accounts:      %d\n", len(info.Accounts))
 	for _, a := range info.Accounts {
-		fmt.Printf("    %s  %s", a.ID, a.Name)
+		fmt.Printf("    %s  %s", a.ID, s(a.Name))
 		if a.IsPersonal {
 			fmt.Print("  (personal)")
 		}
 		fmt.Println()
 	}
 	fmt.Printf("  mail account:  %s\n", info.PrimaryMailAccount)
-	fmt.Printf("  api:           %s\n", info.APIURL)
-	fmt.Printf("  event source:  %s\n", info.EventSourceURL)
+	fmt.Printf("  api:           %s\n", s(info.APIURL))
+	fmt.Printf("  event source:  %s\n", s(info.EventSourceURL))
 }
 
 func printMailboxTree(mailboxes []mail.Mailbox) {
+	s := ui.Sanitize
 	unread, total := 0, 0
 	for _, mb := range mailboxes {
 		unread += mb.UnreadEmails
@@ -156,9 +162,9 @@ func printMailboxTree(mailboxes []mail.Mailbox) {
 			if i == len(kids)-1 {
 				branch, next = "└── ", "    "
 			}
-			line := prefix + branch + mb.Name
+			line := prefix + branch + s(mb.Name)
 			if mb.Role != "" {
-				line += fmt.Sprintf("  [%s]", mb.Role)
+				line += fmt.Sprintf("  [%s]", s(string(mb.Role)))
 			}
 			if mb.TotalEmails > 0 {
 				line += fmt.Sprintf("  %d/%d", mb.UnreadEmails, mb.TotalEmails)

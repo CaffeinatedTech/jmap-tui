@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
 )
 
 // version is overridden at build time via -ldflags; goreleaser sets it for
@@ -16,7 +18,10 @@ var version = "0.0.0-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// Errors can embed server response detail (ServerError.Detail);
+		// stderr bypasses the TUI render boundary, so strip controls here
+		// before anything reaches the terminal (D-3).
+		fmt.Fprintln(os.Stderr, ui.Sanitize(err.Error()))
 		os.Exit(1)
 	}
 }

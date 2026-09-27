@@ -739,9 +739,12 @@ func (m *Model) openContactFormFor(c mail.Contact, acct string) {
 }
 
 // set stores a field value on the form.
+// set stores a field value on the form. Prefilled values come from server
+// contact data, and the form's fields render as a styled input widget the
+// render boundary cannot strip later — so the strip happens here (D-3).
 func (f *contactFormState) set(i int, v string) {
 	if i >= 0 && i < len(f.fields) {
-		f.fields[i].SetValue(v)
+		f.fields[i].SetValue(ui.Sanitize(v))
 	}
 }
 

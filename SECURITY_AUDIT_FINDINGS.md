@@ -13,6 +13,20 @@ plus one approved live probe against the Stalwart test account (D-7).
 **Result: 21 probe failures → 17 distinct findings (4 High, 9 Medium, 4 Low),
 12 controls verified holding, 0 data races, 0 reachable vulnerabilities.**
 
+**Remediation status (2026-09-27, follow-up session):** **F-1, F-2, F-3,
+F-4 and the grouped F-9 are fixed.** Credentials are now origin-gated to
+the configured `ServerURL`/`SessionURL` origins and cross-origin redirects
+are refused (F-1); session URLs on another origin are fetched without
+credentials and logged as such (F-2); a single `Sanitize` choke point
+(`mailtext.Sanitize`, applied at `ui.Render`/`RenderWizard`, the smoke
+dumps, the stderr printer, `HTMLToText`, and the styled-widget sources)
+strips C0/C1/format controls (F-3); attachment names are validated,
+`uniquePath` is bounded and `O_EXCL`-guarded, and download-URL names are
+reduced to a safe final segment (F-4, F-9). Appendix tests A.1 (C-1, C-2,
+S-1, S-2), A.2, A.3 (W-1/W-2), A.4 (`FuzzUniquePath`), A.5, A.6, A.10 (T-5),
+A.12 and A.13 ship in the repo and pass. **F-5…F-8, F-10…F-17 remain
+open**, to be worked in the §5 order.
+
 ---
 
 ## 1. Findings at a glance

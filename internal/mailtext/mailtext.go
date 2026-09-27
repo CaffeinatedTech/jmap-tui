@@ -84,7 +84,9 @@ type converter struct {
 // elements become line breaks, <br> becomes a newline, list items gain
 // bullets, and hyperlinks are unwrapped with numbered footnote URLs
 // appended at the end. Malformed input is handled leniently by the parser;
-// conversion never fails and never touches the network.
+// conversion never fails and never touches the network. The result is run
+// through Sanitize: HTML character references decode to their control
+// characters after parsing (D-3), so the strip happens on the final text.
 func HTMLToText(src string) string {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {
@@ -108,7 +110,7 @@ func HTMLToText(src string) string {
 		}
 		out += strings.TrimRight(foot.String(), "\n")
 	}
-	return out
+	return Sanitize(out)
 }
 
 func (c *converter) walk(n *html.Node, inPre bool, depth int) {

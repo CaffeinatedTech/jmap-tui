@@ -343,7 +343,9 @@ func (m *Model) handleComposePrep(msg composePrepMsg) (tea.Model, tea.Cmd) {
 		c.cc.SetValue(formatAddressList(b.Cc))
 		c.bcc.SetValue(formatAddressList(b.Bcc))
 		c.subject.SetValue(b.Subject)
-		c.body.SetValue(b.Text)
+		// Draft bodies round-trip through the server; strip before the
+		// styled textarea takes them (D-3).
+		c.body.SetValue(ui.Sanitize(b.Text))
 		c.inReplyTo = append([]string(nil), b.InReplyTo...)
 		c.references = append([]string(nil), b.References...)
 		// The server already holds exactly this, so nothing is dirty.
@@ -374,7 +376,10 @@ func (m *Model) fillReply(c *composeState, orig mail.EmailBody, mode composeMode
 		c.cc.SetValue("")
 		c.bcc.SetValue("")
 		c.subject.SetValue(prefixSubject("Fwd:", orig.Subject))
-		c.body.SetValue(forwardBlock(orig) + quoteBlock(orig.Text))
+		// The textarea renders its content with cursor styling, so the
+		// render boundary cannot strip controls from it later: quoted
+		// mail text is stripped here, at the source (D-3).
+		c.body.SetValue(ui.Sanitize(forwardBlock(orig) + quoteBlock(orig.Text)))
 		// A forward carries no threading headers: it starts a new branch.
 		c.inReplyTo, c.references = nil, nil
 		return
@@ -414,7 +419,9 @@ func (m *Model) fillReply(c *composeState, orig mail.EmailBody, mode composeMode
 	c.cc.SetValue(formatAddressList(cc))
 	c.bcc.SetValue("")
 	c.subject.SetValue(prefixSubject("Re:", orig.Subject))
-	c.body.SetValue(attributionLine(orig) + quoteBlock(orig.Text))
+	// Same as the forward path: the composer body bypasses the render
+	// boundary's stripping, so the quote is stripped as it is set (D-3).
+	c.body.SetValue(ui.Sanitize(attributionLine(orig) + quoteBlock(orig.Text)))
 
 	// Threading: inReplyTo names the replied-to Message-ID, references is
 	// its chain extended by it (RFC 8621 §4.1.2.5 — the properties the

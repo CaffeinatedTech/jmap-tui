@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -778,7 +780,7 @@ func (m *Model) saveAttachmentsCmd(dir string) tea.Cmd {
 			if err != nil {
 				return saveResultMsg{err: err}
 			}
-			if err := os.WriteFile(path, data, 0o600); err != nil {
+			if err := writeNewFile(path, data); err != nil {
 				return saveResultMsg{err: err}
 			}
 			names = append(names, a.Name)
@@ -787,21 +789,81 @@ func (m *Model) saveAttachmentsCmd(dir string) tea.Cmd {
 	}
 }
 
-// uniquePath resolves dir/name without ever overwriting: collisions get a
-// numeric suffix (name-1.ext, name-2.ext, …).
+// uniqueTries bounds the collision loop in uniquePath. The loop advances
+// on every iteration and gives up with an error, so no filename — however
+// hostile — can keep it spinning (finding F-4).
+const uniqueTries = 1000
+
+// uniquePath resolves dir/name without ever overwriting and without ever
+// leaving dir. The name comes from the JMAP server and ultimately the
+// sender, so invalid names are rejected outright (finding F-4): "",
+// ".", "..", path separators (either kind — the download-URL side folds
+// Windows separators too), NUL, and anything past one filesystem's
+// 255-byte component limit. Collisions get a numeric suffix (name-1.ext,
+// name-2.ext, …), and every lookup uses os.Lstat with a full
+// errors.Is(err, fs.ErrNotExist) check: a stat failure that is not
+// "does not exist" (EINVAL from a NUL byte, ENAMETOOLONG from an
+// oversized component) returns that error instead of looping forever on a
+// predicate that can never become true (finding F-4's hang).
 func uniquePath(dir, name string) (string, error) {
-	base := filepath.Join(dir, name)
-	if _, err := os.Stat(base); os.IsNotExist(err) {
-		return base, nil
+	if err := validAttachmentName(name); err != nil {
+		return "", err
 	}
+	name = filepath.Base(name)
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for i := 1; ; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
-		if _, err := os.Stat(cand); os.IsNotExist(err) {
-			return cand, nil
+	for i := 0; i <= uniqueTries; i++ {
+		cand := name
+		if i > 0 {
+			cand = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		p := filepath.Join(dir, cand)
+		switch _, err := os.Lstat(p); {
+		case err == nil:
+			continue // occupied — try the next suffix
+		case errors.Is(err, fs.ErrNotExist):
+			return p, nil
+		default:
+			return "", fmt.Errorf("save attachment %q: %w", name, err)
 		}
 	}
+	return "", fmt.Errorf("save attachment %q: no free file name in %s after %d tries", name, dir, uniqueTries)
+}
+
+// validAttachmentName rejects a server-supplied filename that could
+// escape the chosen directory or wedge the save (finding F-4). The upload
+// side applies the same discipline to local names (compose.go); this is
+// its mirror for names travelling the other way.
+func validAttachmentName(name string) error {
+	switch {
+	case name == "" || name == "." || name == "..":
+		return errors.New("attachment has no usable file name")
+	case strings.ContainsAny(name, "/\\\x00"):
+		return fmt.Errorf("attachment name %q contains a path separator or NUL", name)
+	case len(name) > 255:
+		return fmt.Errorf("attachment name is too long (%d bytes, limit 255)", len(name))
+	}
+	return nil
+}
+
+// writeNewFile creates path without ever overwriting or following a
+// symlink (finding F-4): O_EXCL fails if anything already sits at the
+// destination — a raced collision or a pre-planted link — and the mode
+// stays 0600. os.WriteFile would have written straight through the link.
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("save attachment: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return fmt.Errorf("save attachment: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("save attachment: %w", err)
+	}
+	return nil
 }
 
 // downloadsDirFn is the attachment-save default location (FR-E4); a var so

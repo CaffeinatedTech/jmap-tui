@@ -53,8 +53,11 @@ type WizardField struct {
 // compact golden size.
 const wizardBoxW = 58
 
-// RenderWizard draws the wizard centered in the terminal.
+// RenderWizard draws the wizard centered in the terminal. Server-influenced
+// fields (connection errors, mailbox picker labels) are stripped of control
+// characters first — the same render-boundary contract as Render (D-3).
 func RenderWizard(w, h int, th Theme, v WizardView) string {
+	v = sanitizeWizard(v)
 	var body strings.Builder
 	body.WriteString(th.Accent.Render(v.Title))
 	body.WriteString("\n")
