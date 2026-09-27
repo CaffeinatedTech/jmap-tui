@@ -74,6 +74,10 @@ func runSmoke(args []string) error {
 	if serverURL == "" || username == "" {
 		return errors.New("smoke: both --url and --user (or a configured account) are required")
 	}
+	// Config URLs are validated at Load; --url is not (findings F-5, F-6).
+	if err := config.ValidateServerURL(serverURL); err != nil {
+		return fmt.Errorf("smoke: server URL: %w", err)
+	}
 
 	secret, warnings, err := keyring.Password(*accountID, first(*passwordFile, accountPasswordFile(acct)), nil)
 	if err != nil {

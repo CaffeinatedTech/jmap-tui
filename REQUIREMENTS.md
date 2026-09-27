@@ -143,7 +143,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 - **[FR-J1] [M0]** Config: TOML at `${XDG_CONFIG_HOME:-~/.config}/jmap-tui/config.toml`; flags and env override config; config written only by the wizard/user, never rewritten silently by the app. App-managed preferences (remembered in-app choices, e.g. the archive destination per account, the sidebar/switcher account order, FR-C5) live in `prefs.toml` next to the config file; the app owns and writes only that file, never `config.toml`.
 - **[FR-J2] [M0]** **Secrets live in the OS keyring** (service `jmap-tui`, entry per account). Config may reference `password_keyring = true`. Explicit opt-in escape hatch: `password_file` (chmod 600, warned) or `JMAP_TUI_PASSWORD_<ACCOUNT>` env var for headless use. Plaintext-in-config is a config-error, not a fallback.
-- **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors.
+- **[FR-J3] [M0]** Config schema validated at startup with precise, actionable errors. Server and session URLs are part of that validation (SECURITY_AUDIT_PLAN D-1/D-2, findings F-5/F-6): absolute `https://` — `http://` only for loopback hosts (`127.0.0.1`, `::1`, `localhost`, for mockjmap/local dev), never `user:pass@` userinfo — and the same policy is enforced on the `--url`/`smoke --url` flag paths and in the wizard, so credentials can never travel cleartext or embed in a URL.
 
 ## FR-K — Reliability, safety, observability
 

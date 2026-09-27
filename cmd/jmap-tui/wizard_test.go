@@ -135,7 +135,15 @@ func TestNormalizeServerURL(t *testing.T) {
 			t.Errorf("normalizeServerURL(%q) = %q, %v; want %q", c.in, got, err, c.want)
 		}
 	}
-	for _, bad := range []string{"", "   ", "ftp://mail.example.com", "://"} {
+	for _, bad := range []string{
+		"",
+		"   ",
+		"ftp://mail.example.com",
+		"://",
+		"http://mail.example.com",            // F-5: non-loopback cleartext
+		"http://192.168.1.10:8080",           // F-5: cleartext LAN host
+		"https://user:pass@mail.example.com", // F-6: userinfo
+	} {
 		if _, err := normalizeServerURL(bad); err == nil {
 			t.Errorf("normalizeServerURL(%q) accepted; want an error", bad)
 		}

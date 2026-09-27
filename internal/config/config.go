@@ -228,6 +228,14 @@ func validateAccount(id string, a *Account) error {
 	if a.Username == "" {
 		return fmt.Errorf("[accounts.%s] username is required, e.g. username = %q", id, "you@example.com")
 	}
+	if err := ValidateServerURL(a.URL); err != nil {
+		return fmt.Errorf("[accounts.%s] url: %w", id, err)
+	}
+	if a.SessionURL != "" {
+		if err := ValidateServerURL(a.SessionURL); err != nil {
+			return fmt.Errorf("[accounts.%s] session_url: %w", id, err)
+		}
+	}
 	if a.PasswordFile == "" && a.PasswordKeyring != nil && !*a.PasswordKeyring {
 		return fmt.Errorf("[accounts.%s] password_keyring = false but no password_file is configured; no password source remains", id)
 	}

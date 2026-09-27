@@ -913,7 +913,9 @@ func localPart(username string) string {
 }
 
 // normalizeServerURL accepts what users type ("mail.example.com") and
-// returns what the client needs (scheme + host, no trailing slash).
+// returns what the client needs (scheme + host, no trailing slash). The
+// D-1/D-2 URL policy applies on top: https for anything non-loopback,
+// no user:pass@ userinfo (findings F-5, F-6).
 func normalizeServerURL(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -923,12 +925,8 @@ func normalizeServerURL(raw string) (string, error) {
 		s = "https://" + s
 	}
 	s = strings.TrimRight(s, "/")
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("server URL %q is not a valid URL (e.g. https://mail.example.com)", raw)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("server URL must be http or https, got %q", u.Scheme)
+	if err := config.ValidateServerURL(s); err != nil {
+		return "", err
 	}
 	return s, nil
 }

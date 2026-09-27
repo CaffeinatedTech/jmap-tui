@@ -314,6 +314,13 @@ func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool
 		out.Err = errors.New("both --url and --user (or a configured account) are required")
 		return out
 	}
+	// Config URLs are validated at Load; --url is not, so the merged
+	// value gets the D-1/D-2 policy check before any credential is sent
+	// (findings F-5, F-6).
+	if err := config.ValidateServerURL(serverURL); err != nil {
+		out.Err = fmt.Errorf("server URL: %w", err)
+		return out
+	}
 
 	secret, warnings, err := keyring.Password(id, pwFile, nil)
 	if err != nil {

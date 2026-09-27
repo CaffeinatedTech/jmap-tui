@@ -1,17 +1,19 @@
 package jmapclient
 
 // Audit regression tests for SECURITY_AUDIT_FINDINGS.md findings F-1, F-2,
-// F-7, F-8 and F-9, plus the F-3 live probe: appendix A.1 and A.12 copied
-// verbatim (minus the probes for findings whose remediations have not
-// landed yet). Every test encodes the SECURE behavior decided in
+// F-6, F-7, F-8 and F-9, plus the F-3 live probe: appendix A.1 and A.12
+// copied verbatim (minus the probes for findings whose remediations have
+// not landed yet). Every test encodes the SECURE behavior decided in
 // SECURITY_AUDIT_PLAN.md §6 (D-2, D-3, D-4, D-7); a FAIL means the finding
 // is back.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,6 +157,31 @@ func TestAuditC2CrossOriginSessionURLDropsAuth(t *testing.T) {
 	}
 }
 
+// --- C-4: URL userinfo must never reach the debug log ---
+// (Shipped with F-6: logging strips userinfo; config rejects userinfo
+// outright so a credentialed URL is doubly unreachable.)
+
+func TestAuditC4UserInfoNotLogged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(sessionBody("http://127.0.0.1:1/api"))
+	}))
+	defer srv.Close()
+
+	// Graft userinfo onto the loopback URL: http://user:SECRET123@127.0.0.1:port
+	withUserinfo := strings.Replace(srv.URL, "http://", "http://user:SECRET123@", 1)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	c := New(Options{ServerURL: withUserinfo, Username: "tester", Password: "pw", Logger: logger})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = c.Connect(ctx)
+
+	if strings.Contains(buf.String(), "SECRET123") {
+		t.Errorf("FINDING C-4: debug log contains URL userinfo (password in config URL leaks to the log file); log line: %s", firstLine(&buf))
+	}
+}
+
 // --- S-2: hostile blob names must not traverse the download path ---
 
 func TestAuditS2DownloadPathStaysInTemplate(t *testing.T) {
@@ -289,6 +316,14 @@ func newJSONRequest() *jmap.Request {
 func truncateForLog(s string) string {
 	if len(s) > 24 {
 		return s[:24] + "…"
+	}
+	return s
+}
+
+func firstLine(buf *bytes.Buffer) string {
+	s := buf.String()
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
 	}
 	return s
 }
