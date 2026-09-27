@@ -87,3 +87,25 @@ func keepRune(r rune) bool {
 	}
 	return true
 }
+
+// Truncate sanitizes s (Sanitize) and cuts it to at most max bytes of
+// output, the "…" tail included when a cut happened — so the result is
+// always valid UTF-8 and control-free whatever the input was. This is
+// the fix for finding F-13: the status/error truncators used to slice at
+// a fixed byte offset, splitting runes and shipping invalid UTF-8 into
+// the status line. Text already within the budget comes back unchanged
+// apart from sanitization; a max below the tail's own length yields "".
+func Truncate(s string, max int) string {
+	s = Sanitize(s)
+	if len(s) <= max {
+		return s
+	}
+	n := max - len("…")
+	if n < 0 {
+		return ""
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
+}

@@ -548,13 +548,18 @@ func formatAddressList(addrs []mail.Address) string {
 
 // parseAddressList reads a comma/newline separated field into addresses.
 // "Name <email>", "email", and "Name email" all parse; anything without an
-// "@" is dropped rather than sent malformed (FR-H1).
+// "@" is dropped rather than sent malformed (FR-H1). CR splits fields
+// like LF and any field carrying a NUL byte is dropped whole, so no
+// control can reach a Name or Email (finding F-16 — hygiene only; the
+// compose payload is JSON, never client-built MIME headers).
 func parseAddressList(s string) []mail.Address {
-	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == ';' })
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == ';'
+	})
 	out := make([]mail.Address, 0, len(fields))
 	for _, f := range fields {
 		f = strings.TrimSpace(f)
-		if f == "" {
+		if f == "" || strings.ContainsRune(f, 0) {
 			continue
 		}
 		if i := strings.Index(f, "<"); i > 0 && strings.HasSuffix(f, ">") {

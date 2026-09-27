@@ -1,9 +1,10 @@
 package app
 
-// Audit probes for SECURITY_AUDIT_PLAN.md §4.5 W-1/W-2 (attachment path
-// traversal and the uniquePath hang). FAIL = finding F-4 confirmed.
-// Copied verbatim from SECURITY_AUDIT_FINDINGS.md appendix A.3/A.4/A.13
-// (the T-7 truncation probes belong to F-13 and land with its fix).
+// Audit probes for SECURITY_AUDIT_FINDINGS.md appendix A.3/A.4/A.13:
+// W-1/W-2 (attachment path traversal and the uniquePath hang — finding
+// F-4), T-7 (error truncation must never split a UTF-8 rune — finding
+// F-13) and I-6 (parsed addresses must carry no CR/LF/NUL — finding
+// F-16), plus the fuzz targets. FAIL = the finding is confirmed.
 
 import (
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // uniquePath must keep server-controlled attachment names inside the
@@ -134,4 +136,59 @@ func TestAuditW2UniquePathNulHangs(t *testing.T) {
 		t.Errorf("FINDING W-2: uniquePath hangs forever on a NUL byte in the attachment name (os.Stat EINVAL never satisfies IsNotExist)")
 	}
 	_ = filepath.Join
+}
+
+// T-7: truncateErr must never split a UTF-8 rune (appendix A.3).
+func TestAuditT7TruncateErrUTF8Safe(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"multibyte-long", errors.New(strings.Repeat("é", 200))},
+		{"multibyte-boundary", errors.New(strings.Repeat("あ", 60))},
+		{"emoji", errors.New(strings.Repeat("🙂", 60))},
+	}
+	for _, tc := range cases {
+		got := truncateErr("op", tc.err)
+		if !utf8.ValidString(got) {
+			t.Errorf("FINDING T-7: truncateErr(%s) split a rune → invalid UTF-8", tc.name)
+		}
+	}
+}
+
+// I-6: parsed address fields must never carry CR/LF (header injection raw
+// material) into the JMAP payload (appendix A.3).
+func TestAuditI6AddressListStripsCRLF(t *testing.T) {
+	cases := []struct{ name, in string }{
+		{"lf-injection", "evil@x.test\nBcc: victim@x.test"},
+		{"crlf-injection", "evil@x.test\r\nBcc: victim@x.test"},
+		{"cr-only", "evil@x.test\rBcc: victim@x.test"},
+		{"newline-in-name", "\"Evil\r\nName\" <evil@x.test>"},
+		{"nul", "evil@x.test\x00more"},
+	}
+	for _, tc := range cases {
+		for _, a := range parseAddressList(tc.in) {
+			if strings.ContainsAny(a.Name, "\r\n\x00") {
+				t.Errorf("FINDING I-6: %s: address Name carries control %q", tc.name, a.Name)
+			}
+			if strings.ContainsAny(a.Email, "\r\n\x00") {
+				t.Errorf("FINDING I-6: %s: address Email carries control %q", tc.name, a.Email)
+			}
+		}
+	}
+}
+
+// FuzzTruncateErr: truncation must preserve valid UTF-8 for arbitrary
+// input (appendix A.4, finding F-13).
+func FuzzTruncateErr(f *testing.F) {
+	f.Add("plain error")
+	f.Add(strings.Repeat("é", 200))
+	f.Add(strings.Repeat("🙂", 100))
+	f.Add("short")
+	f.Fuzz(func(t *testing.T, msg string) {
+		got := truncateErr("op", errors.New(msg))
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncateErr split a rune for input %q → %q", clipInput(msg), clipInput(got))
+		}
+	})
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
+	"github.com/CaffeinatedTech/jmap-tui/internal/mailtext"
 )
 
 // Mode is the live-sync connection state shown in the status line
@@ -690,13 +691,10 @@ func (e *Engine) markSynced() {
 	e.mu.Unlock()
 }
 
-// truncateStatusErr keeps status-line errors to one bounded line.
+// truncateStatusErr keeps status-line errors to one bounded line:
+// 80 bytes, rune-safe and control-free (finding F-13).
 func truncateStatusErr(err error) string {
-	s := err.Error()
-	if len(s) > 80 {
-		s = s[:77] + "…"
-	}
-	return s
+	return mailtext.Truncate(err.Error(), 80)
 }
 
 // ClearFresh drops the new-mail highlight (app timer / cursor movement).

@@ -2,10 +2,11 @@ package main
 
 // Audit probes for SECURITY_AUDIT_FINDINGS.md appendix A.10: T-5 (smoke's
 // stdout dump must be escape-free even when the server is hostile —
-// finding F-3) and W-4 (the crash report must not follow a planted
-// symlink in a shared tmp dir — finding F-10). FAIL = finding confirmed.
-// T-6's stderr probe is inspection-only — main() strips at the print
-// site; W-7 (log mode) lands with F-14.
+// finding F-3), W-4 (the crash report must not follow a planted symlink
+// in a shared tmp dir — finding F-10) and W-7 (a pre-existing
+// world-writable log file must be tightened to 0600 — finding F-14).
+// FAIL = finding confirmed. T-6's stderr probe is inspection-only —
+// main() strips at the print site.
 
 import (
 	"os"
@@ -78,6 +79,33 @@ func TestAuditW4CrashReportDoesNotFollowSymlink(t *testing.T) {
 	data, _ := os.ReadFile(victim)
 	if string(data) != "precious" {
 		t.Errorf("FINDING W-4: crash report followed the symlink; victim now holds %q", snippet(string(data)))
+	}
+}
+
+// W-7: setupLogger must not leave a pre-existing world-writable log file
+// (appendix A.10).
+func TestAuditW7LogFileTightenedTo0600(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "debug.log")
+	if err := os.WriteFile(path, []byte("old\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	_, stop, err := setupLogger(path, "debug")
+	if err != nil {
+		t.Fatalf("setupLogger: %v", err)
+	}
+	if stop != nil {
+		stop()
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		t.Errorf("FINDING W-7: debug log keeps pre-existing mode %o; want 0600", fi.Mode().Perm())
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
+	"github.com/CaffeinatedTech/jmap-tui/internal/mailtext"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
 )
@@ -526,12 +527,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// truncateErr renders an operation failure for the status line: bounded
+// to 120 bytes, rune-safe and control-free via mailtext.Truncate
+// (finding F-13 — the old byte slice split multi-byte runes).
 func truncateErr(op string, err error) string {
-	s := err.Error()
-	if len(s) > 120 {
-		s = s[:117] + "…"
-	}
-	return op + ": " + s
+	return op + ": " + mailtext.Truncate(err.Error(), 120)
 }
 
 // applySnapshot stores one account's snapshot and schedules follow-up

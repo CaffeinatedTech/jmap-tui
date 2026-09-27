@@ -433,6 +433,13 @@ func setupLogger(path, level string) (*slog.Logger, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("log file: %w", err)
 	}
+	// A pre-existing file keeps whatever mode it was created with —
+	// tighten it so a world-writable debug log can't survive (finding
+	// F-14; mirrors keyring.WritePasswordFile).
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("log file: %w", err)
+	}
 	var lvl slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
