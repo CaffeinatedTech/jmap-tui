@@ -180,7 +180,7 @@ account or edit this one.
 
 1. Press <kbd>n</kbd> for a new message, <kbd>r</kbd> to reply, <kbd>a</kbd> reply-all, <kbd>f</kbd> forward. Replies quote the original for you.
 2. <kbd>Tab</kbd> moves between To / Cc / Bcc / Subject / body. In an address field, contacts are suggested as you type — <kbd>Enter</kbd> accepts one. <kbd>ctrl+g</kbd> opens a full contact search.
-3. <kbd>ctrl+a</kbd> attaches a file (a directory browser: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>Enter</kbd> attaches), <kbd>ctrl+i</kbd> picks the From address if your account has several.
+3. <kbd>ctrl+a</kbd> attaches a file (a directory browser: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>Enter</kbd> attaches), <kbd>ctrl+i</kbd> picks the From address — every identity on every connected account, so you can change which account sends mid-draft.
 4. <kbd>ctrl+s</kbd> sends — and then you have **five seconds to change your mind**: <kbd>ctrl+z</kbd> cancels the send and puts you back in the composer with everything intact.
 5. Drafts save themselves to the *server* every couple of seconds, so you can quit and pick the draft up later (it's in your Drafts folder).
 
@@ -263,7 +263,7 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>Enter</kbd> | Next field (in the body: new line) |
 | type | Contact suggestions pop up under address fields — <kbd>↑</kbd>/<kbd>↓</kbd> choose, <kbd>Enter</kbd> inserts |
 | <kbd>ctrl+g</kbd> | Full contact search inside an address field |
-| <kbd>ctrl+i</kbd> | Choose the From identity (if the account has more than one) |
+| <kbd>ctrl+i</kbd> | Choose the From address — one row per identity on every connected account (named for its account); picking another account's moves the draft, and its attachments, there |
 | <kbd>ctrl+a</kbd> | Attach a file — <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>l</kbd> open, <kbd>h</kbd> back, <kbd>Enter</kbd> attach, <kbd>Esc</kbd> cancel |
 | <kbd>ctrl+x</kbd> | Remove the highlighted attachment |
 | <kbd>ctrl+s</kbd> | Send — then <kbd>ctrl+z</kbd> within 5s to cancel |

@@ -388,6 +388,20 @@ func goldenFrames() []frame {
 			}
 			return st
 		}},
+		{name: "compose-sendas", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Compose = composeFixture(st.Theme)
+			// The From picker spans every connected account (issue #6).
+			st.Picker = &PickerView{
+				Title: "Send as",
+				Items: []PickerItem{
+					{ID: "work\x00id-1", Label: "Sam <sam@work.test> · Work"},
+					{ID: "personal\x00id-1", Label: "Sam <sam@home.test> · Personal"},
+				},
+				Sel: 1,
+			}
+			return st
+		}},
 		// M6 multi-account: switcher modal (FR-A4) and the unified inbox
 		// with owner colour bars + per-account footer status (FR-A5, FR-I5).
 		{name: "switcher", w: 120, h: 40, st: func() State {

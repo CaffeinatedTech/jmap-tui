@@ -16,9 +16,10 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
 
-// composeTestModel is the reader model with the Drafts and Sent roles
-// compose needs, timers shrunk, and a short undo window.
-func composeTestModel(t *testing.T) (*Model, *mockjmap.Server) {
+// shrinkComposeTimers shortens the composer's timers so a headless pump
+// never waits on wall time (autosave debounce, upload repaint, cursor
+// blink).
+func shrinkComposeTimers(t *testing.T) {
 	t.Helper()
 	oldAuto, oldTick, oldBlink := composeAutosaveDelay, uploadProgressTick, runCursorBlink
 	composeAutosaveDelay = time.Millisecond
@@ -28,6 +29,13 @@ func composeTestModel(t *testing.T) (*Model, *mockjmap.Server) {
 		composeAutosaveDelay, uploadProgressTick = oldAuto, oldTick
 		runCursorBlink = oldBlink
 	})
+}
+
+// composeTestModel is the reader model with the Drafts and Sent roles
+// compose needs, timers shrunk, and a short undo window.
+func composeTestModel(t *testing.T) (*Model, *mockjmap.Server) {
+	t.Helper()
+	shrinkComposeTimers(t)
 
 	m, srv := newTestModelWith(t, []mockjmap.Mailbox{
 		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 2, UnreadEmails: 1},

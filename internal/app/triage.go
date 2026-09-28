@@ -638,8 +638,7 @@ func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 	}
 	m.picker = nil
 	if p.mode == pickerIdentity {
-		m.chooseIdentity(id)
-		return nil
+		return m.chooseIdentity(id)
 	}
 	if p.mode == pickerSort {
 		return m.chooseSort(string(id))

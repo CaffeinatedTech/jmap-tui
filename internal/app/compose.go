@@ -100,13 +100,19 @@ const (
 // composer is closed, which is how the key router knows who owns the
 // keyboard (the picker/filepick/search precedent).
 type composeState struct {
-	mode       composeMode
+	mode composeMode
+	// identity is the From address. identities is the pinned account's
+	// own list — it feeds the reply-all "self" set; sendAs is the
+	// cross-account choice (issue #6), refreshed on the Update side only
+	// so View never locks an engine mid-frame (NFR-1).
 	identity   mail.Identity
 	identities []mail.Identity
+	sendAs     []sendAs
 
-	// acct pins the account this composer writes to: reply/forward take
+	// acct is the account this composer writes to: reply/forward take
 	// the cursor row's owner, a fresh draft takes the active account
-	// (FR-A5 — a unified-row reply never crosses accounts).
+	// (FR-A5 — a unified-row reply starts on the owner), and the From
+	// picker may repoint it at any other connected account (issue #6).
 	acct string
 
 	to, cc, bcc, subject textinput.Model
@@ -203,9 +209,12 @@ type sendDoneMsg struct {
 	err     error
 }
 
-// uploadDoneMsg is one finished attachment upload (FR-H3).
+// uploadDoneMsg is one finished attachment upload (FR-H3). acct is the
+// account the transfer started on: a reply from an account the composer
+// has since left belongs to the old session and is dropped (issue #6).
 type uploadDoneMsg struct {
 	index int
+	acct  string
 	att   mail.Attachment
 	err   error
 }
@@ -241,6 +250,7 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 		mode:       mode,
 		acct:       acct,
 		identities: idents,
+		sendAs:     m.sendAsIdentities(),
 		focus:      ui.ZoneTo,
 	}
 	if len(c.identities) > 0 {
@@ -656,7 +666,11 @@ func (m *Model) composeKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "ctrl+i":
-		if len(c.identities) > 1 {
+		// From and the sending account are one choice: the picker
+		// spans every connected account (issue #6). A send already
+		// being prepared pins the draft to the account it started on.
+		if !c.sending() && !c.closeAfterSave {
+			m.refreshSendAs()
 			m.openIdentityPicker()
 		}
 		return nil
@@ -867,15 +881,22 @@ func (m *Model) saveDraftCmd() tea.Cmd {
 // handleDraftSaved adopts the result of one save.
 func (m *Model) handleDraftSaved(msg draftSavedMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	// Stale only when the save actually named its account and the
+	// composer has since been repointed elsewhere (issue #6); a save
+	// that never said must keep its old defaulting behaviour.
+	c := m.compose
+	stale := msg.acct != "" && c != nil && msg.acct != c.acct
 	if msg.acct == "" {
 		msg.acct = m.activeID
 	}
 	if msg.snap.Version > m.snaps[msg.acct].Version {
 		_, cmd = m.applySnapshot(msg.acct, msg.snap)
 	}
-	c := m.compose
 	if c == nil {
 		return m, cmd
+	}
+	if stale {
+		return m, m.handleStaleDraftSaved(msg, cmd)
 	}
 	if msg.err != nil {
 		// Leave the composer open with the words still in it: a failed
@@ -915,6 +936,23 @@ func (m *Model) handleDraftSaved(msg draftSavedMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.closeComposer(false))
 	}
 	return m, cmd
+}
+
+// handleStaleDraftSaved settles a save that landed on an account the
+// composer has since left (issue #6). The draft it wrote follows the
+// composer — destroyed on that account — and the content is re-armed for
+// the account now pinned. Nothing of the result is adopted: its
+// fingerprint describes bytes the current account does not hold.
+func (m *Model) handleStaleDraftSaved(msg draftSavedMsg, snapCmd tea.Cmd) tea.Cmd {
+	c := m.compose
+	c.saving = false
+	c.savedFP = ""
+	cmds := []tea.Cmd{snapCmd}
+	if msg.err == nil && msg.id != "" {
+		cmds = append(cmds, m.destroyDraftCmd(msg.acct, msg.id))
+	}
+	cmds = append(cmds, m.markDirty())
+	return tea.Batch(cmds...)
 }
 
 // patchDraftAttachments swaps the composer's ready attachment blob ids
@@ -981,8 +1019,12 @@ func (m *Model) startSend() tea.Cmd {
 		c.status = "add at least one recipient"
 		return nil
 	}
-	if len(c.identities) == 0 {
-		c.status = "this account has no sending identity"
+	if c.identity.Email == "" {
+		if m.canPickSendAs() {
+			c.status = "choose a sending identity (ctrl+i)"
+		} else {
+			c.status = "this account has no sending identity"
+		}
 		return nil
 	}
 	c.status = "preparing…"
@@ -1194,16 +1236,26 @@ func (m *Model) closeComposer(destroy bool) tea.Cmd {
 	}
 	m.compose = nil
 	m.attachPick = nil
-	if !destroy || c.draftID == "" {
+	if !destroy {
 		return nil
 	}
-	id := c.draftID
-	acct := c.acct
+	return m.destroyDraftCmd(c.acct, c.draftID)
+}
+
+// destroyDraftCmd removes a server draft so it does not linger in that
+// account's Drafts: the discard path uses it, and so does an account
+// switch — a draft follows the composer to its new account (issue #6).
+func (m *Model) destroyDraftCmd(acct string, id mail.ID) tea.Cmd {
+	if id == "" {
+		return nil
+	}
 	eng, ok := m.engineFor(acct)
-	return func() tea.Msg {
-		if !ok {
+	if !ok {
+		return func() tea.Msg {
 			return errMsg{acct: acct, op: "discard draft", err: fmt.Errorf("account %q is not connected", acct)}
 		}
+	}
+	return func() tea.Msg {
 		if _, err := eng.Triage(m.ctx, sync.TriageSpec{
 			Kind: sync.TriageDestroy,
 			IDs:  []mail.ID{id},
@@ -1299,43 +1351,76 @@ func (m *Model) uploadAttachmentCmd(path string) tea.Cmd {
 		return nil
 	}
 	name := filepath.Base(path)
-	f, err := os.Open(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		c.status = name + ": " + shortErr(err)
+		return nil
+	}
+	if fi.IsDir() {
+		c.status = name + ": not a file"
+		return nil
+	}
+	idx := len(c.atts)
+	c.atts = append(c.atts, composeAttachment{
+		path: path, name: name, size: fi.Size(),
+		state: attUploading,
+	})
+	c.attSel = idx
+	c.status = "uploading " + name
+
+	return tea.Batch(m.uploadProgressCmd(), m.startBlobUpload(idx, c.acct))
+}
+
+// startBlobUpload opens entry i's file and returns the command that
+// streams it to acct's uploadUrl. It runs inside Update — the open is
+// local — so a vanished file is reported the way a failed pick is
+// (FR-H3). The account is captured now: bytes already on the wire must
+// not be rerouted by a switch, and handleUploadDone drops a reply from
+// an account the composer has left (issue #6).
+func (m *Model) startBlobUpload(i int, acct string) tea.Cmd {
+	c := m.compose
+	if c == nil || i < 0 || i >= len(c.atts) {
+		return nil
+	}
+	a := &c.atts[i]
+	f, err := os.Open(a.path)
+	if err != nil {
+		a.state = attFailed
+		a.err = shortErr(err)
+		c.status = a.name + ": " + a.err
 		return nil
 	}
 	fi, err := f.Stat()
 	if err != nil || fi.IsDir() {
 		_ = f.Close()
-		c.status = name + ": not a file"
+		a.state = attFailed
+		a.err = a.name + ": not a file"
+		c.status = a.err
 		return nil
 	}
-	mediaType := mime.TypeByExtension(filepath.Ext(name))
+	mediaType := mime.TypeByExtension(filepath.Ext(a.name))
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
+	name, size := a.name, fi.Size()
+	if a.sent == nil {
+		a.sent = &atomic.Int64{}
+	}
+	sent := a.sent
 	ctx, cancel := context.WithCancel(m.ctx)
-	idx := len(c.atts)
-	sent := &atomic.Int64{}
-	c.atts = append(c.atts, composeAttachment{
-		path: path, name: name, size: fi.Size(),
-		state: attUploading, sent: sent, cancel: cancel,
-	})
-	c.attSel = idx
-	c.status = "uploading " + name
-
-	return tea.Batch(m.uploadProgressCmd(), func() tea.Msg {
+	a.cancel = cancel
+	return func() tea.Msg {
 		defer func() { _ = f.Close() }()
-		prov := m.hub.Provider(c.acct)
+		prov := m.hub.Provider(acct)
 		if prov == nil {
 			cancel()
-			return uploadDoneMsg{index: idx, err: fmt.Errorf("account %q is not connected", c.acct)}
+			return uploadDoneMsg{index: i, acct: acct, err: fmt.Errorf("account %q is not connected", acct)}
 		}
-		att, err := prov.UploadBlob(ctx, name, mediaType, fi.Size(),
+		att, err := prov.UploadBlob(ctx, name, mediaType, size,
 			&countingReader{r: f, n: sent})
 		cancel()
-		return uploadDoneMsg{index: idx, att: att, err: err}
-	})
+		return uploadDoneMsg{index: i, acct: acct, att: att, err: err}
+	}
 }
 
 // countingReader reports bytes read so upload progress can render.
@@ -1398,6 +1483,12 @@ func (m *Model) handleUploadDone(msg uploadDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	a := &c.atts[msg.index]
+	if msg.acct != "" && msg.acct != c.acct {
+		// A transfer the composer outlived: its blob belongs to the
+		// account it left, and the entry has been re-staged there
+		// (issue #6). The reply is dropped, not applied.
+		return m, nil
+	}
 	if a.cancel != nil {
 		a.cancel()
 		a.cancel = nil
@@ -1437,26 +1528,101 @@ func (m *Model) removeAttachment() {
 	m.markDirty()
 }
 
-// --- identity picker (FR-H1) ---
+// --- From / sending-account picker (FR-H1, issue #6) ---
 
-// openIdentityPicker lists the account's sendable identities so From can
-// be switched when there is more than one.
+// sendAs is one candidate From address: an identity and the connected
+// account that can send it.
+type sendAs struct {
+	acct    string
+	account string // the account's display name, for qualifying the row
+	ident   mail.Identity
+}
+
+// sendAsIdentities lists every identity every connected account can send
+// from, in sidebar display order (FR-C5). An account with no engine (or
+// no identities) contributes nothing.
+func (m *Model) sendAsIdentities() []sendAs {
+	var out []sendAs
+	for _, a := range m.orderedAccounts() {
+		eng, ok := m.engineFor(a.ID)
+		if !ok {
+			continue
+		}
+		for _, id := range eng.Identities() {
+			out = append(out, sendAs{acct: a.ID, account: a.Name, ident: id})
+		}
+	}
+	return out
+}
+
+// canPickSendAs reports whether ctrl+i has a real choice to offer: more
+// than one identity somewhere, or the one identity another account
+// holds when the composer's own account has none to send with. It reads
+// the cached choice, so the render path can ask without touching an
+// engine (NFR-1).
+func (m *Model) canPickSendAs() bool {
+	c := m.compose
+	if c == nil {
+		return false
+	}
+	n := len(c.sendAs)
+	return n > 1 || (n == 1 && c.identity.Email == "")
+}
+
+// refreshSendAs rebuilds the composer's From choice from the engines.
+// Only ever called from the Update side (opening the composer, ctrl+i,
+// an account switch).
+func (m *Model) refreshSendAs() {
+	if c := m.compose; c != nil {
+		c.sendAs = m.sendAsIdentities()
+	}
+}
+
+// sendAsKey joins an account and an identity into one picker id: JMAP
+// ids are unique per account only (FR-A5), and a picker row carries a
+// single opaque id.
+func sendAsKey(acct string, id mail.ID) mail.ID {
+	return mail.ID(acct + "\x00" + string(id))
+}
+
+// splitSendAsKey reads back a key written by sendAsKey.
+func splitSendAsKey(key mail.ID) (acct string, id mail.ID, ok bool) {
+	s := string(key)
+	i := strings.IndexByte(s, 0)
+	if i <= 0 || i == len(s)-1 {
+		return "", "", false
+	}
+	return s[:i], mail.ID(s[i+1:]), true
+}
+
+// openIdentityPicker lists every From the composer could switch to —
+// the identities of every connected account, each row qualified by its
+// account whenever more than one account is on offer (issue #6).
 func (m *Model) openIdentityPicker() {
 	c := m.compose
-	if c == nil || len(c.identities) == 0 {
+	if c == nil || !m.canPickSendAs() {
 		return
 	}
-	items := make([]ui.PickerItem, 0, len(c.identities))
-	for _, id := range c.identities {
-		label := id.Email
-		if id.Name != "" {
-			label = fmt.Sprintf("%s <%s>", id.Name, id.Email)
+	cands := c.sendAs
+	multi := false
+	for _, s := range cands[1:] {
+		if s.acct != cands[0].acct {
+			multi = true
+			break
 		}
-		items = append(items, ui.PickerItem{ID: id.ID, Label: label})
 	}
+	items := make([]ui.PickerItem, 0, len(cands))
 	sel := 0
-	for i, id := range c.identities {
-		if id.ID == c.identity.ID {
+	for i, s := range cands {
+		label := s.ident.Email
+		if s.ident.Name != "" {
+			label = fmt.Sprintf("%s <%s>", s.ident.Name, s.ident.Email)
+		}
+		if multi {
+			label += " · " + s.account
+		}
+		items = append(items, ui.PickerItem{ID: sendAsKey(s.acct, s.ident.ID), Label: label})
+		if s.acct == c.acct && s.ident.ID == c.identity.ID {
 			sel = i
 		}
 	}
@@ -1464,20 +1630,109 @@ func (m *Model) openIdentityPicker() {
 	m.pickerRefilter()
 }
 
-// chooseIdentity applies the picked From identity (FR-H1).
-func (m *Model) chooseIdentity(id mail.ID) {
+// chooseIdentity applies the picked From identity (FR-H1). The pick may
+// name another account's identity, in which case the composer moves with
+// it: From and the sending account are one choice (issue #6).
+func (m *Model) chooseIdentity(key mail.ID) tea.Cmd {
 	c := m.compose
 	if c == nil {
-		return
+		return nil
 	}
-	for _, ident := range c.identities {
-		if ident.ID == id {
-			c.identity = ident
-			c.status = "sending as " + ident.Email
-			m.markDirty()
-			return
+	acct, identID, ok := splitSendAsKey(key)
+	if !ok {
+		return nil
+	}
+	eng, ok := m.engineFor(acct)
+	if !ok {
+		c.status = "account " + m.accountName(acct) + " is not connected"
+		return nil
+	}
+	var ident mail.Identity
+	found := false
+	for _, candidate := range eng.Identities() {
+		if candidate.ID == identID {
+			ident, found = candidate, true
+			break
 		}
 	}
+	if !found {
+		return nil
+	}
+	if acct == c.acct {
+		c.identity = ident
+		c.status = "sending as " + ident.Email
+		return m.markDirty()
+	}
+	return m.repointCompose(acct, ident)
+}
+
+// repointCompose moves an open composer onto another account without
+// losing its content (issue #6). The server draft follows it — destroyed
+// on the account left, recreated by the next save — and attachments,
+// whose blob ids belong to the old session, go up again to the new one.
+func (m *Model) repointCompose(acct string, ident mail.Identity) tea.Cmd {
+	c := m.compose
+	if c == nil || acct == c.acct {
+		return nil
+	}
+	old := c.acct
+	c.acct = acct
+	c.identity = ident
+	c.identities = nil
+	if eng, ok := m.engineFor(acct); ok {
+		c.identities = eng.Identities()
+	}
+	// Nothing is saved on the account being entered: drop the old
+	// fingerprint so the next markDirty arms a save that creates the
+	// draft there.
+	c.savedFP = ""
+	c.dirty = true
+	c.status = "sending as " + ident.Email
+	m.refreshSendAs()
+
+	var cmds []tea.Cmd
+	if c.draftID != "" {
+		cmds = append(cmds, m.destroyDraftCmd(old, c.draftID))
+		c.draftID = ""
+	}
+	cmds = append(cmds, m.reuploadAttachments(old))
+	cmds = append(cmds, m.markDirty())
+	return tea.Batch(cmds...)
+}
+
+// reuploadAttachments restarts every attachment on the account now
+// pinned (issue #6): an uploaded blob id belongs to one account's
+// session, so the bytes have to go up again. An entry that came from
+// Drafts has no file on disk and cannot follow — it is failed with the
+// reason rather than left ready to break every later save. One progress
+// tick covers the batch; it re-arms itself while transfers run.
+func (m *Model) reuploadAttachments(from string) tea.Cmd {
+	c := m.compose
+	if c == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for i := range c.atts {
+		a := &c.atts[i]
+		if a.cancel != nil {
+			a.cancel()
+			a.cancel = nil
+		}
+		a.att = mail.Attachment{}
+		a.sent = nil
+		a.err = ""
+		if a.path == "" {
+			a.state = attFailed
+			a.err = "attached on " + m.accountName(from)
+			continue
+		}
+		a.state = attUploading
+		cmds = append(cmds, m.startBlobUpload(i, c.acct))
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(append([]tea.Cmd{m.uploadProgressCmd()}, cmds...)...)
 }
 
 // --- rendering ---
@@ -1493,7 +1748,12 @@ func (m *Model) composeView() *ui.ComposeView {
 	if c.identity.Email != "" {
 		from = addressHeader(mail.Address{Name: c.identity.Name, Email: c.identity.Email})
 	}
-	if len(c.identities) > 1 {
+	if len(m.accounts) > 1 {
+		// The footer chrome is hidden behind the composer, so this row
+		// is the only place the sending account shows (issue #6).
+		from += " · " + m.accountName(c.acct)
+	}
+	if m.canPickSendAs() {
 		from += "  (ctrl+i)"
 	}
 
@@ -1569,7 +1829,7 @@ func (m *Model) composeHint() string {
 	if m.uploading() {
 		parts = append(parts, "esc cancel upload")
 	}
-	if len(m.compose.identities) > 1 {
+	if m.canPickSendAs() {
 		parts = append(parts, "ctrl+i identity")
 	}
 	th := m.opts.Theme
