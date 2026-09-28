@@ -240,6 +240,112 @@ func TestUnifiedInterleavesByReceivedAt(t *testing.T) {
 	}
 }
 
+// TestUnifiedBodyLoadsForEveryRow: the merged cursor walks every row and
+// each one shows its own body. The unified cursor is app-side (PLAN
+// §4.3) — no engine cursor tracks it — so a body load must not be gated
+// on one (issue #1: each account's first row read, every row below it
+// stuck on "loading message…").
+func TestUnifiedBodyLoadsForEveryRow(t *testing.T) {
+	m, _, _ := newTwoAccountModel(t)
+	loadAll(t, m)
+
+	_, cmd := m.handleKey(key("i"))
+	pump(t, m, cmd)
+	if !m.unified {
+		t.Fatal("unified view did not open")
+	}
+
+	// Merged by receivedAt: work e2 10:00, personal e2 09:00,
+	// work e1 08:00, personal e1 07:00.
+	want := []string{"newest work body", "newest personal body", "oldest work body", "oldest personal body"}
+	if len(m.snap.Rows) != len(want) {
+		t.Fatalf("merged rows = %d, want %d: %+v", len(m.snap.Rows), len(want), m.snap.Rows)
+	}
+	for i, text := range want {
+		if i > 0 {
+			_, cmd = m.handleKey(key("j"))
+			// The frame that creates the request must say so — no blank
+			// preview while the fetch is set up.
+			if !m.snap.BodyLoading {
+				t.Errorf("row %d: issuing frame does not claim to be loading", i)
+			}
+			pump(t, m, cmd)
+		}
+		acct, row, ok := m.cursorRef()
+		if !ok {
+			t.Fatalf("row %d: no cursor row", i)
+		}
+		if got := m.rowKey(acct, row.ID); m.vpBodyID != got {
+			t.Errorf("row %d: viewport key = %q, want %q", i, m.vpBodyID, got)
+		}
+		if m.snap.BodyLoading {
+			t.Errorf("row %d: preview still claims to be loading", i)
+		}
+		if m.snap.Body == nil || m.snap.Body.ID != row.ID {
+			t.Errorf("row %d: merged snapshot carries no body: %+v", i, m.snap.Body)
+		}
+		if !strings.Contains(m.vp.View(), text) {
+			t.Errorf("row %d: viewport = %q, want %q", i, m.vp.View(), text)
+		}
+		if view := stripANSI(m.View().Content); strings.Contains(view, "loading message") {
+			t.Errorf("row %d: frame still says loading:\n%s", i, view)
+		}
+	}
+}
+
+// TestUnifiedDropsStaleBodyReply: a body that lands for a row the cursor
+// already left must not install under the new one, and must not retire
+// the request the preview is actually waiting on.
+func TestUnifiedDropsStaleBodyReply(t *testing.T) {
+	m, _, _ := newTwoAccountModel(t)
+	loadAll(t, m)
+
+	_, cmd := m.handleKey(key("i"))
+	pump(t, m, cmd)
+	firstKey := m.cursorKey()
+	if m.vpBodyID != firstKey {
+		t.Fatalf("row 0 body not installed: %q, want %q", m.vpBodyID, firstKey)
+	}
+
+	// Moving to row 1 issues its load synchronously (applyUnified runs on
+	// the UI thread), so bodyReq waits on row 1 while row 0 still shows.
+	_, cmd = m.handleKey(key("j"))
+	wantReq := m.cursorKey()
+	if wantReq == firstKey {
+		t.Fatal("cursor did not move")
+	}
+	if m.bodyReq != wantReq {
+		t.Fatalf("in-flight request = %q, want %q", m.bodyReq, wantReq)
+	}
+
+	// A late reply for row 2 — a row the cursor is no longer on — arrives.
+	staleKey := m.rowKey("work", "e1")
+	if _, staleCmd := m.Update(bodyMsg{key: staleKey, body: &sync.BodyView{ID: "e1", Text: "stale body"}}); staleCmd != nil {
+		t.Fatalf("stale reply returned a command: %v", staleCmd)
+	}
+	if m.bodyReq != wantReq {
+		t.Fatalf("stale reply retired the current request: %q, want %q", m.bodyReq, wantReq)
+	}
+	if m.vpBodyID != firstKey {
+		t.Fatalf("stale reply installed under the cursor: %q, want %q", m.vpBodyID, firstKey)
+	}
+	if strings.Contains(m.vp.View(), "stale body") {
+		t.Fatalf("stale body reached the viewport: %q", m.vp.View())
+	}
+
+	// The pending request still installs row 1 when it lands.
+	pump(t, m, cmd)
+	if m.vpBodyID != wantReq {
+		t.Fatalf("row 1 not installed: %q, want %q", m.vpBodyID, wantReq)
+	}
+	if !strings.Contains(m.vp.View(), "newest personal body") {
+		t.Fatalf("row 1 viewport = %q, want newest personal body", m.vp.View())
+	}
+	if m.snap.BodyLoading {
+		t.Fatal("row 1 preview still claims to be loading")
+	}
+}
+
 // TestUnifiedEnterExitRestoresMailboxes: entering forces every account to
 // its inbox (the merge needs it); leaving restores where each account was
 // (unified is a view, FR-A5).

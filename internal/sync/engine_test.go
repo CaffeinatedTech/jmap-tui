@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,81 @@ func TestEngineBodyLRUAndHTMLConversion(t *testing.T) {
 	}
 	if snap := e.Snapshot(); snap.Body == nil || snap.Body.ID != id || snap.Body.Text != "Rich text" {
 		t.Fatalf("cached body wrong: %+v", snap.Body)
+	}
+}
+
+// bodyCounter counts body fetches through the provider seam.
+type bodyCounter struct {
+	mail.Provider
+	fetches int
+}
+
+func (c *bodyCounter) FetchBody(ctx context.Context, id mail.ID) (mail.EmailBody, error) {
+	c.fetches++
+	return c.Provider.FetchBody(ctx, id)
+}
+
+// TestEngineBodyForIgnoresCursor: BodyFor answers for any row, because
+// the unified cursor is app-side (PLAN §4.3) and no engine cursor ever
+// tracks the row the merged view is showing — gating it on one is what
+// wedged unified previews behind "loading message…" (issue #1). It never
+// disturbs the snapshot's cursor-scoped Body, and a repeat call is served
+// from the LRU instead of the network.
+func TestEngineBodyForIgnoresCursor(t *testing.T) {
+	counter := &bodyCounter{}
+	e, _ := newTestEngineWithProvider(t, nil, func(p mail.Provider) mail.Provider {
+		counter.Provider = p
+		return counter
+	})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-inbox"); err != nil {
+		t.Fatalf("OpenMailbox: %v", err)
+	}
+	rows := e.Snapshot().Rows
+	if len(rows) < 2 {
+		t.Fatalf("need 2 rows, got %d", len(rows))
+	}
+
+	// The cursor sits on rows[0]; fetch rows[1] anyway.
+	bv, err := e.BodyFor(ctx, rows[1].ID)
+	if err != nil {
+		t.Fatalf("BodyFor: %v", err)
+	}
+	if bv == nil || bv.ID != rows[1].ID || !strings.Contains(bv.Text, "The reply body") {
+		t.Fatalf("BodyFor = %+v, want %s's body", bv, rows[1].ID)
+	}
+	snap := e.Snapshot()
+	if snap.Body != nil {
+		t.Fatalf("BodyFor published a cursor body: %+v", snap.Body)
+	}
+	if snap.BodyLoading {
+		t.Fatal("BodyFor claimed a load in progress")
+	}
+
+	// Second call is a cache hit: no further round trip.
+	if _, err := e.BodyFor(ctx, rows[1].ID); err != nil {
+		t.Fatalf("BodyFor(cached): %v", err)
+	}
+	if counter.fetches != 1 {
+		t.Fatalf("fetches = %d, want 1 (second call from the LRU)", counter.fetches)
+	}
+
+	// LoadBody still behaves: it installs only for the cursor row.
+	if err := e.LoadBody(ctx, rows[1].ID); err != nil {
+		t.Fatalf("LoadBody(non-cursor): %v", err)
+	}
+	if got := e.Snapshot().Body; got != nil {
+		t.Fatalf("LoadBody installed a non-cursor body: %+v", got)
+	}
+	if err := e.LoadBody(ctx, e.CursorID()); err != nil {
+		t.Fatalf("LoadBody(cursor): %v", err)
+	}
+	if got := e.Snapshot().Body; got == nil || got.ID != e.CursorID() {
+		t.Fatalf("cursor body missing: %+v", got)
+	}
+	if counter.fetches != 2 {
+		t.Fatalf("fetches = %d, want 2 (cursor row is a fresh fetch)", counter.fetches)
 	}
 }
 

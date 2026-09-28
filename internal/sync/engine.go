@@ -951,15 +951,10 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if id == "" {
 		return nil
 	}
-	// The LRU has no lock of its own: every get/put rides the engine
-	// mutex, so two overlapping loads on one engine can't collide on it.
-	e.mu.Lock()
-	text, body, ok := e.bodies.get(id)
-	e.mu.Unlock()
-	if ok {
+	if bv, ok := e.cachedBody(id); ok {
 		e.mu.Lock()
 		e.bodyLoading = ""
-		e.setBodyLocked(id, text, body.Attachments)
+		e.setBodyLocked(id, bv.Text, bv.Attachments)
 		e.mu.Unlock()
 		return nil
 	}
@@ -969,7 +964,7 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	e.publishLocked()
 	e.mu.Unlock()
 
-	body, err := e.p.FetchBody(ctx, id)
+	bv, err := e.fetchBody(ctx, id)
 	if err != nil {
 		e.mu.Lock()
 		e.bodyLoading = ""
@@ -978,18 +973,59 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 		return err
 	}
 
-	text = body.Text
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.bodyLoading = ""
+	e.setBodyLocked(id, bv.Text, bv.Attachments)
+	return nil
+}
+
+// BodyFor returns the body for id from the LRU or the server, with no
+// cursor gate and no publish: the unified view's cursor is app-side (PLAN
+// §4.3), so the engine has no idea which row the caller wants — the
+// caller keys the request itself and tracks its own in-flight state. The
+// fetch still lands in the LRU (NFR-2), so a revisit costs no round trip.
+func (e *Engine) BodyFor(ctx context.Context, id mail.ID) (*BodyView, error) {
+	if id == "" {
+		return nil, nil
+	}
+	if bv, ok := e.cachedBody(id); ok {
+		return bv, nil
+	}
+	return e.fetchBody(ctx, id)
+}
+
+// cachedBody returns the body view for id out of the LRU, marking it
+// recently used. The cache has no lock of its own: every get/put rides
+// the engine mutex, so overlapping loads on one engine can't collide on
+// it (and no lock is held across a render).
+func (e *Engine) cachedBody(id mail.ID) (*BodyView, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	text, body, ok := e.bodies.get(id)
+	if !ok {
+		return nil, false
+	}
+	return &BodyView{ID: id, Text: text, Attachments: body.Attachments}, true
+}
+
+// fetchBody fetches id from the server, converts HTML to text (FR-E2) and
+// caches the result (NFR-2). No lock is held across the network call.
+func (e *Engine) fetchBody(ctx context.Context, id mail.ID) (*BodyView, error) {
+	body, err := e.p.FetchBody(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	text := body.Text
 	if text == "" && body.HTML != "" {
 		text = mailtext.HTMLToText(body.HTML)
 	}
 	body.Text = text
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.bodies.put(id, text, body)
-	e.bodyLoading = ""
-	e.setBodyLocked(id, text, body.Attachments)
-	return nil
+	e.mu.Unlock()
+	return &BodyView{ID: id, Text: text, Attachments: body.Attachments}, nil
 }
 
 // setBodyLocked installs the body view when id still matches the cursor.

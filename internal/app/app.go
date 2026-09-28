@@ -91,6 +91,8 @@ type Model struct {
 	uCursorID   mail.ID                  // unified cursor id; "" = top
 	cursorOwner string                   // account owning the unified cursor row
 	bodyReq     mail.ID                  // in-flight unified body load (row key)
+	uBodyKey    mail.ID                  // row key uBody was fetched for
+	uBody       *sync.BodyView           // unified cursor row's body (FR-A5)
 	prevBox     map[string]mail.ID       // unified enter/exit mailbox restore
 	switcher    *switchState             // non-nil while the switcher is open
 
@@ -257,10 +259,22 @@ type snapMsg struct {
 	live bool
 }
 
-// errMsg carries a failed engine operation (acct empty ⇒ active).
+// bodyMsg carries a body fetched under the row key the request was made
+// with. Unified requests are keyed (account + id) because the merged
+// cursor is app-side: a reply for a row the cursor already left must be
+// dropped, not installed under the new one.
+type bodyMsg struct {
+	key  mail.ID
+	body *sync.BodyView
+}
+
+// errMsg carries a failed engine operation (acct empty ⇒ active). key is
+// the row key of a unified body load — the only op whose retry bookkeeping
+// is per-row — and empty everywhere else.
 type errMsg struct {
 	acct string
 	op   string
+	key  mail.ID
 	err  error
 }
 
@@ -413,11 +427,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case bodyMsg:
+		if m.bodyReq != msg.key {
+			// The cursor moved on (or unified closed) while the fetch ran;
+			// the engine cached it, so a revisit costs no round trip.
+			return m, nil
+		}
+		m.bodyReq = ""
+		if msg.body == nil {
+			return m, nil
+		}
+		m.uBodyKey, m.uBody = msg.key, msg.body
+		if m.vpBodyID != msg.key {
+			m.vp.SetContent(msg.body.Text)
+			m.vp.GotoTop()
+			m.vpBodyID = msg.key
+		}
+		// Rebuild the merged snapshot so this very frame carries the body
+		// (attachment strip, FR-E4) and stops claiming to be loading it.
+		return m.applyUnified()
+
 	case errMsg:
 		acct := m.resolve(msg.acct)
-		if msg.op == "load-body" {
+		if msg.op == "load-body" && m.bodyReq == msg.key {
 			// A failed body load must re-issue on the next rebuild, not
-			// wedge the unified preview behind its request key.
+			// wedge the unified preview behind its request key. Only the
+			// request the preview waits on may clear it: a stale row's
+			// failure must not retire the current one (key "" matches the
+			// single-account path, which never sets bodyReq).
 			m.bodyReq = ""
 		}
 		if errors.Is(msg.err, sync.ErrNoUnread) {
@@ -738,17 +775,22 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 	}
 
 	// Body of the cursor row loads from its owning account (FR-A5) and
-	// renders under the account-qualified key. bodyReq tracks the
-	// in-flight load: the owner's BodyLoading flag describes its own
-	// cursor, not ours, so the app does not trust it here.
+	// renders under the account-qualified key. It is fetched by key
+	// (Engine.BodyFor) and kept on the model: no engine cursor moves in
+	// unified (PLAN §4.3), so an engine's own Body/BodyLoading describe
+	// its inbox rows, never the merged cursor. bodyReq is the in-flight
+	// request, so a snapshot rebuild cannot re-issue it every frame.
 	if acct, row, ok := m.cursorRef(); ok {
 		key := m.rowKey(acct, row.ID)
-		owner := m.snaps[acct]
 		switch {
 		case key == m.vpBodyID:
-			// already showing it
-		case owner.Body != nil && owner.Body.ID == row.ID:
-			m.vp.SetContent(owner.Body.Text)
+			// Already showing it. Retire a request made for another row,
+			// or its late reply would install under this cursor.
+			m.bodyReq = ""
+		case m.uBody != nil && m.uBodyKey == key:
+			// Cached by an earlier visit: show it now and drop the
+			// in-flight request so its reply cannot reset the scroll.
+			m.vp.SetContent(m.uBody.Text)
 			m.vp.GotoTop()
 			m.vpBodyID = key
 			m.bodyReq = ""
@@ -922,14 +964,22 @@ func (m *Model) mergeUnified() sync.Snapshot {
 		m.cursorOwner = merged[out.Cursor].Account
 	}
 
-	// The cursor row's body, when its owner already has it.
+	// The cursor row's body: the merged view owns it in unified — no
+	// engine cursor moves (PLAN §4.3), so no engine snapshot can describe
+	// the merged cursor. The app's installed body rides the snapshot under
+	// the cursor's row key, which is what the attachment strip and
+	// save-attachment (FR-E4) read.
 	if len(merged) > 0 {
 		r := merged[out.Cursor]
-		if owner, ok := m.snaps[r.Account]; ok && owner.Body != nil && owner.Body.ID == r.ID {
-			out.Body = owner.Body
-		}
 		key := m.rowKey(r.Account, r.ID)
-		out.BodyLoading = m.bodyReq == key
+		if m.uBody != nil && m.uBodyKey == key {
+			out.Body = m.uBody
+		}
+		// Waiting on this row's body when it is neither displayed nor
+		// cached: a request is in flight, or the body block below is
+		// about to issue one — so the frame that creates the request says
+		// "loading" instead of blanking until the next rebuild.
+		out.BodyLoading = key != m.vpBodyID && (m.uBody == nil || m.uBodyKey != key)
 	}
 	return out
 }
@@ -1026,17 +1076,32 @@ func (m *Model) loadBody(id mail.ID) tea.Cmd { return m.loadBodyOn(m.activeID, i
 
 // loadBodyOn loads a message body from one account. In unified view the
 // in-flight request is tracked by qualified key so the rebuild does not
-// re-issue it every snapshot.
+// re-issue it every snapshot, and the body is fetched by key rather than
+// through the engine's cursor-scoped LoadBody: no engine cursor moves in
+// unified (PLAN §4.3), so that gate drops every row past the owner's own
+// first — the "loading message…" wedge in issue #1.
 func (m *Model) loadBodyOn(acct string, id mail.ID) tea.Cmd {
-	if m.unified {
-		m.bodyReq = m.rowKey(acct, id)
+	if !m.unified {
+		return m.opOn(acct, "load-body", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
+			if err := eng.LoadBody(ctx, id); err != nil {
+				return sync.Snapshot{}, err
+			}
+			return eng.Snapshot(), nil
+		})
 	}
-	return m.opOn(acct, "load-body", func(ctx context.Context, eng *sync.Engine) (sync.Snapshot, error) {
-		if err := eng.LoadBody(ctx, id); err != nil {
-			return sync.Snapshot{}, err
+	k := m.rowKey(acct, id)
+	m.bodyReq = k
+	eng, ok := m.engineFor(acct)
+	return func() tea.Msg {
+		if !ok {
+			return errMsg{acct: acct, op: "load-body", key: k, err: fmt.Errorf("account %q is not connected", acct)}
 		}
-		return eng.Snapshot(), nil
-	})
+		body, err := eng.BodyFor(m.ctx, id)
+		if err != nil {
+			return errMsg{acct: acct, op: "load-body", key: k, err: err}
+		}
+		return bodyMsg{key: k, body: body}
+	}
 }
 
 // handleKey routes a keypress through the keymap for the focused pane.
