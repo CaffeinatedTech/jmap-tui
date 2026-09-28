@@ -232,8 +232,8 @@ func newWizardModel(opts wizardOptions, cfg *config.Config) *wizardModel {
 
 // wizardInputs builds the four form fields — their slots are fixed
 // (0 server URL, 1 email, 2 secret, 3 the cosmetic account name) so
-// beginEdit/startTest/buildAccount address them directly; which slots are
-// visible is wizardModel.visible's job (FR-I8, FR-A7).
+// beginEdit and startTest address them directly; which slots are visible
+// is wizardModel.visible's job (FR-I8, FR-A7).
 func wizardInputs() [4]textinput.Model {
 	mk := func(placeholder string) textinput.Model {
 		in := textinput.New()
@@ -313,8 +313,8 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Nothing found: reveal the field the message is asking for,
 			// focused, so the next thing typed is the URL (FR-A7). The
-			// discovery attempt itself is named in the error above the
-			// hint — both halves (DNS and HTTP) tried, both reported.
+			// error carries discovery's own report — both attempts, DNS
+			// and HTTP — and then the way out.
 			m.err = msg.err.Error() + " — enter the server URL"
 			m.step = wizForm
 			m.revealURL()
