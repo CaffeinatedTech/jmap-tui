@@ -44,6 +44,7 @@ or on the roadmap.
 - Compose, reply, reply-all, forward — with attachments, drafts that live on the server, and a send delay you can cancel
 - Contacts, unified across accounts, with autocomplete in the composer
 - Multi-account with an instant switcher and a unified inbox
+- Add an account from your email address alone — the JMAP server is discovered for you
 - Credentials in your OS keyring, never on disk
 - Rebind any key, pick your layout, dark or light
 
@@ -122,15 +123,21 @@ through four short screens:
 
 ```text
 Add an account                       1 of 4 · details
-Server URL     https://mail.example.com    (or https://api.fastmail.com)
-Username       you@example.com
-Password       ••••••••••••••             → saved to your OS keyring, never to disk
-Account name   Work                        (defaults to your username)
+Email          you@example.com       the server is found from this address
+Password       ••••••••••••••        → saved to your OS keyring, never to disk
+Account name   Work                  (defaults to your username)
 
-2 of 4 · connection        tests the login and lists your mailboxes
-3 of 4 · opening mailbox   picks the folder that opens first (Inbox is fine)
-4 of 4 · save              writes the config — you're done
+2 of 4 · finding server     DNS _jmap._tcp, then https://<domain>
+2 of 4 · connection         tests the login and lists your mailboxes
+3 of 4 · opening mailbox    picks the folder that opens first (Inbox is fine)
+4 of 4 · save               writes the config — you're done
 ```
+
+There is no Server URL to type: from your **email address** the wizard
+discovers the JMAP server (the `_jmap._tcp` DNS record first, then the
+domain itself — RFC 8620), verifies it with one anonymous request, and
+fills the field in. When it can't find one, the **Server URL** field
+appears for you to fill in; <kbd>ctrl+u</kbd> reveals it at any time.
 
 Use an **app password** (Stalwart: any credential your admin gives you; the
 usual rule) — not your real login password. **Fastmail is the exception:** its
@@ -373,6 +380,7 @@ choices back to defaults.
 
 | Symptom | Fix |
 |---|---|
+| "couldn't find a JMAP server" in the wizard | Your address's domain published nothing to discover: publish a `_jmap._tcp.<domain>` SRV record pointing at your JMAP host, or just fill in the **Server URL** field the wizard reveals (<kbd>ctrl+u</kbd> shows it any time). |
 | "connection failed" in the wizard | Check the server URL (it should be the JMAP URL — `https://api.fastmail.com` for Fastmail) and that you're using an **app password** — or on Fastmail an **API token** (the wizard probes and saves `auth = "bearer"`) — not your login password. |
 | No OS keyring (SSH session, minimal container) | The wizard offers a `password_file` fallback — a chmod-600 file holding the app password. |
 | Folders look stale | The status bar shows `live`, `polling`, or `connecting…`. `polling` means push dropped and it's falling back — it recovers on its own. |
