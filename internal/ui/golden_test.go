@@ -263,6 +263,7 @@ func goldenFrames() []frame {
 			st := mk(true)()
 			st.HelpOpen = true
 			st.HelpSec = testKeyMap.Help(PaneList)
+			st.Version = "0.1.0" // FR-I11: version line in the overlay
 			return st
 		}},
 		// M4 search (FR-F1..F3) and full-screen view (FR-E5).

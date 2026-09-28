@@ -120,6 +120,7 @@ func runTUISession(args []string) (manage bool, cfgPath string, retErr error) {
 		Prefs:     prefs,
 		PrefsPath: prefsPath,
 		UndoDelay: resolveUndoDelay(cfg),
+		Version:   version,
 	})
 	program := tea.NewProgram(m, tea.WithContext(m.Ctx()))
 

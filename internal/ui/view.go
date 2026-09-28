@@ -77,6 +77,10 @@ type State struct {
 	// HelpSec is the generated binding list for the overlay (FR-I4).
 	HelpSec HelpSection
 
+	// Version is the build version rendered as the help overlay's last
+	// line (FR-I11); empty hides it.
+	Version string
+
 	// Err flashes a non-fatal error line under the header.
 	Err string
 

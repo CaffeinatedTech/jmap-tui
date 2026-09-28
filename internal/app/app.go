@@ -44,6 +44,10 @@ type Options struct {
 	// UndoDelay is how long Send holds the submission before it reaches
 	// the server (FR-H5); 5s when zero, negative submits immediately.
 	UndoDelay time.Duration
+
+	// Version is the build version shown as the help overlay's last
+	// line (FR-I11); empty hides the line.
+	Version string
 }
 
 // AccountOpt is one account to enroll (M6): its identity for the
@@ -1478,6 +1482,7 @@ func (m *Model) paneHeights() (int, int, int) {
 func (m *Model) uiState() ui.State {
 	st := ui.State{
 		Theme:          m.opts.Theme,
+		Version:        m.opts.Version,
 		Snap:           m.snap,
 		Focus:          m.focus,
 		SidebarVisible: m.sidebarVisible,

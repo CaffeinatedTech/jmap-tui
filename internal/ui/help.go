@@ -7,16 +7,25 @@ import (
 )
 
 // renderHelp draws the help overlay (FR-I4): every binding for the focused
-// pane plus globals, auto-generated from the keymap.
+// pane plus globals, auto-generated from the keymap, with the build version
+// right-aligned on the title row (FR-I11) when one is set and it fits.
 func renderHelp(w, h int, st State) string {
 	th := st.Theme
 	var b strings.Builder
 
-	title := "Help — " + paneTitle(st.Focus)
-	b.WriteString(th.Accent.Render(title))
+	width := min(max(w-4, 20), 78)
+	head := th.Accent.Render("Help — " + paneTitle(st.Focus))
+	if st.Version != "" {
+		ver := "jmap-tui " + st.Version
+		// The version shares the title row so it never costs a binding
+		// row and survives short terminals; too narrow ⇒ left off.
+		if gap := width - lipgloss.Width(head) - lipgloss.Width(ver); gap >= 2 {
+			head += strings.Repeat(" ", gap) + th.Muted.Render(ver)
+		}
+	}
+	b.WriteString(head)
 	b.WriteString("\n\n")
 
-	width := min(max(w-4, 20), 78)
 	for _, bind := range st.HelpSec.Bindings {
 		key := th.HelpKey.Render(pad(bind.Key, 10))
 		desc := th.HelpDesc.Render(bind.Help)
