@@ -9,6 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
@@ -325,6 +327,68 @@ func TestPreviewPagingFromAnyPane(t *testing.T) {
 		t.Fatal("d did not half-page the preview while focused")
 	}
 }
+
+// TestBodyWrapsLongLines: a body line wider than the pane is word-wrapped
+// instead of clipped off-screen (issue #5), and a resize re-wraps from the
+// stored raw text without losing or duplicating content.
+func TestBodyWrapsLongLines(t *testing.T) {
+	m, _ := newTestModel(t)
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		pump(t, m, cmd)
+	}
+	if m.vp.Width() <= 0 {
+		t.Fatalf("viewport width = %d after resize", m.vp.Width())
+	}
+
+	raw := strings.Repeat("word ", 60) + "unbreakablekeyword\nshort line"
+	m.setBody(raw)
+
+	check := func(stage string) {
+		t.Helper()
+		view := m.vp.View()
+		if !strings.Contains(ansi.Strip(view), "short line") {
+			t.Errorf("%s: the short source line is missing", stage)
+		}
+		// Wrapping only moves whitespace: no character may be lost or
+		// duplicated on the way through the viewport.
+		if got, want := squeeze(view), squeeze(raw); got != want {
+			t.Errorf("%s: content changed by wrapping:\n got %q\nwant %q", stage, got, want)
+		}
+		for i, l := range strings.Split(view, "\n") {
+			if w := lipgloss.Width(l); w > m.vp.Width() {
+				t.Errorf("%s: line %d is %d cells wide, viewport is %d", stage, i, w, m.vp.Width())
+			}
+		}
+	}
+	check("initial")
+
+	// Wrapping is word-aware, not a hard cut at the pane edge: the long
+	// word survives whole and the first line ends on a word boundary.
+	lines := strings.Split(m.vp.View(), "\n")
+	if !strings.Contains(strings.Join(lines, " "), "unbreakablekeyword") {
+		t.Error("a word was split across wrapped lines")
+	}
+	if last := strings.TrimSpace(lines[0]); last != "" && !strings.HasSuffix(last, "word") {
+		t.Errorf("first wrapped line ends mid-word: %q", last)
+	}
+
+	// Narrower pane: re-wrapped from raw, still complete and in-bounds.
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if m.vp.Width() >= 40 {
+		t.Fatalf("resize did not narrow the viewport: width = %d", m.vp.Width())
+	}
+	check("narrow")
+
+	// Back to wide: the wrapped lines rejoin, proving the raw text (not
+	// the wrapped form) is what gets re-wrapped.
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	check("wide")
+}
+
+// squeeze collapses all whitespace so two renderings of the same body can
+// be compared regardless of where the wrap landed.
+func squeeze(s string) string { return strings.Join(strings.Fields(ansi.Strip(s)), "") }
 
 // TestAppLivePump proves the latest-wins broadcast reaches the model: a
 // waiter armed before a publish receives it as a live snapshot (FR-B2).

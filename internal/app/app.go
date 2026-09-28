@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
@@ -136,6 +137,11 @@ type Model struct {
 
 	vp       viewport.Model
 	vpBodyID mail.ID
+	// bodyRaw is the last body text exactly as fetched, and bodyWrapW the
+	// pane width it is currently reflowed to in vp: a resize re-wraps from
+	// the raw text instead of refetching or double-wrapping (issue #5).
+	bodyRaw   string
+	bodyWrapW int
 
 	lastCtrlC  time.Time
 	err        string
@@ -254,6 +260,11 @@ func New(opts Options) *Model {
 		// it would strand the reader in a view it cannot leave.
 		unified: opts.Prefs != nil && opts.Prefs.Unified && len(infos) >= 2,
 	}
+	// SoftWrap is the viewport's hard-break fallback: bodies are normally
+	// word-reflowed by applyBody, but anything wider than the pane must
+	// wrap rather than be clipped off-screen (issue #5). Wrap math lives
+	// in the viewport, so scroll/paging/total-height stay correct.
+	m.vp.SoftWrap = true
 	for _, a := range infos {
 		// Every account starts as an unloaded view: the unified merge
 		// excludes Total<0 rows and the switcher shows the skeleton until
@@ -456,7 +467,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.uBodyKey, m.uBody = msg.key, msg.body
 		if m.vpBodyID != msg.key {
-			m.vp.SetContent(msg.body.Text)
+			m.setBody(msg.body.Text)
 			m.vp.GotoTop()
 			m.vpBodyID = msg.key
 		}
@@ -791,13 +802,13 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	}
 	// Fresh body arrived: install and reset scroll (FR-E3).
 	if snap.Body != nil && snap.Body.ID != m.vpBodyID {
-		m.vp.SetContent(snap.Body.Text)
+		m.setBody(snap.Body.Text)
 		m.vp.GotoTop()
 		m.vpBodyID = snap.Body.ID
 	}
 	// Cursor changed under an already-cached body: show it immediately.
 	if id := m.cursorID(); id != "" && id != m.vpBodyID && snap.Body != nil && snap.Body.ID == id {
-		m.vp.SetContent(snap.Body.Text)
+		m.setBody(snap.Body.Text)
 		m.vp.GotoTop()
 		m.vpBodyID = id
 	}
@@ -898,7 +909,7 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 		case m.uBody != nil && m.uBodyKey == key:
 			// Cached by an earlier visit: show it now and drop the
 			// in-flight request so its reply cannot reset the scroll.
-			m.vp.SetContent(m.uBody.Text)
+			m.setBody(m.uBody.Text)
 			m.vp.GotoTop()
 			m.vpBodyID = key
 			m.bodyReq = ""
@@ -1173,7 +1184,7 @@ func (m *Model) openMailboxOn(acct string, id mail.ID) tea.Cmd {
 		}
 		if acct == m.activeID {
 			m.vpBodyID = ""
-			m.vp.SetContent("")
+			m.setBody("")
 		}
 		return eng.Snapshot(), nil
 	})
@@ -1637,6 +1648,33 @@ func (m *Model) resizeViewport() {
 	}
 	m.vp.SetWidth(max(l.PreviewW-1, 1))
 	m.vp.SetHeight(max(l.BodyH, 1))
+	m.applyBody()
+}
+
+// setBody installs a fetched body into the reader viewport, keeping the
+// raw text so later resizes can re-wrap it without refetching (issue #5).
+func (m *Model) setBody(text string) {
+	m.bodyRaw, m.bodyWrapW = text, -1 // -1 forces the re-wrap even at the same width
+	m.applyBody()
+}
+
+// applyBody reflows the stored body into the viewport whenever the pane
+// width changes; wrapping always runs from the raw text, so a resize
+// never double-wraps. Reflow is word-aware and line-preserving:
+// only source lines that exceed the pane split, so quoting, code blocks
+// and the sender's hard breaks survive intact. The viewport's own
+// SoftWrap stays on as the hard-break fallback for any line that slips
+// through wider than the pane.
+func (m *Model) applyBody() {
+	w := m.vp.Width()
+	if w == m.bodyWrapW {
+		return
+	}
+	// ansi.Wrap reflows at spaces (hyphens always count) and only hard-
+	// breaks a run that is itself wider than the pane; limit < 1 (no
+	// layout yet) leaves the text unwrapped.
+	m.vp.SetContent(ansi.Wrap(m.bodyRaw, w, " "))
+	m.bodyWrapW = w
 }
 
 func (m *Model) layout() (ui.Layout, bool) {
