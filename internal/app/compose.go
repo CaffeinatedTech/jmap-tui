@@ -697,9 +697,10 @@ func (m *Model) composeKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// routeComposeInput sends the key to the focused widget and reports
-// whether the widget consumed it.
-func (m *Model) routeComposeInput(msg tea.KeyPressMsg) tea.Cmd {
+// routeComposeInput sends the message to the focused widget and reports
+// the command the widget wants run. It takes tea.Msg, not a key, so the
+// paste delivery (routeText) reuses the same focus routing.
+func (m *Model) routeComposeInput(msg tea.Msg) tea.Cmd {
 	c := m.compose
 	switch c.focus {
 	case ui.ZoneTo:

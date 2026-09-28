@@ -304,6 +304,12 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>?</kbd> | Key help |
 | <kbd>q</kbd> | Quit (<kbd>ctrl+c</kbd> twice cancels in-flight work first) |
 
+Paste works in every field you can type in — the composer, the search bar,
+the contact form, and the account wizard: <kbd>ctrl+v</kbd> reads your system
+clipboard, and your terminal's own paste (<kbd>ctrl+shift+v</kbd> in most)
+arrives as bracketed paste. Neither is a keymap action, so neither is
+rebindable.
+
 Rebinding a key is one line in your config — the action name is what you see in
 <kbd>?</kbd>:
 

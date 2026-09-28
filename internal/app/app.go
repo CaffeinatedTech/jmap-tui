@@ -565,7 +565,84 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attachPick.fp = next
 		cmd = tea.Batch(cmd, c)
 	}
+	// The focused text widget takes the same unhandled messages: paste
+	// arrives as tea.PasteMsg (a terminal's bracketed paste) or as
+	// bubbles' own ctrl+v reply — an unexported message type — and
+	// neither can ever match a case above (issue #4: paste reached no
+	// widget at all). routeText idles while an overlay owns the
+	// keyboard, exactly like key routing, and returns the bookkeeping
+	// (autosave, query debounce) the key path would have run.
+	cmd = tea.Batch(cmd, m.routeText(msg))
 	return m, cmd
+}
+
+// routeText delivers a non-key message to the text widget that owns the
+// keyboard: the composer's focused zone, the search bar or an
+// advanced-search field, the contact form's selected field. Modal
+// overlays keep messages to themselves — the same set handleKey returns
+// through before it reaches a pane — and a widget that is not focused
+// ignores what it is handed, so a stray delivery can't type into the
+// wrong place.
+//
+// It returns the bookkeeping the key path runs beside the widget
+// (dirty-marking, suggestion refresh, query debounce, inline-error
+// clear) and drops the widget's own command: a text widget answers
+// almost any message with a cursor-blink re-arm, and the blink message
+// would arrive back here to be delivered again — a loop the program
+// could run and a test pump never would. Dropping it is also this app's
+// existing behaviour: the old fallback swallowed those messages too.
+func (m *Model) routeText(msg tea.Msg) tea.Cmd {
+	if m.helpOpen || m.switcher != nil || m.picker != nil || m.fp != nil || m.attachPick != nil {
+		return nil
+	}
+	switch {
+	case m.contactForm != nil:
+		f := m.contactForm
+		if f.sel >= len(f.fields) {
+			return nil // on the book row: only ←/→ act
+		}
+		ti, _ := f.fields[f.sel].Update(msg)
+		f.fields[f.sel] = ti
+		f.err = ""
+		return nil
+	case m.compose != nil:
+		c := m.compose
+		if c.discard {
+			return nil // the discard confirmation takes everything (FR-H4)
+		}
+		_ = m.routeComposeInput(msg) // widget command dropped, see above
+		cmd := m.markDirty()         // paste must arm the autosave too
+		if isAddressZone(c.focus) {
+			// A paste of an address is a fresh token: show what matches,
+			// unless an esc dismissal is holding the popup shut.
+			c.suggestOff = false
+			m.updateComposeSuggest()
+		}
+		return cmd
+	case m.search != nil && m.search.adv != nil:
+		av := m.search.adv
+		if av.sel >= len(av.fields) {
+			return nil // the attachment row has no input
+		}
+		ti, _ := av.fields[av.sel].input.Update(msg)
+		av.fields[av.sel].input = ti
+		av.err = ""
+		return nil
+	case m.search != nil && m.search.editing:
+		s := m.search
+		ti, _ := s.input.Update(msg)
+		s.input = ti
+		// Same contract as typing: a changed query schedules the
+		// debounced issue, a message that changed nothing (the widget's
+		// cursor bookkeeping) does not restart the timer.
+		if txt := s.input.Value(); txt != s.spec.Text {
+			s.spec.Text = txt
+			s.seq++
+			return m.debounceSearch(s.seq)
+		}
+		return nil
+	}
+	return nil
 }
 
 // truncateErr renders an operation failure for the status line: bounded

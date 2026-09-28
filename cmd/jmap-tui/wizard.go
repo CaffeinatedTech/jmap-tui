@@ -288,6 +288,27 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
+
+	// Paste reaches a field two ways that no case above can name: a
+	// terminal's bracketed paste arrives as tea.PasteMsg (ctrl+shift+v,
+	// middle-click), and ctrl+v comes back from bubbles' own clipboard
+	// command as an unexported message type. Hand every unhandled message
+	// to the focused field during the form step — it inserts pasted text
+	// and ignores the rest, and a blurred field ignores everything
+	// (issue #4: paste keys used to reach no widget at all). Pasted runes
+	// go through bubbles' sanitizer, which drops control characters the
+	// same way typing does, so paste can put nothing into a field a
+	// keystroke couldn't. Commands the field answers with are dropped: a
+	// message delivery only ever needs the insertion (already done), and
+	// the widget's other answer is its cursor-blink re-arm, whose own
+	// message would arrive right back here — the loop the app's routeText
+	// documents. Keys keep their commands (ctrl+v's clipboard read runs
+	// in formKey as usual).
+	if m.step == wizForm {
+		in := m.inputs[m.focus]
+		in, _ = in.Update(msg)
+		m.inputs[m.focus] = in
+	}
 	return m, nil
 }
 
