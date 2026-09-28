@@ -41,6 +41,14 @@ type Options struct {
 	Prefs     *config.Prefs
 	PrefsPath string
 
+	// ConfigPath is the config.toml this session loaded, and
+	// DefaultAccount its default_account key ("" when unset). The app
+	// keeps that one key on the account at the top of the sidebar order
+	// (FR-C5/FR-J1, issue #3); an empty ConfigPath — flags-only mode,
+	// tests — keeps every write in memory.
+	ConfigPath     string
+	DefaultAccount string
+
 	// UndoDelay is how long Send holds the submission before it reaches
 	// the server (FR-H5); 5s when zero, negative submits immediately.
 	UndoDelay time.Duration
@@ -82,19 +90,23 @@ type Model struct {
 	// prefs.toml). activeID is the account the list/preview/bindings
 	// default to (FR-A4); engine is activeID's engine, cached for the hot
 	// path.
-	accounts    []sync.AccountInfo
-	acctOrder   []string
-	activeID    string
-	engine      *sync.Engine
-	snaps       map[string]sync.Snapshot // last snapshot per account
-	unified     bool                     // merged-inbox view (FR-A5), seeded from prefs
-	uCursorID   mail.ID                  // unified cursor id; "" = top
-	cursorOwner string                   // account owning the unified cursor row
-	bodyReq     mail.ID                  // in-flight unified body load (row key)
-	uBodyKey    mail.ID                  // row key uBody was fetched for
-	uBody       *sync.BodyView           // unified cursor row's body (FR-A5)
-	prevBox     map[string]mail.ID       // unified enter/exit mailbox restore
-	switcher    *switchState             // non-nil while the switcher is open
+	accounts  []sync.AccountInfo
+	acctOrder []string
+	activeID  string
+	// defaultAccount is config.toml's default_account as the session
+	// loaded it ("" when unset); pinTopAccountDefault keeps it on
+	// acctOrder[0] so each reorder writes the key only when it changes.
+	defaultAccount string
+	engine         *sync.Engine
+	snaps          map[string]sync.Snapshot // last snapshot per account
+	unified        bool                     // merged-inbox view (FR-A5), seeded from prefs
+	uCursorID      mail.ID                  // unified cursor id; "" = top
+	cursorOwner    string                   // account owning the unified cursor row
+	bodyReq        mail.ID                  // in-flight unified body load (row key)
+	uBodyKey       mail.ID                  // row key uBody was fetched for
+	uBody          *sync.BodyView           // unified cursor row's body (FR-A5)
+	prevBox        map[string]mail.ID       // unified enter/exit mailbox restore
+	switcher       *switchState             // non-nil while the switcher is open
 
 	snap   sync.Snapshot
 	width  int
@@ -225,6 +237,7 @@ func New(opts Options) *Model {
 		acctOrder:      config.MergeAccountOrder(base, saved),
 		collapsed:      loadCollapsed(opts.Prefs, infos),
 		activeID:       active,
+		defaultAccount: opts.DefaultAccount,
 		engine:         hub.Engine(active),
 		snaps:          map[string]sync.Snapshot{},
 		contactSnaps:   map[string]sync.ContactSnapshot{},

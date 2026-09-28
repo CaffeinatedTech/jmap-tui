@@ -20,9 +20,10 @@ func ValidAccountID(id string) bool { return bareKey.MatchString(id) }
 
 // SaveAccount adds or replaces the [accounts.<id>] table at path. The rest
 // of the file is preserved byte-for-byte — comments, key order, other
-// tables — because config.toml is user-owned and the wizard is its only
-// sanctioned writer (FR-J1, FR-I8); re-running `jmap-tui login` must never
-// destroy what the user wrote by hand.
+// tables — because config.toml is user-owned and the wizard is its writer
+// for account tables (FR-J1, FR-I8); the running app touches only
+// default_account, via SetDefaultAccount. Re-running `jmap-tui login` must
+// never destroy what the user wrote by hand.
 //
 // defaultAccount, when non-empty, pins default_account only if the file has
 // no top-level default_account key yet: an existing choice is never
@@ -70,6 +71,38 @@ func SaveAccount(path, id string, a *Account, defaultAccount string) error {
 	if err != nil {
 		return err
 	}
+	mode := os.FileMode(0o600)
+	if fi, statErr := os.Stat(path); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := writeAtomic(path, []byte(text), mode); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	return nil
+}
+
+// SetDefaultAccount points path's top-level default_account at id. It is
+// the one key the running app may rewrite (FR-J1 amended, issue #3): the
+// top of the sidebar's account order is the startup account, so a reorder
+// that changes the top must leave config.toml saying so. The value is
+// replaced in place (an inline comment on the line survives) or spliced in
+// before the first table header when the key is absent; every other byte
+// of the file is preserved, and the write is atomic at the file's
+// existing mode. A missing file is not an error — flags-only sessions
+// have no config to keep in step. Callers surface failures as a status
+// notice, never a crash.
+func SetDefaultAccount(path, id string) error {
+	if id == "" {
+		return fmt.Errorf("config: empty default account id")
+	}
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("config: read %s: %w", path, err)
+	}
+	text := setDefaultAccountLine(string(existing), id)
 	mode := os.FileMode(0o600)
 	if fi, statErr := os.Stat(path); statErr == nil {
 		mode = fi.Mode().Perm()
@@ -151,26 +184,111 @@ func accountBlock(id string, a *Account) (string, error) {
 // upsertDefaultAccount ensures a top-level default_account key exists when
 // asked for. Top-level keys must precede any table header (TOML), so the
 // line is inserted before the first one, or appended when the file has no
-// tables at all.
+// tables at all. An existing key is never overridden — that is the
+// wizard's pin-only-if-absent rule; SetDefaultAccount is the override.
 func upsertDefaultAccount(text, id string) (string, error) {
-	if id == "" {
+	if id == "" || hasDefaultAccount(text) {
 		return text, nil
 	}
-	if hasDefaultAccount(text) {
-		return text, nil
-	}
+	return setDefaultAccountLine(text, id), nil
+}
+
+// setDefaultAccountLine rewrites or adds the top-level default_account
+// line of text. Only lines before the first table header are considered:
+// a default_account written inside a table is a different key and is
+// left alone.
+func setDefaultAccountLine(text, id string) string {
 	line := fmt.Sprintf("default_account = %q", id)
 	lines := strings.Split(text, "\n")
 	for i, ln := range lines {
 		if strings.HasPrefix(strings.TrimSpace(ln), "[") {
 			out := append(lines[:i:i], line)
-			return strings.Join(append(out, lines[i:]...), "\n"), nil
+			return strings.Join(append(out, lines[i:]...), "\n")
+		}
+		if isDefaultAccountLine(ln) {
+			lines[i] = replaceDefaultValue(ln, id)
+			return strings.Join(lines, "\n")
 		}
 	}
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	return text + line + "\n", nil
+	return text + line + "\n"
+}
+
+// replaceDefaultValue rewrites the value on a default_account line,
+// keeping the key's own spacing and whatever followed the old value —
+// the gap and any inline comment. The candidate must decode back to id,
+// so a value this routine cannot parse cleanly (an exotic comment, a
+// multi-line string) degrades to a plain line rather than emitting
+// something the parser would reject.
+func replaceDefaultValue(ln, id string) string {
+	eq := strings.Index(ln, "=")
+	if eq < 0 {
+		return fmt.Sprintf("default_account = %q", id)
+	}
+	rest := strings.TrimSpace(ln[eq+1:])
+	end := -1 // index where the tail (gap + comment) starts
+	switch {
+	case strings.HasPrefix(rest, `"""`), strings.HasPrefix(rest, `'''`):
+		// Multi-line value: no safe in-place splice.
+	case strings.HasPrefix(rest, `"`):
+		if c := closingQuote(rest, '"'); c >= 0 {
+			end = c + 1
+		}
+	case strings.HasPrefix(rest, "'"):
+		if c := closingQuote(rest, '\''); c >= 0 {
+			end = c + 1
+		}
+	default:
+		// A bare value runs to the first gap or comment.
+		end = strings.IndexAny(rest, " \t#")
+		if end < 0 {
+			end = len(rest)
+		}
+	}
+	if end < 0 {
+		return fmt.Sprintf("default_account = %q", id)
+	}
+	tail := rest[end:]
+	if strings.HasPrefix(tail, "#") {
+		tail = " " + tail
+	}
+	out := strings.TrimRight(ln[:eq+1], " \t") + " " + fmt.Sprintf("%q", id) + tail
+	var probe struct {
+		DefaultAccount string `toml:"default_account"`
+	}
+	if err := toml.Unmarshal([]byte(out), &probe); err != nil || probe.DefaultAccount != id {
+		return fmt.Sprintf("default_account = %q", id)
+	}
+	return out
+}
+
+// closingQuote returns the index of the quote closing the string that
+// starts at s[0], honouring backslash escapes in basic strings, or -1.
+func closingQuote(s string, q byte) int {
+	for i := 1; i < len(s); i++ {
+		if q == '"' && s[i] == '\\' {
+			i++
+			continue
+		}
+		if s[i] == q {
+			return i
+		}
+	}
+	return -1
+}
+
+// isDefaultAccountLine reports whether ln declares default_account (a
+// prefix match must not swallow a longer key such as
+// default_account_x).
+func isDefaultAccountLine(ln string) bool {
+	t := strings.TrimSpace(ln)
+	if !strings.HasPrefix(t, "default_account") {
+		return false
+	}
+	rest := strings.TrimPrefix(t, "default_account")
+	return rest == "" || rest[0] == ' ' || rest[0] == '=' || rest[0] == '\t'
 }
 
 // hasDefaultAccount reports whether a top-level default_account key is
@@ -178,15 +296,11 @@ func upsertDefaultAccount(text, id string) (string, error) {
 // different key).
 func hasDefaultAccount(text string) bool {
 	for _, ln := range strings.Split(text, "\n") {
-		t := strings.TrimSpace(ln)
-		if strings.HasPrefix(t, "[") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "[") {
 			return false
 		}
-		if strings.HasPrefix(t, "default_account") {
-			rest := strings.TrimPrefix(t, "default_account")
-			if rest == "" || rest[0] == ' ' || rest[0] == '=' || rest[0] == '\t' {
-				return true
-			}
+		if isDefaultAccountLine(ln) {
+			return true
 		}
 	}
 	return false

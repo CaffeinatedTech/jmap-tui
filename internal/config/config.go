@@ -1,7 +1,9 @@
 // Package config loads and validates the jmap-tui TOML configuration
-// (FR-J1). The app never rewrites the file; only the user or the M7 wizard
-// writes it. Validation is strict so typos and smuggled secrets fail fast
-// with actionable errors (FR-J3).
+// (FR-J1). The user and the M7 wizard write the file; the running app
+// rewrites exactly one key of it — default_account, kept on the account
+// at the top of the sidebar order (FR-C5, issue #3) — and nothing else.
+// Validation is strict so typos and smuggled secrets fail fast with
+// actionable errors (FR-J3).
 package config
 
 import (

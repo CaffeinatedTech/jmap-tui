@@ -112,15 +112,25 @@ func runTUISession(args []string) (manage bool, cfgPath string, retErr error) {
 		return false, "", fmt.Errorf("prefs: %w", err)
 	}
 
+	// The app keeps config.toml's default_account on the account heading
+	// the sidebar (FR-J1's one app-written key, issue #3); flags-only
+	// mode has no config file, so it stays memory-only.
+	appCfgPath, appDefault := "", ""
+	if cfg != nil {
+		appCfgPath, appDefault = *configPath, cfg.DefaultAccount
+	}
+
 	m := app.New(app.Options{
-		Accounts:  accounts,
-		Keys:      keys,
-		Theme:     ui.NewTheme(pal),
-		AccountID: activeID,
-		Prefs:     prefs,
-		PrefsPath: prefsPath,
-		UndoDelay: resolveUndoDelay(cfg),
-		Version:   version,
+		Accounts:       accounts,
+		Keys:           keys,
+		Theme:          ui.NewTheme(pal),
+		AccountID:      activeID,
+		Prefs:          prefs,
+		PrefsPath:      prefsPath,
+		ConfigPath:     appCfgPath,
+		DefaultAccount: appDefault,
+		UndoDelay:      resolveUndoDelay(cfg),
+		Version:        version,
 	})
 	program := tea.NewProgram(m, tea.WithContext(m.Ctx()))
 

@@ -178,10 +178,11 @@ func loadCollapsed(p *config.Prefs, accounts []sync.AccountInfo) map[string]bool
 }
 
 // saveFoldState serializes the fold set into prefs and writes prefs.toml
-// (FR-C6, FR-J1: the app writes only prefs). Entries for accounts not
-// enrolled are dropped, and a folded mailbox id whose mailbox has left a
-// loaded tree is pruned — a tree not yet loaded keeps its entries. Slices
-// are built fresh so the document never aliases the model's map.
+// (FR-C6, FR-J1: fold state lives in prefs, never config.toml). Entries
+// for accounts not enrolled are dropped, and a folded mailbox id whose
+// mailbox has left a loaded tree is pruned — a tree not yet loaded keeps
+// its entries. Slices are built fresh so the document never aliases the
+// model's map.
 func (m *Model) saveFoldState() {
 	if m.opts.Prefs == nil || m.opts.PrefsPath == "" {
 		return
@@ -356,9 +357,11 @@ func (m *Model) sidebarMove(delta int) {
 
 // moveAccountBlock shifts the whole account block under the cursor one
 // place in the display order (FR-C5) and remembers the arrangement in
-// prefs.toml (FR-J1 — the app never writes config.toml). The cursor rides
-// along for free: its key belongs to the block. The first and last
-// blocks have nowhere to go. Tints are untouched (accountTint).
+// prefs.toml (FR-J1). The cursor rides along for free: its key belongs to
+// the block. The first and last blocks have nowhere to go. Tints are
+// untouched (accountTint). Whatever lands on top becomes the startup
+// account: default_account in config.toml follows the top of the order
+// (pinTopAccountDefault, issue #3).
 func (m *Model) moveAccountBlock(delta int) {
 	rows := m.sidebarRows()
 	i := sidebarIndexOf(rows, m.sidebarKey)
@@ -384,16 +387,37 @@ func (m *Model) moveAccountBlock(delta int) {
 		return
 	}
 	m.acctOrder[pos], m.acctOrder[next] = m.acctOrder[next], m.acctOrder[pos]
-	if m.opts.Prefs == nil {
+	if m.opts.Prefs != nil {
+		m.opts.Prefs.SetAccountOrder(m.acctOrder)
+		if m.opts.PrefsPath != "" {
+			if err := config.SavePrefs(m.opts.PrefsPath, m.opts.Prefs); err != nil {
+				m.err = "account order not remembered: " + err.Error()
+			}
+		}
+	}
+	m.pinTopAccountDefault()
+}
+
+// pinTopAccountDefault keeps config.toml's default_account on whatever
+// account heads the sidebar order (FR-C5/FR-J1, issue #3): the top block
+// is what opens first, so a reorder that changes the top rewrites that
+// one key — surgically, the rest of the file untouched. A session with no
+// config path (flags-only, tests) or an unchanged top never writes; a
+// failed write is a status notice, never a crash, and leaves the tracked
+// default alone so the next move retries.
+func (m *Model) pinTopAccountDefault() {
+	if m.opts.ConfigPath == "" || len(m.acctOrder) == 0 {
 		return
 	}
-	m.opts.Prefs.SetAccountOrder(m.acctOrder)
-	if m.opts.PrefsPath == "" {
+	top := m.acctOrder[0]
+	if top == m.defaultAccount {
 		return
 	}
-	if err := config.SavePrefs(m.opts.PrefsPath, m.opts.Prefs); err != nil {
-		m.err = "account order not remembered: " + err.Error()
+	if err := config.SetDefaultAccount(m.opts.ConfigPath, top); err != nil {
+		m.err = "default account not updated: " + err.Error()
+		return
 	}
+	m.defaultAccount = top
 }
 
 // openSidebarRow acts on the cursor row (FR-C2, FR-C5). A header

@@ -9,10 +9,12 @@ import (
 )
 
 // Prefs is the app-managed preferences document (prefs.toml, next to
-// config.toml). The app owns and writes only this file — the user-authored
-// config.toml is never rewritten by the app (FR-J1). Choices the user makes
-// in-app (remembered archive destination, per account; pane layout; later:
-// style settings) persist here.
+// config.toml). The app owns and writes this file, plus the single
+// default_account key in the user-authored config.toml (SetDefaultAccount,
+// FR-J1 amended for issue #3) — nothing else in config.toml is ever
+// rewritten by the app. Choices the user makes in-app (remembered archive
+// destination, per account; pane layout; later: style settings) persist
+// here.
 type Prefs struct {
 	// Accounts maps a config account id to its remembered choices.
 	Accounts map[string]AccountPrefs `toml:"accounts"`

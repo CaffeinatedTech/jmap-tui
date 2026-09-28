@@ -182,7 +182,7 @@ account or edit this one.
 1. Press <kbd>ctrl+a</kbd> (the app restarts into the wizard) or run `jmap-tui login` — choose **+ add a new account** and go through the same four steps.
 2. <kbd>A</kbd> switches accounts instantly — everything stays warm in the background, so there's no reload.
 3. <kbd>i</kbd> toggles the **unified inbox**: every account's mail, interleaved by date, each row tagged with a colour for its account. Actions always go to the account that owns the message. The choice is remembered — quit while it's on and the next start opens there.
-4. Every account's folder tree sits in one sidebar under its own tinted header. With a folder selected, <kbd>ctrl+↑</kbd>/<kbd>ctrl+↓</kbd> moves that whole account block up or down — the order is remembered.
+4. Every account's folder tree sits in one sidebar under its own tinted header. With a folder selected, <kbd>ctrl+↑</kbd>/<kbd>ctrl+↓</kbd> moves that whole account block up or down — the order is remembered, and the account that ends up on top becomes the default: the one that opens first next time.
 5. One account offline? It shows a quiet error in the status bar and the others keep working.
 
 ### Contacts
@@ -329,7 +329,8 @@ Two small files live in `~/.config/jmap-tui/` (`$XDG_CONFIG_HOME` honoured).
 **`config.toml` — your accounts and settings.** The wizard writes the account
 bits for you; the parts you might edit yourself:
 
-- `default_account` — which account opens first
+- `default_account` — which account opens first (the app keeps it on the
+  account at the top of your sidebar order)
 - `[accounts.<id>]` — server URL, username, display name, optional
   `initial_mailbox` (the folder that opens at startup), `default_identity`
   (the From address the composer defaults to), and `auth` (`"bearer"` for

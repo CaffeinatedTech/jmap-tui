@@ -199,6 +199,110 @@ func TestSaveAccountKeepsFileMode(t *testing.T) {
 	}
 }
 
+// TestSetDefaultAccountReplacesValue: the app's one writable key —
+// default_account is repointed in place (issue #3), with an inline comment
+// on the line and every other byte of the file untouched, at the file's
+// existing mode.
+func TestSetDefaultAccountReplacesValue(t *testing.T) {
+	path := write(t, `# my jmap-tui config
+default_account = "personal"   # startup account
+
+[accounts.personal]
+url = "https://mail.example.com"   # main account
+username = "me@example.com"
+
+# the work account
+[accounts.work]
+url = "https://work.example.com"
+username = "me@work.example.com"
+
+[compose]
+undo_delay = "10s"   # hold sends
+`)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultAccount(path, "work"); err != nil {
+		t.Fatalf("SetDefaultAccount: %v", err)
+	}
+	body := mustRead(t, path)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v\n%s", err, body)
+	}
+	if cfg.DefaultAccount != "work" {
+		t.Errorf("DefaultAccount = %q, want work", cfg.DefaultAccount)
+	}
+	for _, want := range []string{
+		"# my jmap-tui config",
+		`default_account = "work"   # startup account`,
+		"url = \"https://mail.example.com\"   # main account",
+		"# the work account",
+		"undo_delay = \"10s\"   # hold sends",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	if strings.Count(body, "default_account") != 1 {
+		t.Errorf("duplicate default_account:\n%s", body)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Errorf("mode = %o, want the original 644", fi.Mode().Perm())
+	}
+}
+
+// TestSetDefaultAccountInsertsMissingKey: a config with no default_account
+// gains one before the first table header (TOML top-level keys precede
+// tables), comments and layout intact.
+func TestSetDefaultAccountInsertsMissingKey(t *testing.T) {
+	path := write(t, `# comment on top
+[accounts.work]
+url = "https://work.example.com"
+username = "me@work.example.com"
+
+[accounts.personal]
+url = "https://mail.example.com"
+username = "me@example.com"
+`)
+	if err := SetDefaultAccount(path, "personal"); err != nil {
+		t.Fatalf("SetDefaultAccount: %v", err)
+	}
+	body := mustRead(t, path)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v\n%s", err, body)
+	}
+	if cfg.DefaultAccount != "personal" {
+		t.Errorf("DefaultAccount = %q, want personal", cfg.DefaultAccount)
+	}
+	if !strings.Contains(body, "# comment on top\ndefault_account = \"personal\"\n[accounts.work]") {
+		t.Errorf("default_account misplaced:\n%s", body)
+	}
+	if len(cfg.Accounts) != 2 {
+		t.Errorf("accounts = %d, want 2:\n%s", len(cfg.Accounts), body)
+	}
+}
+
+// TestSetDefaultAccountMissingFile: flags-only sessions have no config to
+// keep in step — the write is a no-op, never a fresh file.
+func TestSetDefaultAccountMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SetDefaultAccount(path, "work"); err != nil {
+		t.Fatalf("SetDefaultAccount: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("stat = %v, want the file still absent", err)
+	}
+	if err := SetDefaultAccount(path, ""); err == nil {
+		t.Error("empty id accepted; want an error")
+	}
+}
+
 func TestErrNoAccounts(t *testing.T) {
 	path := write(t, "")
 	_, err := Load(path)

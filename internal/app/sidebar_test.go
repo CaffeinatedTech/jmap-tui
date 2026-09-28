@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -190,6 +191,119 @@ func TestMoveAccountBlockPersistsOrder(t *testing.T) {
 	_, _ = m.handleKey(ctrlUp())
 	if m.acctOrder[0] != "work" || m.acctOrder[1] != "personal" {
 		t.Fatalf("ctrl+up did not restore the order: %v", m.acctOrder)
+	}
+}
+
+// --- issue #3: the top account is the default account ---
+
+// TestMoveAccountBlockTopBecomesDefault: the account heading the sidebar
+// order is the startup account — a reorder that changes the top rewrites
+// default_account in config.toml (FR-C5, FR-J1's one app-written key),
+// and moving it back flips the key again.
+func TestMoveAccountBlockTopBecomesDefault(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`default_account = "work"
+
+[accounts.work]
+url = "https://work.example.com"
+username = "work@example.com"
+
+[accounts.personal]
+url = "https://mail.example.com"
+username = "me@example.com"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _ := newTwoAccountModel(t, func(o *Options) {
+		o.ConfigPath = cfgPath
+		o.DefaultAccount = "work"
+	})
+	loadAll(t, m)
+	m.focus = ui.PaneSidebar
+	if m.acctOrder[0] != "work" {
+		t.Fatalf("setup: order = %v, want work first", m.acctOrder)
+	}
+
+	// Cursor inside personal's block: ctrl+up lifts it over work.
+	m.sidebarKey = sidebarRowKey("personal", "mb-archive")
+	_, cmd := m.handleKey(ctrlUp())
+	if cmd != nil {
+		t.Fatal("reorder produced a command (local state + file writes only)")
+	}
+	if m.acctOrder[0] != "personal" {
+		t.Fatalf("order = %v, want personal first", m.acctOrder)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.DefaultAccount != "personal" {
+		t.Errorf("default_account = %q, want personal (the new top)", got.DefaultAccount)
+	}
+	if m.defaultAccount != "personal" {
+		t.Errorf("tracked default = %q, want personal", m.defaultAccount)
+	}
+	if m.err != "" {
+		t.Errorf("unexpected error: %s", m.err)
+	}
+
+	// Ctrl+down moves it back and the default follows the top again.
+	if _, cmd = m.handleKey(ctrlDown()); cmd != nil {
+		t.Fatal("reorder produced a command (local state + file writes only)")
+	}
+	got, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load after move back: %v", err)
+	}
+	if got.DefaultAccount != "work" {
+		t.Errorf("default_account = %q, want work (back on top)", got.DefaultAccount)
+	}
+	if m.err != "" {
+		t.Errorf("unexpected error: %s", m.err)
+	}
+}
+
+// TestPinTopAccountDefaultOnlyWritesOnChange: an unchanged top leaves the
+// file alone (no needless rewrite of a user-owned file), and a session
+// with no config path — flags-only mode, tests — never even tries.
+func TestPinTopAccountDefaultOnlyWritesOnChange(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("default_account = \"work\"\n\n[accounts.work]\nurl = \"https://work.example.com\"\nusername = \"work@example.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _ := newTwoAccountModel(t, func(o *Options) {
+		o.ConfigPath = cfgPath
+		o.DefaultAccount = "work"
+	})
+	before, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.acctOrder = []string{"work", "personal"}
+	m.defaultAccount = "work"
+	m.pinTopAccountDefault()
+	after, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Error("config.toml rewritten although the top account never changed")
+	}
+	if m.err != "" {
+		t.Errorf("unexpected error: %s", m.err)
+	}
+
+	// No config path: the tracked default must not move either.
+	m.opts.ConfigPath = ""
+	m.acctOrder = []string{"personal", "work"}
+	m.defaultAccount = "work"
+	m.pinTopAccountDefault()
+	if m.defaultAccount != "work" {
+		t.Errorf("tracked default = %q, want it untouched without a config path", m.defaultAccount)
+	}
+	if m.err != "" {
+		t.Errorf("unexpected error: %s", m.err)
 	}
 }
 
