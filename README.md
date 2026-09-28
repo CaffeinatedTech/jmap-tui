@@ -108,7 +108,7 @@ origin, so none is offered. If "HTTPS from GitHub" isn't enough assurance:
 
 > **Status:** pre-release and under active development. It already does
 > everything described on this page, verified against Stalwart and Fastmail;
-> the `v0.1.0` tag is what's left before the v0.1 release.
+> `v0.1.0` was the first release, and new features land between tags.
 
 ## Getting started
 
@@ -442,8 +442,9 @@ race-free test suite.
 
 ## Roadmap
 
-- **v0.1** — release binaries, `v0.1.0` (Fastmail verification done 2026-09-28)
-- **v0.2+** — push subscriptions, Sieve script management, vacation responder, quota display, richer theming
+- **v0.1** — released: `v0.1.0`, the Fastmail verification pass and release binaries (2026-09-28)
+- **v0.2** — server auto-config (add an account from your email address alone), a remembered unified inbox, and the top account opening by default
+- **v0.3+** — push subscriptions, Sieve script management, vacation responder, quota display, richer theming
 - **Never** — a second mail protocol. jmap-tui is JMAP only; the `mail.Provider` seam is an internal boundary, not a roadmap.
 
 ## Development
