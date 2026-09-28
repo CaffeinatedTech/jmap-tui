@@ -31,7 +31,10 @@ The heavy line under a column shows where your keyboard is.
 
 **Works with** any JMAP server — [Stalwart](https://stalwartlabs.xyz/) and
 [Fastmail](https://fastmail.com) are verified today, and Cyrus, Apache
-James, and friends speak the same protocol. (IMAP is on the roadmap.)
+James, and friends speak the same protocol.
+
+**JMAP only.** One protocol, done properly — no other mail protocols, now
+or on the roadmap.
 
 **Everything you'd expect from a mail client, and then some:**
 
@@ -425,7 +428,7 @@ race-free test suite.
 
 - **v0.1** — release binaries, `v0.1.0` (Fastmail verification done 2026-09-28)
 - **v0.2+** — push subscriptions, Sieve script management, vacation responder, quota display, richer theming
-- **Later** — an IMAP provider behind the same interface (will use a local cache; JMAP never does)
+- **Never** — a second mail protocol. jmap-tui is JMAP only; the `mail.Provider` seam is an internal boundary, not a roadmap.
 
 ## Development
 

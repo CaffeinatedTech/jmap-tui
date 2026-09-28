@@ -8,7 +8,7 @@ Status markers: **[M1]…[M8]** = milestone in which the requirement lands (see 
 
 ## 1. Purpose
 
-A terminal email client that treats JMAP as a first-class protocol — not a shim over IMAP. It should feel instant, look beautiful, and never store mail locally when talking to a JMAP server: the server is the source of truth, push events keep the client live, and incremental changes keep it cheap.
+A terminal email client that treats JMAP as a first-class protocol — JMAP only, no second protocol anywhere on the roadmap. It should feel instant, look beautiful, and never store mail locally: the server is the source of truth, push events keep the client live, and incremental changes keep it cheap.
 
 ## 2. Glossary
 
@@ -34,7 +34,7 @@ A terminal email client that treats JMAP as a first-class protocol — not a shi
 
 ## 4. Non-goals (v1)
 
-- IMAP/POP3 support (future; provider interface designed for it, no code)
+- Any mail protocol other than JMAP (the `mail.Provider` interface is an internal seam, not an invitation — scope is JMAP only)
 - Local full-text indexing or offline mode
 - HTML/CSS rendering, images in the preview pane, remote content loading
 - Calendar (JMAP has it; mail + contacts for v1)

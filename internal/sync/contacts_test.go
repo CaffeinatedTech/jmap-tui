@@ -47,7 +47,7 @@ func newContactsEngine(t *testing.T) (*Engine, *mockjmap.Server) {
 }
 
 // plainProvider hides the contacts seam entirely (a provider that never
-// grows contacts, e.g. a future IMAP implementation).
+// implements ContactProvider).
 type plainProvider struct{ mail.Provider }
 
 func TestContactsLoadPublishesOrderedSnapshot(t *testing.T) {

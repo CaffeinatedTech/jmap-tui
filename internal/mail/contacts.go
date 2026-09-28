@@ -175,8 +175,8 @@ type ContactMutationResult struct {
 }
 
 // ContactProvider is the optional contacts seam (RFC 9610, FR-L). It is a
-// separate interface rather than part of Provider: contacts are not mail,
-// a future IMAP provider may never grow them, and the sync layer type-
+// separate interface rather than part of Provider: contacts are not mail
+// and the server may not advertise them at all, so the sync layer type-
 // asserts for it — absence means the feature is hidden, never fatal
 // (FR-A6, FR-L6).
 type ContactProvider interface {

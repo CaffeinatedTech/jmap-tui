@@ -4,7 +4,7 @@ This repo is developed heavily with AI agents. These rules exist so agent-genera
 
 ## Project in one paragraph
 
-jmap-tui is a JMAP-first terminal email client (Go, Bubble Tea/Lipgloss/Bubbles v2). No local message storage for JMAP — live sync via push, everything server-side, rolling-window pagination so huge mailboxes scroll like butter. Multi-account from day one. IMAP is a future provider behind the `mail.Provider` interface — **never write IMAP code, it's out of scope until the plan says otherwise.**
+jmap-tui is a JMAP-only terminal email client (Go, Bubble Tea/Lipgloss/Bubbles v2). No local message storage — live sync via push, everything server-side, rolling-window pagination so huge mailboxes scroll like butter. Multi-account from day one. **Never write code for another mail protocol: scope is JMAP only, permanently — `mail.Provider` is an internal seam, not a roadmap.**
 
 Authoritative docs: **REQUIREMENTS.md** = scope (source of truth), **PLAN.md** = architecture/milestones/designs, README.md = user-facing. If code and docs disagree, flag it and fix the docs or the code — don't let them drift.
 

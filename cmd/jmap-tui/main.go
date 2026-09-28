@@ -1,4 +1,4 @@
-// Command jmap-tui is a JMAP-first terminal email client. The default
+// Command jmap-tui is a JMAP-only terminal email client. The default
 // command runs the interactive reader (M1) — first run opens the account
 // wizard (M7); `login` re-runs that wizard, `smoke` proves the connection
 // path (M0).
@@ -57,7 +57,7 @@ func run(args []string) error {
 }
 
 func usage() {
-	fmt.Print(`jmap-tui — a JMAP-first terminal email client
+	fmt.Print(`jmap-tui — a JMAP-only terminal email client
 
 Usage:
   jmap-tui                 run the interactive reader (M1); first run opens the wizard

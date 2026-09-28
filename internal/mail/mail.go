@@ -1,7 +1,7 @@
-// Package mail defines the provider-agnostic mail domain types and the
-// Provider interface that separates the application from any specific
-// protocol client. This is the swap seam: a future IMAP provider implements
-// the same interface, and nothing above the sync layer knows JMAP exists.
+// Package mail defines the mail domain types and the Provider interface that
+// separates the application from the protocol client. This is the swap seam:
+// nothing above the sync layer talks to a protocol client directly, so the
+// wire layer (and its test double) can change without touching the app.
 package mail
 
 import (
@@ -54,7 +54,7 @@ type Address struct {
 	Email string
 }
 
-// Keywords is a presence set of IMAP-style flags ($seen, $flagged, …).
+// Keywords is a presence set of JMAP keywords ($seen, $flagged, …).
 type Keywords map[string]struct{}
 
 // Has reports whether the named keyword is present.
