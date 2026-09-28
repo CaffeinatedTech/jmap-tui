@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
+	"github.com/CaffeinatedTech/jmap-tui/internal/discover"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/keyring"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
@@ -41,6 +42,12 @@ const (
 // the wizard can persist it as the account's `auth` key (FR-A2).
 // Tests inject a fake; production uses realFetch.
 type fetchFunc func(ctx context.Context, serverURL, username, password string) ([]ui.PickerItem, string, error)
+
+// discoverFunc finds the JMAP server for an email address (FR-A7): the
+// candidate base URL and, when the session document answered from another
+// origin, the endpoint to persist as `session_url`. Tests inject a fake;
+// production uses realDiscover.
+type discoverFunc func(ctx context.Context, email string) (url, sessionURL string, err error)
 
 // storeFunc persists the secret and reports how it was stored (FR-I8).
 // useFile selects the FR-J2 password-file fallback after the keyring is
@@ -68,9 +75,11 @@ type wizardOptions struct {
 	// Timeout bounds the connection test.
 	Timeout time.Duration
 
-	// Fetch/Store are the testable seams (nil → real network/keyring).
-	Fetch fetchFunc
-	Store storeFunc
+	// Fetch/Store/Discover are the testable seams (nil → real network/
+	// keyring).
+	Fetch    fetchFunc
+	Store    storeFunc
+	Discover discoverFunc
 }
 
 // wizardResult is what a completed wizard wrote (FR-I8).
@@ -91,6 +100,16 @@ type wizTestedMsg struct {
 	items []ui.PickerItem
 	auth  string // scheme that worked (FR-A2); see fetchFunc
 	err   error
+}
+
+// wizDiscoveredMsg carries one discovery attempt, stamped with the seq it
+// was issued under so a superseded result is dropped (same discipline as
+// wizTestedMsg).
+type wizDiscoveredMsg struct {
+	seq        int
+	url        string
+	sessionURL string
+	err        error
 }
 
 type wizSavedMsg struct {
@@ -119,6 +138,13 @@ type wizardModel struct {
 	focus  int
 	spin   spinner.Model
 
+	// showURL and visible govern the Server URL slot (FR-A7): hidden in
+	// add mode until discovery fails or the user presses ctrl+u, always
+	// shown on an edit. visible is the tab order — the revealed slot 0
+	// rides last, so nothing the user already typed moves.
+	showURL bool
+	visible []int
+
 	// seq stamps every async job; results from a superseded job are
 	// dropped (same discipline as the window manager's request ids).
 	seq int
@@ -139,8 +165,16 @@ type wizardModel struct {
 	status       string
 	err          string
 	testing      bool
+	discovering  bool
 	saving       bool
 	secretFailed bool
+
+	// discoverDomain is the domain being probed, shown while discovery
+	// runs; sessionURL/discovered carry discovery's answer into the saved
+	// account (a cross-origin session document becomes session_url).
+	discoverDomain string
+	sessionURL     string
+	discovered     bool
 
 	// editID is the account being modified ("" = adding); editAcct is its
 	// config as loaded, so hand-written fields (session_url,
@@ -160,9 +194,10 @@ type wizardModel struct {
 	res        *wizardResult
 	cancelled  bool
 
-	fetch   fetchFunc
-	store   storeFunc
-	resolve resolveSecretFunc
+	fetch    fetchFunc
+	store    storeFunc
+	resolve  resolveSecretFunc
+	discover discoverFunc
 }
 
 // newWizardModel builds the wizard against an existing (possibly empty)
@@ -172,13 +207,15 @@ func newWizardModel(opts wizardOptions, cfg *config.Config) *wizardModel {
 		cfg = &config.Config{}
 	}
 	m := &wizardModel{
-		opts:    opts,
-		theme:   ui.NewTheme(resolvePalette(opts.Theme)),
-		spin:    spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		cfg:     cfg,
-		fetch:   opts.Fetch,
-		store:   opts.Store,
-		resolve: realResolve,
+		opts:     opts,
+		theme:    ui.NewTheme(resolvePalette(opts.Theme)),
+		spin:     spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		cfg:      cfg,
+		fetch:    opts.Fetch,
+		store:    opts.Store,
+		resolve:  realResolve,
+		discover: opts.Discover,
+		visible:  []int{1, 2, 3}, // add mode: no Server URL row (FR-A7)
 	}
 	if m.fetch == nil {
 		m.fetch = realFetch(opts.Timeout)
@@ -186,12 +223,17 @@ func newWizardModel(opts wizardOptions, cfg *config.Config) *wizardModel {
 	if m.store == nil {
 		m.store = realStore()
 	}
+	if m.discover == nil {
+		m.discover = realDiscover(opts.Timeout)
+	}
 	m.inputs = wizardInputs()
 	return m
 }
 
-// wizardInputs builds the four form fields (FR-I8: server, username,
-// secret, then the cosmetic account name).
+// wizardInputs builds the four form fields — their slots are fixed
+// (0 server URL, 1 email, 2 secret, 3 the cosmetic account name) so
+// beginEdit/startTest/buildAccount address them directly; which slots are
+// visible is wizardModel.visible's job (FR-I8, FR-A7).
 func wizardInputs() [4]textinput.Model {
 	mk := func(placeholder string) textinput.Model {
 		in := textinput.New()
@@ -213,10 +255,11 @@ func wizardInputs() [4]textinput.Model {
 func (m *wizardModel) Init() tea.Cmd {
 	if len(m.cfg.Accounts) > 0 {
 		m.openPicker()
-	} else {
-		m.step = wizForm
+		return m.spin.Tick
 	}
-	return tea.Batch(m.inputs[0].Focus(), m.spin.Tick)
+	m.step = wizForm
+	m.focus = m.visible[0]
+	return tea.Batch(m.inputs[m.focus].Focus(), m.spin.Tick)
 }
 
 func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -226,7 +269,7 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
-		if !m.testing && !m.saving {
+		if !m.testing && !m.saving && !m.discovering {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -261,6 +304,30 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("connected — %d mailboxes", len(msg.items))
 		}
 		return m, nil
+
+	case wizDiscoveredMsg:
+		if msg.seq != m.seq {
+			return m, nil
+		}
+		m.discovering = false
+		if msg.err != nil {
+			// Nothing found: reveal the field the message is asking for,
+			// focused, so the next thing typed is the URL (FR-A7). The
+			// discovery attempt itself is named in the error above the
+			// hint — both halves (DNS and HTTP) tried, both reported.
+			m.err = msg.err.Error() + " — enter the server URL"
+			m.step = wizForm
+			m.revealURL()
+			return m, m.refocus(0)
+		}
+		m.err = ""
+		// Found: keep the URL visible and editable for a return to the
+		// form, and remember where the session document answered from —
+		// a cross-origin answer is exactly what session_url exists for.
+		m.revealURL()
+		m.inputs[0].SetValue(msg.url)
+		m.discovered = true
+		return m, m.beginConnection(msg.url, msg.sessionURL)
 
 	case wizSavedMsg:
 		if msg.seq != m.seq {
@@ -341,6 +408,13 @@ func (m *wizardModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *wizardModel) formKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// ctrl+u reveals the Server URL field (FR-A7): the escape hatch for
+	// offline DNS, a bare server username, or any account discovery gets
+	// wrong. Once the field is on screen the key belongs to it.
+	if key == "ctrl+u" && !m.showURL {
+		m.revealURL()
+		return m, m.refocus(0)
+	}
 	switch key {
 	case "esc":
 		if len(m.cfg.Accounts) > 0 {
@@ -351,17 +425,20 @@ func (m *wizardModel) formKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.C
 		m.cancelled = true
 		return m, tea.Quit
 	case "tab":
-		return m.focusField((m.focus + 1) % len(m.inputs))
+		return m.focusField(m.visibleFrom(m.focus, 1))
 	case "shift+tab":
-		return m.focusField((m.focus + len(m.inputs) - 1) % len(m.inputs))
+		return m.focusField(m.visibleFrom(m.focus, -1))
 	case "enter":
-		if m.focus < len(m.inputs)-1 {
-			if err := m.validateField(m.focus); err != nil {
-				m.err = err.Error()
-				return m, nil
-			}
-			m.err = ""
-			return m.focusField(m.focus + 1)
+		// Validate what has focus, then advance — or, on the last
+		// visible field, start the connection (which discovers a server
+		// when the URL field is empty, FR-A7).
+		if err := m.validateField(m.focus); err != nil {
+			m.err = err.Error()
+			return m, nil
+		}
+		m.err = ""
+		if m.focus != m.visible[len(m.visible)-1] {
+			return m.focusField(m.visibleFrom(m.focus, 1))
 		}
 		return m, m.startTest()
 	}
@@ -371,12 +448,34 @@ func (m *wizardModel) formKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.C
 	return m, cmd
 }
 
+// visibleFrom steps ±1 from the current slot through the visible tab
+// order, wrapping at either end.
+func (m *wizardModel) visibleFrom(cur, step int) int {
+	for i, slot := range m.visible {
+		if slot == cur {
+			return m.visible[(i+step+len(m.visible))%len(m.visible)]
+		}
+	}
+	return m.visible[0]
+}
+
+// revealURL puts the Server URL field on screen, appended to the end of
+// the tab order so every row the user has already filled keeps its place.
+func (m *wizardModel) revealURL() {
+	if m.showURL {
+		return
+	}
+	m.showURL = true
+	m.visible = append(m.visible, 0)
+}
+
 func (m *wizardModel) testKey(key string) (tea.Model, tea.Cmd) {
 	switch {
-	case m.testing:
+	case m.testing || m.discovering:
 		if key == "esc" {
 			m.seq++ // drop the in-flight result
 			m.testing = false
+			m.discovering = false
 			m.step = wizForm
 			return m.focusField(m.focus)
 		}
@@ -476,7 +575,7 @@ func (m *wizardModel) accountsKey(key string) (tea.Model, tea.Cmd) {
 			m.beginEdit(m.choices[m.sel-1])
 		}
 		m.step = wizForm
-		return m.focusField(0)
+		return m.focusField(m.visible[0])
 	case "esc":
 		m.cancelled = true
 		return m, tea.Quit
@@ -513,18 +612,26 @@ func (m *wizardModel) openPicker() {
 	m.sel = 0
 }
 
-// beginAdd resets the form for a brand-new account.
+// beginAdd resets the form for a brand-new account: email first, no
+// Server URL row — discovery finds it (FR-A7), ctrl+u reveals the field.
 func (m *wizardModel) beginAdd() {
 	m.editID = ""
 	m.editAcct = nil
 	m.auth = ""
+	m.discovered = false
+	m.sessionURL = ""
+	m.showURL = false
+	m.visible = []int{1, 2, 3}
 	m.inputs = wizardInputs()
-	m.focus = 0
+	m.focus = m.visible[0]
 }
 
-// beginEdit prefills the form from an existing account. The password field
-// is deliberately empty: the secret never round-trips through config, so
-// leaving it blank keeps whatever the account already uses (FR-J2).
+// beginEdit prefills the form from an existing account, Server URL and
+// all: a configured account already knows its server, so the field stays
+// on screen and discovery only runs if the user clears it. The password
+// field is deliberately empty: the secret never round-trips through
+// config, so leaving it blank keeps whatever the account already uses
+// (FR-J2).
 func (m *wizardModel) beginEdit(id string) {
 	a, ok := m.cfg.Accounts[id]
 	if !ok || a == nil {
@@ -535,12 +642,16 @@ func (m *wizardModel) beginEdit(id string) {
 	m.editID = id
 	m.editAcct = &cp
 	m.auth = a.Auth // until a successful test corrects it (FR-A2)
+	m.discovered = false
+	m.sessionURL = ""
+	m.showURL = true
+	m.visible = []int{0, 1, 2, 3}
 	m.inputs = wizardInputs()
 	m.inputs[0].SetValue(a.URL)
 	m.inputs[1].SetValue(a.Username)
 	m.inputs[2].Placeholder = "leave empty to keep the current password"
 	m.inputs[3].SetValue(a.DisplayName)
-	m.focus = 0
+	m.focus = m.visible[0]
 }
 
 // focusField moves keyboard focus between the form inputs.
@@ -568,22 +679,66 @@ func (m *wizardModel) validateField(i int) error {
 		}
 	case 1:
 		if strings.TrimSpace(m.inputs[1].Value()) == "" {
-			return errors.New("username is required")
+			return errors.New("email is required")
 		}
 	}
 	return nil
 }
 
-// startTest derives the account id, then connects and lists mailboxes.
+// startTest launches the connection. A Server URL on the form goes
+// straight through to the test; an empty one — the normal state in add
+// mode, where the field is hidden — discovers the server from the email
+// address first (FR-A7).
 func (m *wizardModel) startTest() tea.Cmd {
-	serverURL, err := normalizeServerURL(m.inputs[0].Value())
-	if err != nil {
-		m.err = err.Error()
+	if raw := strings.TrimSpace(m.inputs[0].Value()); raw != "" {
+		serverURL, err := normalizeServerURL(raw)
+		if err != nil {
+			m.err = err.Error()
+			m.step = wizForm
+			return m.refocus(0)
+		}
+		m.discovered = false
+		m.sessionURL = ""
+		return m.beginConnection(serverURL, "")
+	}
+
+	m.username = strings.TrimSpace(m.inputs[1].Value())
+	domain, derr := discover.Domain(m.username)
+	if derr != nil {
+		// Not an email address: nothing to discover from. ctrl+u is the
+		// way in for a server whose login is a bare username (FR-A2).
+		m.err = "enter an email address, e.g. you@example.com — or press ctrl+u to enter the server URL instead"
 		m.step = wizForm
-		return m.refocus(0)
+		return m.refocus(1)
 	}
 	m.err = ""
+	m.discoverDomain = domain
+	m.step = wizTest
+	m.discovering = true
+	m.seq++
+	return tea.Batch(m.spin.Tick, m.discoverCmd())
+}
+
+// discoverCmd runs one discovery attempt off the UI thread (NFR-1),
+// stamped with the current seq so a superseded result is dropped.
+func (m *wizardModel) discoverCmd() tea.Cmd {
+	seq := m.seq
+	discoverFn := m.discover
+	email, timeout := m.username, m.opts.Timeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		url, sessionURL, err := discoverFn(ctx, email)
+		return wizDiscoveredMsg{seq: seq, url: url, sessionURL: sessionURL, err: err}
+	}
+}
+
+// beginConnection takes the server URL the form produced — typed by the
+// user or found by discovery — and runs the test itself: account id,
+// secret resolution, then the mailbox list (FR-I8, FR-A7).
+func (m *wizardModel) beginConnection(serverURL, sessionURL string) tea.Cmd {
 	m.serverURL = serverURL
+	m.sessionURL = sessionURL
 	m.username = strings.TrimSpace(m.inputs[1].Value())
 	m.password = m.inputs[2].Value() // typed — the only value ever stored
 	if m.editID != "" {
@@ -627,6 +782,7 @@ func (m *wizardModel) startTest() tea.Cmd {
 	}
 	m.step = wizTest
 	m.testing = true
+	m.discovering = false
 	m.err = ""
 	m.seq++
 	return tea.Batch(m.spin.Tick, m.fetchCmd())
@@ -692,6 +848,12 @@ func (m *wizardModel) buildAccount() *config.Account {
 	a.URL = m.serverURL
 	a.Username = m.username
 	a.Auth = m.auth // probe result: "" (basic) or "bearer" (FR-A2)
+	if m.discovered {
+		// A session endpoint discovery found replaces whatever the
+		// account carried: it belongs to the URL just replaced (FR-A7).
+		// Without discovery the hand-written one survives untouched.
+		a.SessionURL = m.sessionURL
+	}
 	a.InitialMailbox = string(m.mailbox)
 	switch {
 	case m.useFile:
@@ -754,18 +916,20 @@ func (m *wizardModel) render() string {
 	case wizForm:
 		v.Step = stage(1, "details")
 		v.Fields = m.fieldViews()
-		if picker {
-			v.Hint = "tab next · enter continue · esc back"
-		} else {
-			v.Hint = "tab next · enter continue · esc quit"
-		}
+		v.Hint = formHint(picker, m.showURL)
 	case wizTest:
-		v.Step = stage(2, "connection")
 		v.Fields = m.fieldViews()
-		if m.testing {
+		switch {
+		case m.discovering:
+			v.Step = stage(2, "finding server")
+			v.Status = m.spin.View() + " discovering mail server for " + m.discoverDomain + "…"
+			v.Hint = "esc cancel"
+		case m.testing:
+			v.Step = stage(2, "connection")
 			v.Status = m.spin.View() + " testing connection…"
 			v.Hint = "esc cancel"
-		} else {
+		default:
+			v.Step = stage(2, "connection")
 			v.Hint = "enter retry · esc edit details"
 		}
 	case wizMailbox:
@@ -798,16 +962,32 @@ func (m *wizardModel) render() string {
 	return ui.RenderWizard(m.w, m.h, m.theme, v)
 }
 
-// fieldViews renders the four inputs for the form/connection/save screens.
+// formHint is the form's key footer. While the Server URL field is
+// hidden it names the key that reveals it (FR-A7); the field itself keeps
+// the row order the user filled in.
+func formHint(picker, showURL bool) string {
+	hint := "tab next · enter continue"
+	if !showURL {
+		hint += " · ctrl+u server URL"
+	}
+	if picker {
+		return hint + " · esc back"
+	}
+	return hint + " · esc quit"
+}
+
+// fieldViews renders the visible inputs for the form/connection/save
+// screens, in tab order: slot 0 rides last once revealed, so a found URL
+// appears under the fields the user already filled.
 func (m *wizardModel) fieldViews() []ui.WizardField {
-	labels := [4]string{"Server URL", "Username", "Password", "Account name"}
-	out := make([]ui.WizardField, len(m.inputs))
-	for i := range m.inputs {
-		out[i] = ui.WizardField{
+	labels := [4]string{"Server URL", "Email", "Password", "Account name"}
+	out := make([]ui.WizardField, 0, len(m.visible))
+	for _, i := range m.visible {
+		out = append(out, ui.WizardField{
 			Label:   labels[i],
 			Value:   m.inputs[i].View(),
 			Focused: m.step == wizForm && i == m.focus,
-		}
+		})
 	}
 	return out
 }
@@ -865,6 +1045,21 @@ func realFetch(timeout time.Duration) fetchFunc {
 			return items, "bearer", nil
 		}
 		return nil, "", err
+	}
+}
+
+// realDiscover is the production discovery seam (FR-A7): RFC 8620 §2.2
+// SRV lookup, then the email's own domain, each verified with one
+// unauthenticated probe. The budget is min(timeout, discover.MaxTimeout)
+// so an offline resolver costs seconds — the wizard never hangs on DNS.
+func realDiscover(timeout time.Duration) discoverFunc {
+	d := discover.New(timeout)
+	return func(ctx context.Context, email string) (string, string, error) {
+		res, err := d.Discover(ctx, email)
+		if err != nil {
+			return "", "", err
+		}
+		return res.URL, res.SessionURL, nil
 	}
 }
 

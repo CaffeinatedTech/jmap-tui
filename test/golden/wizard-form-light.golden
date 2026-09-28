@@ -13,12 +13,12 @@
 
 
 
+
                                [38;2;42;93;176mAdd an account[m                                            
                                [38;2;156;163;175m1 of 4 · details[m                                          
                                [38;2;209;213;219m────────────────────────────────────────────────────────[m  
-                               [38;2;156;163;175mServer URL     [mhttps://mail.example.com                   
-                               [38;2;156;163;175mUsername       [mme@example.com                             
+                               [38;2;156;163;175mEmail          [mme@example.com                             
                                [38;2;30;41;59;48;2;226;232;240mPassword       ••••••••▌                                [m  
                                [38;2;156;163;175mAccount name   [m[38;2;156;163;175mdefaults to the account id[m                 
                                                                                          
-                               [38;2;156;163;175mtab next · enter continue · esc quit[m                      
+                               [38;2;156;163;175mtab next · enter continue · ctrl+u server URL · esc quit[m  

@@ -21,8 +21,11 @@ func TestWizardPasteReachesFocusedField(t *testing.T) {
 		func(string, string, string, bool) (string, error) { return "OS keyring", nil })
 	send(m, tea.WindowSizeMsg{Width: 100, Height: 40})
 
-	// Two tabs from the server URL land on the password field.
-	send(m, keyTab(false))
+	// The form opens on the email field (the Server URL row is hidden
+	// until discovery needs it, FR-A7); one tab lands on the password.
+	if m.focus != 1 {
+		t.Fatalf("focus = %d, want 1 (email)", m.focus)
+	}
 	send(m, keyTab(false))
 	if m.focus != 2 {
 		t.Fatalf("focus = %d, want 2 (password)", m.focus)
@@ -79,7 +82,7 @@ func TestWizardCtrlVReachesTheField(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("ctrl+v produced no command: the field never saw the key")
 	}
-	if got := m.inputs[0].Value(); got != "" {
+	if got := m.inputs[m.focus].Value(); got != "" {
 		t.Fatalf("value = %q: ctrl+v must not insert anything itself", got)
 	}
 }

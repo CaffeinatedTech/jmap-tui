@@ -735,10 +735,12 @@ func TestRenderIsStableAcrossRuns(t *testing.T) {
 	}
 }
 
-// M7 wizard (FR-I8): the setup flow renders through its own entry point,
-// so it gets its own frame set — form (dark/light), connection test,
-// mailbox pick (both densities), the keyring-failure screen, and the
-// saved summary.
+// M7 wizard (FR-I8) + M10 discovery (FR-A7): the setup flow renders
+// through its own entry point, so it gets its own frame set — the add
+// form with the Server URL field still hidden, the same form after
+// ctrl+u (or after discovery) revealed it, the finding-server screen,
+// connection test, mailbox pick (both densities), the keyring-failure
+// screen, and the saved summary.
 func wizardFrames() []struct {
 	name string
 	w, h int
@@ -749,23 +751,48 @@ func wizardFrames() []struct {
 		Title: "Add an account",
 		Step:  "1 of 4 · details",
 		Fields: []WizardField{
-			{Label: "Server URL", Value: "https://mail.example.com"},
-			{Label: "Username", Value: "me@example.com"},
+			{Label: "Email", Value: "me@example.com"},
 			{Label: "Password", Value: strings.Repeat("•", 8) + "▌", Focused: true},
 			{Label: "Account name", Placeholder: "defaults to the account id"},
 		},
+		Hint: "tab next · enter continue · ctrl+u server URL · esc quit",
+	}
+	// The revealed field: discovery answered (or ctrl+u was pressed), so
+	// the Server URL row joins the bottom of the tab order.
+	formURL := WizardView{
+		Title: "Add an account",
+		Step:  "1 of 4 · details",
+		Fields: []WizardField{
+			{Label: "Email", Value: "me@example.com"},
+			{Label: "Password", Value: strings.Repeat("•", 8)},
+			{Label: "Account name", Placeholder: "defaults to the account id"},
+			{Label: "Server URL", Value: "https://mail.example.com▌", Focused: true},
+		},
 		Hint: "tab next · enter continue · esc quit",
 	}
-	conn := form
-	conn.Step = "2 of 4 · connection"
-	conn.Fields = []WizardField{
-		{Label: "Server URL", Value: "https://mail.example.com"},
-		{Label: "Username", Value: "me@example.com"},
-		{Label: "Password", Value: strings.Repeat("•", 8)},
-		{Label: "Account name", Placeholder: "defaults to the account id"},
+	discovering := WizardView{
+		Title: "Add an account",
+		Step:  "2 of 4 · finding server",
+		Fields: []WizardField{
+			{Label: "Email", Value: "me@example.com"},
+			{Label: "Password", Value: strings.Repeat("•", 8)},
+			{Label: "Account name", Placeholder: "defaults to the account id"},
+		},
+		Status: "⣽ discovering mail server for example.com…",
+		Hint:   "esc cancel",
 	}
-	conn.Hint = "esc cancel"
-	conn.Err = "connect to https://mail.example.com: 401 unauthorized — check the app password or the server URL"
+	conn := WizardView{
+		Title: "Add an account",
+		Step:  "2 of 4 · connection",
+		Fields: []WizardField{
+			{Label: "Email", Value: "me@example.com"},
+			{Label: "Password", Value: strings.Repeat("•", 8)},
+			{Label: "Account name", Placeholder: "defaults to the account id"},
+			{Label: "Server URL", Value: "https://mail.example.com"},
+		},
+		Hint: "esc cancel",
+		Err:  "connect to https://mail.example.com: 401 unauthorized — check the app password or the server URL",
+	}
 	testing := conn
 	testing.Err = ""
 	testing.Status = "⣽ testing connection…"
@@ -787,10 +814,10 @@ func wizardFrames() []struct {
 		Title: "Add an account",
 		Step:  "4 of 4 · save",
 		Fields: []WizardField{
-			{Label: "Server URL", Value: "https://mail.example.com"},
-			{Label: "Username", Value: "me@example.com"},
+			{Label: "Email", Value: "me@example.com"},
 			{Label: "Password", Value: strings.Repeat("•", 8)},
 			{Label: "Account name", Value: "mail-example-com"},
+			{Label: "Server URL", Value: "https://mail.example.com"},
 		},
 		Err:  "store secret: no secret service",
 		Hint: "r retry keyring · f use password file · esc quit",
@@ -811,7 +838,7 @@ func wizardFrames() []struct {
 		Step:  "2 of 5 · details",
 		Fields: []WizardField{
 			{Label: "Server URL", Value: "https://mail.example.com"},
-			{Label: "Username", Value: "me@work.example.com"},
+			{Label: "Email", Value: "me@work.example.com"},
 			{Label: "Password", Placeholder: "leave empty to keep the current password", Focused: true},
 			{Label: "Account name", Value: "Work"},
 		},
@@ -836,10 +863,12 @@ func wizardFrames() []struct {
 		v    WizardView
 	}{
 		{name: "wizard-form", w: 120, h: 40, dark: true, v: form},
+		{name: "wizard-form-light", w: 120, h: 40, dark: false, v: form},
+		{name: "wizard-form-url", w: 120, h: 40, dark: true, v: formURL},
+		{name: "wizard-discovering", w: 120, h: 40, dark: true, v: discovering},
 		{name: "wizard-accounts", w: 120, h: 40, dark: true, v: accounts},
 		{name: "wizard-accounts-light", w: 120, h: 40, dark: false, v: accounts},
 		{name: "wizard-edit", w: 120, h: 40, dark: true, v: edit},
-		{name: "wizard-form-light", w: 120, h: 40, dark: false, v: form},
 		{name: "wizard-connection-error", w: 120, h: 40, dark: true, v: conn},
 		{name: "wizard-testing", w: 120, h: 40, dark: true, v: testing},
 		{name: "wizard-mailboxes", w: 120, h: 40, dark: true, v: mailboxes},

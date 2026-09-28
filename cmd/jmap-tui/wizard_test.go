@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/config"
@@ -37,6 +38,10 @@ func keyTab(shift bool) tea.KeyPressMsg {
 		m.Mod = tea.ModShift
 	}
 	return m
+}
+
+func keyCtrlU() tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 }
 func keyDown() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyDown} }
 func keyUp() tea.KeyPressMsg   { return tea.KeyPressMsg{Code: tea.KeyUp} }
@@ -67,9 +72,18 @@ func drain(cmd tea.Cmd) []tea.Msg {
 	return []tea.Msg{msg}
 }
 
+// deliver executes a command (flattening batches) and feeds every message
+// it produces back into the model, following the commands Update hands
+// back — discovery answers with the connection test, so one round is not
+// enough. Spinner ticks are delivered but their re-arm is not run: the
+// spinner re-arms forever, and a test that followed it would too.
 func deliver(m *wizardModel, cmd tea.Cmd) {
 	for _, msg := range drain(cmd) {
-		send(m, msg)
+		next := send(m, msg)
+		if _, isTick := msg.(spinner.TickMsg); isTick || next == nil {
+			continue
+		}
+		deliver(m, next)
 	}
 }
 
@@ -84,6 +98,16 @@ func typeText(m *wizardModel, s string) {
 func testFetch(items []ui.PickerItem, err error) fetchFunc {
 	return func(_ context.Context, _, _, _ string) ([]ui.PickerItem, string, error) {
 		return items, "", err
+	}
+}
+
+// testDiscover is the default discovery seam (FR-A7): the classic
+// answer, so the add-mode flow — email → discover → test — runs without a
+// DNS stack. Individual tests overwrite m.discover to steer it or count
+// attempts.
+func testDiscover(url, sessionURL string, err error) discoverFunc {
+	return func(context.Context, string) (string, string, error) {
+		return url, sessionURL, err
 	}
 }
 
@@ -104,20 +128,35 @@ func newTestWizard(t *testing.T, cfg *config.Config, fetch fetchFunc, store stor
 		Fetch:   fetch,
 		Store:   store,
 	}, cfg)
+	m.discover = testDiscover("https://mail.example.com", "", nil)
 	m.Init() // production start: picker when the config has accounts
 	return m, path
 }
 
-// walkForm types the four fields, pressing enter between them, and
-// returns the command from the final enter (the connection test).
-func walkForm(m *wizardModel, server, user, pass, name string) tea.Cmd {
-	typeText(m, server)
-	send(m, keyEnter())
-	typeText(m, user)
+// walkForm types the add-mode fields — email, password, name — pressing
+// enter between them, and returns the command from the final enter: the
+// one that asks for discovery (FR-A7).
+func walkForm(m *wizardModel, email, pass, name string) tea.Cmd {
+	typeText(m, email)
 	send(m, keyEnter())
 	typeText(m, pass)
 	send(m, keyEnter())
 	typeText(m, name)
+	return send(m, keyEnter())
+}
+
+// walkFormURL is the manual-entry variant: ctrl+u reveals the Server URL
+// field, which is filled first because it rides last in the tab order.
+func walkFormURL(m *wizardModel, server, email, pass, name string) tea.Cmd {
+	send(m, keyCtrlU())
+	typeText(m, server)
+	send(m, keyTab(false))
+	typeText(m, email)
+	send(m, keyTab(false))
+	typeText(m, pass)
+	send(m, keyTab(false))
+	typeText(m, name)
+	send(m, keyEnter()) // name → the revealed Server URL, the last field
 	return send(m, keyEnter())
 }
 
@@ -215,30 +254,36 @@ func TestWizardHappyPath(t *testing.T) {
 			return "OS keyring", nil
 		})
 
-	// Empty URL first: the form refuses to advance (FR-J3).
-	if cmd := send(m, keyEnter()); cmd != nil || !strings.Contains(m.err, "server URL is required") {
-		t.Fatalf("empty url: err=%q cmd=%v", m.err, cmd)
+	// An empty email refuses to advance (FR-J3): the Server URL field is
+	// not on the form, so the address is the only way in (FR-A7).
+	if cmd := send(m, keyEnter()); cmd != nil || !strings.Contains(m.err, "email is required") {
+		t.Fatalf("empty email: err=%q cmd=%v", m.err, cmd)
 	}
 
-	cmd := walkForm(m, "mail.example.com", "me@example.com", "s3cret", "")
+	cmd := walkForm(m, "me@example.com", "s3cret", "")
 	if cmd == nil {
-		t.Fatal("final enter produced no test command")
+		t.Fatal("final enter produced no discovery command")
 	}
-	if m.step != wizTest || !m.testing {
-		t.Fatalf("step = %v testing=%v, want wizTest", m.step, m.testing)
-	}
-	if m.accountID != "mail-example-com" {
-		t.Errorf("derived id = %q", m.accountID)
-	}
-	// The name defaults from the username, not the host slug, so two
-	// accounts on one server read differently in the switcher.
-	if m.displayName != "me" {
-		t.Errorf("displayName = %q, want me (username local part)", m.displayName)
+	// No URL was typed: the final enter asks for discovery, which runs on
+	// the connection screen before the test itself starts.
+	if m.step != wizTest || !m.discovering {
+		t.Fatalf("step = %v discovering=%v, want wizTest while discovering", m.step, m.discovering)
 	}
 	deliver(m, cmd)
 
 	if m.step != wizMailbox {
 		t.Fatalf("step = %v (err %q), want wizMailbox", m.step, m.err)
+	}
+	// The account id and display name derive from the discovered server
+	// and the address, and the found URL has joined the form.
+	if m.accountID != "mail-example-com" {
+		t.Errorf("derived id = %q", m.accountID)
+	}
+	if m.displayName != "me" {
+		t.Errorf("displayName = %q, want me (username local part)", m.displayName)
+	}
+	if !m.showURL || m.inputs[0].Value() != "https://mail.example.com" {
+		t.Errorf("showURL = %v url = %q, want the found server on the form", m.showURL, m.inputs[0].Value())
 	}
 	if m.sel != 0 {
 		t.Errorf("sel = %d, want 0 (inbox preselected)", m.sel)
@@ -304,7 +349,7 @@ func TestWizardSecretFallback(t *testing.T) {
 			}
 			return "password file", nil
 		})
-	deliver(m, walkForm(m, "https://mail.example.com", "me@example.com", "s3cret", ""))
+	deliver(m, walkForm(m, "me@example.com", "s3cret", ""))
 	if m.step != wizMailbox {
 		t.Fatalf("step = %v err=%q", m.step, m.err)
 	}
@@ -351,7 +396,7 @@ func TestWizardPasswordFromEnv(t *testing.T) {
 			return "", nil
 		})
 	t.Setenv("JMAP_TUI_PASSWORD_MAIL_EXAMPLE_COM", "from-env")
-	deliver(m, walkForm(m, "mail.example.com", "me@example.com", "", ""))
+	deliver(m, walkForm(m, "me@example.com", "", ""))
 	if m.step != wizMailbox {
 		t.Fatalf("step = %v err = %q (empty password should pass with the env var set)", m.step, m.err)
 	}
@@ -372,7 +417,7 @@ func TestWizardPasswordFromEnv(t *testing.T) {
 
 func TestWizardRejectsEmptyPassword(t *testing.T) {
 	m, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
-	walkForm(m, "mail.example.com", "me@example.com", "", "")
+	deliver(m, walkForm(m, "me@example.com", "", ""))
 	if !strings.Contains(m.err, "password is required") {
 		t.Fatalf("err = %q", m.err)
 	}
@@ -393,34 +438,36 @@ func TestWizardCancelAndStaleResults(t *testing.T) {
 		t.Fatal("esc did not cancel the run")
 	}
 
-	// A test superseded by esc-during-test must not land in a later screen.
+	// A discovery superseded by esc-during-discovery must not land in a
+	// later screen either: the seq stamp drops it like any stale result.
 	m2, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
-	cmd := walkForm(m2, "mail.example.com", "me@example.com", "s3cret", "")
-	m2.seq++ // what esc-during-test does: stamp the next job
+	cmd := walkForm(m2, "me@example.com", "s3cret", "")
+	m2.seq++ // what esc-during-discovery does: stamp the next job
+	m2.discovering = false
 	m2.testing = false
 	m2.step = wizForm
 	deliver(m2, cmd)
-	if m2.step == wizMailbox {
-		t.Fatal("stale test result was applied")
+	if m2.step != wizForm {
+		t.Fatalf("stale discovery result moved the wizard to %v", m2.step)
 	}
 }
 
 func TestWizardValidationOnTab(t *testing.T) {
 	m, _ := newTestWizard(t, nil, nil, nil)
-	send(m, keyEnter()) // url still empty
-	if !strings.Contains(m.err, "server URL is required") {
+	send(m, keyEnter()) // email still empty
+	if !strings.Contains(m.err, "email is required") {
 		t.Fatalf("err = %q", m.err)
 	}
-	typeText(m, "https://mail.example.com")
+	typeText(m, "me@example.com")
 	if cmd := send(m, keyTab(false)); cmd == nil {
 		t.Error("tab produced no focus command")
 	}
-	if m.focus != 1 {
-		t.Errorf("focus = %d, want 1", m.focus)
+	if m.focus != 2 {
+		t.Errorf("focus = %d, want 2 (password)", m.focus)
 	}
 	send(m, keyTab(true))
-	if m.focus != 0 {
-		t.Errorf("shift+tab focus = %d, want 0", m.focus)
+	if m.focus != 1 {
+		t.Errorf("shift+tab focus = %d, want 1 (email)", m.focus)
 	}
 	if m.step != wizForm {
 		t.Errorf("step = %v", m.step)
@@ -429,7 +476,7 @@ func TestWizardValidationOnTab(t *testing.T) {
 
 func TestWizardConnectionError(t *testing.T) {
 	m, _ := newTestWizard(t, nil, testFetch(nil, errors.New("connect to https://x: 401 unauthorized")), nil)
-	deliver(m, walkForm(m, "mail.example.com", "me@example.com", "wrong", ""))
+	deliver(m, walkForm(m, "me@example.com", "wrong", ""))
 	if m.step != wizTest || m.testing {
 		t.Fatalf("step = %v testing = %v", m.step, m.testing)
 	}
@@ -594,7 +641,7 @@ func TestWizardLiveStalwartFetch(t *testing.T) {
 	// The unit-test default (1s) is too tight for a live server — and for
 	// the bearer probe's extra round trip on Fastmail.
 	m.opts.Timeout = 20 * time.Second
-	deliver(m, walkForm(m, liveURL, liveUser, livePass, "live-gate"))
+	deliver(m, walkFormURL(m, liveURL, liveUser, livePass, "live-gate"))
 	if m.step != wizMailbox {
 		t.Fatalf("step = %v err = %q", m.step, m.err)
 	}
@@ -799,5 +846,317 @@ func TestWizardEditRotatesSecret(t *testing.T) {
 	}
 	if a.PasswordFile != "" || a.PasswordKeyring != nil {
 		t.Errorf("stale password_file survived: %+v", a)
+	}
+}
+
+// --- discovery in the wizard (FR-A7) ---
+
+// discoverCounter wraps a discovery fake with a call count and the last
+// email it was handed.
+type discoverCounter struct {
+	calls int
+	email string
+	fn    discoverFunc
+}
+
+func (d *discoverCounter) seam() discoverFunc {
+	return func(ctx context.Context, email string) (string, string, error) {
+		d.calls++
+		d.email = email
+		return d.fn(ctx, email)
+	}
+}
+
+// TestWizardDiscoveryFillsServerURL is the add-mode happy path: no
+// Server URL row on the form, discovery on the final enter, and the found
+// server on screen (and editable) afterwards.
+func TestWizardDiscoveryFillsServerURL(t *testing.T) {
+	m, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
+	disc := &discoverCounter{fn: testDiscover("https://mail.example.com", "", nil)}
+	m.discover = disc.seam()
+
+	frame := m.render()
+	if strings.Contains(frame, "Server URL") {
+		t.Fatalf("server URL row on the form before discovery:\n%s", frame)
+	}
+	if !strings.Contains(frame, "ctrl+u server URL") {
+		t.Fatalf("hint does not name the reveal key:\n%s", frame)
+	}
+
+	deliver(m, walkForm(m, "me@example.com", "s3cret", "Work"))
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m.step, m.err)
+	}
+	if disc.calls != 1 || disc.email != "me@example.com" {
+		t.Errorf("discovery calls = %d email = %q, want one attempt for the address", disc.calls, disc.email)
+	}
+	if m.inputs[0].Value() != "https://mail.example.com" || !m.showURL {
+		t.Errorf("url = %q showURL = %v, want the found server on the form", m.inputs[0].Value(), m.showURL)
+	}
+
+	// Back to the form: the field stays, and it rides last so nothing the
+	// user filled in moved.
+	send(m, keyEsc())
+	frame = m.render()
+	if !strings.Contains(frame, "Server URL") {
+		t.Fatalf("discovered server URL missing from the form:\n%s", frame)
+	}
+	if m.visible[len(m.visible)-1] != 0 {
+		t.Errorf("visible = %v, want the URL slot appended", m.visible)
+	}
+}
+
+// TestWizardDiscoveryFailureRevealsServerURL: nothing found → the error
+// names both attempts, the Server URL field appears focused, and the next
+// enter asks for a URL rather than re-running discovery.
+func TestWizardDiscoveryFailureRevealsServerURL(t *testing.T) {
+	m, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
+	disc := &discoverCounter{fn: testDiscover("", "", errors.New(
+		"couldn't find a JMAP server for example.com: SRV _jmap._tcp.example.com: no such host; https://example.com: HTTP 404"))}
+	m.discover = disc.seam()
+
+	deliver(m, walkForm(m, "me@example.com", "s3cret", ""))
+	if m.step != wizForm {
+		t.Fatalf("step = %v (err %q), want the form back", m.step, m.err)
+	}
+	if m.focus != 0 {
+		t.Errorf("focus = %d, want 0 (the revealed Server URL)", m.focus)
+	}
+	if !m.showURL || m.visible[len(m.visible)-1] != 0 {
+		t.Errorf("showURL = %v visible = %v, want the URL revealed last", m.showURL, m.visible)
+	}
+	if !strings.Contains(m.err, "couldn't find a JMAP server for example.com") ||
+		!strings.Contains(m.err, "enter the server URL") {
+		t.Errorf("err = %q, want both attempts and the way out", m.err)
+	}
+	if frame := m.render(); !strings.Contains(frame, "Server URL") {
+		t.Fatalf("revealed field missing from the frame:\n%s", frame)
+	}
+
+	// Enter on the empty revealed field validates it instead of
+	// discovering again — the message already said to type a URL.
+	if cmd := send(m, keyEnter()); cmd != nil || !strings.Contains(m.err, "server URL is required") {
+		t.Fatalf("enter on the empty revealed field: err = %q cmd = %v", m.err, cmd)
+	}
+	if disc.calls != 1 {
+		t.Errorf("discovery calls = %d, want 1", disc.calls)
+	}
+
+	// Typing a URL and pressing enter goes straight to the test.
+	typeText(m, "https://mail.example.com")
+	cmd := send(m, keyEnter())
+	if disc.calls != 1 {
+		t.Errorf("discovery ran again over a typed URL: calls = %d", disc.calls)
+	}
+	if m.step != wizTest || !m.testing {
+		t.Fatalf("step = %v testing = %v (err %q), want the connection test", m.step, m.testing, m.err)
+	}
+	deliver(m, cmd)
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m.step, m.err)
+	}
+}
+
+// TestWizardCtrlURevealsServerURL: the manual escape hatch. It appears
+// while the field is hidden, disappears once it is not, and a URL typed
+// there skips discovery entirely.
+func TestWizardCtrlURevealsServerURL(t *testing.T) {
+	m, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
+	disc := &discoverCounter{fn: testDiscover("https://mail.example.com", "", nil)}
+	m.discover = disc.seam()
+
+	if m.showURL {
+		t.Fatal("add mode starts with the Server URL field shown")
+	}
+	send(m, keyCtrlU())
+	if !m.showURL || m.focus != 0 {
+		t.Fatalf("showURL = %v focus = %d, want the field revealed and focused", m.showURL, m.focus)
+	}
+	frame := m.render()
+	if !strings.Contains(frame, "Server URL") {
+		t.Fatalf("revealed field missing:\n%s", frame)
+	}
+	if strings.Contains(frame, "ctrl+u server URL") {
+		t.Fatalf("hint still offers a key that has already done its job:\n%s", frame)
+	}
+
+	// Fill the revealed field and tab through the rest: a typed URL goes
+	// straight to the test, discovery untouched.
+	typeText(m, "https://mail.example.com")
+	send(m, keyTab(false))
+	typeText(m, "me@example.com")
+	send(m, keyTab(false))
+	typeText(m, "s3cret")
+	send(m, keyEnter()) // password → account name
+	send(m, keyEnter()) // account name → the revealed URL, the last field
+	cmd := send(m, keyEnter())
+	if disc.calls != 0 {
+		t.Errorf("discovery ran although a URL was typed: calls = %d", disc.calls)
+	}
+	if m.step != wizTest || !m.testing {
+		t.Fatalf("step = %v testing = %v (err %q), want the connection test", m.step, m.testing, m.err)
+	}
+	deliver(m, cmd)
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m.step, m.err)
+	}
+}
+
+// TestWizardBareUsernameOffersTheURLField: a login that is not an email
+// address cannot be discovered from, so the form says so and points at
+// ctrl+u instead of guessing a server.
+func TestWizardBareUsernameOffersTheURLField(t *testing.T) {
+	m, _ := newTestWizard(t, nil, testFetch(mailboxItems(), nil), nil)
+	disc := &discoverCounter{fn: testDiscover("https://mail.example.com", "", nil)}
+	m.discover = disc.seam()
+
+	deliver(m, walkForm(m, "server-login", "s3cret", ""))
+	if m.step != wizForm {
+		t.Fatalf("step = %v, want the form back", m.step)
+	}
+	if !strings.Contains(m.err, "ctrl+u") || !strings.Contains(m.err, "email address") {
+		t.Errorf("err = %q, want the address error naming ctrl+u", m.err)
+	}
+	if m.focus != 1 {
+		t.Errorf("focus = %d, want 1 (the address field)", m.focus)
+	}
+	if disc.calls != 0 {
+		t.Errorf("discovery ran without an email domain: calls = %d", disc.calls)
+	}
+}
+
+// TestWizardEditDiscoversOnlyWhenTheURLIsCleared pins the edit-mode rule
+// (interviewed 2026-09-28): a configured account never rediscovers on its
+// own, but clearing the field hands it back to discovery.
+func TestWizardEditDiscoversOnlyWhenTheURLIsCleared(t *testing.T) {
+	cfg := &config.Config{
+		DefaultAccount: "work",
+		Accounts: map[string]*config.Account{
+			"work": {DisplayName: "Work", URL: "https://mail.example.com", Username: "me@work.example.com"},
+		},
+	}
+
+	// Prefilled URL: four enters and no discovery anywhere.
+	m, _ := newTestWizard(t, cfg, testFetch(mailboxItems(), nil), nil)
+	m.resolve = existingSecret("existing-secret", nil)
+	disc := &discoverCounter{fn: testDiscover("https://discovered.example.net", "", nil)}
+	m.discover = disc.seam()
+	send(m, keyDown()) // rows: add, work
+	send(m, keyEnter())
+	var cmd tea.Cmd
+	for i := 0; i < 4; i++ {
+		cmd = send(m, keyEnter())
+	}
+	if m.step != wizTest || !m.testing {
+		t.Fatalf("step = %v testing = %v (err %q), want the connection test", m.step, m.testing, m.err)
+	}
+	deliver(m, cmd)
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m.step, m.err)
+	}
+	if disc.calls != 0 {
+		t.Errorf("edit with a configured URL discovered: calls = %d", disc.calls)
+	}
+
+	// Cleared URL: the same walk ends in discovery.
+	m2, _ := newTestWizard(t, cfg, testFetch(mailboxItems(), nil), nil)
+	m2.resolve = existingSecret("existing-secret", nil)
+	disc2 := &discoverCounter{fn: testDiscover("https://discovered.example.net", "", nil)}
+	m2.discover = disc2.seam()
+	send(m2, keyDown())
+	send(m2, keyEnter())
+	m2.inputs[0].SetValue("") // the user clears the server URL
+	send(m2, keyTab(false))   // leave the empty field behind
+	for i := 0; i < 3; i++ {
+		cmd = send(m2, keyEnter())
+	}
+	if m2.step != wizTest || !m2.discovering {
+		t.Fatalf("step = %v discovering = %v (err %q), want discovery to start", m2.step, m2.discovering, m2.err)
+	}
+	deliver(m2, cmd)
+	if m2.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m2.step, m2.err)
+	}
+	if disc2.calls != 1 {
+		t.Errorf("discovery calls = %d, want 1", disc2.calls)
+	}
+	if m2.inputs[0].Value() != "https://discovered.example.net" {
+		t.Errorf("url = %q, want the discovered server", m2.inputs[0].Value())
+	}
+}
+
+// TestWizardDiscoveryWritesSessionURL: a session document answered from
+// another origin is persisted as session_url, which is exactly what the
+// client's trust anchor is built for (FR-A7).
+func TestWizardDiscoveryWritesSessionURL(t *testing.T) {
+	m, path := newTestWizard(t, nil, testFetch(mailboxItems(), nil),
+		func(string, string, string, bool) (string, error) { return "OS keyring", nil })
+	m.discover = testDiscover("https://mail.example.com", "https://session.example.com/jmap", nil)
+
+	deliver(m, walkForm(m, "me@example.com", "s3cret", ""))
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want wizMailbox", m.step, m.err)
+	}
+	runSave(m, keyEnter())
+	if m.step != wizDone {
+		t.Fatalf("step = %v err = %q, want wizDone", m.step, m.err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	a, _ := cfg.Account("mail-example-com")
+	if a == nil {
+		t.Fatal("account not saved")
+	}
+	if a.URL != "https://mail.example.com" {
+		t.Errorf("url = %q", a.URL)
+	}
+	if a.SessionURL != "https://session.example.com/jmap" {
+		t.Errorf("session_url = %q, want the cross-origin endpoint discovery found", a.SessionURL)
+	}
+}
+
+// TestWizardLiveDiscovery is the M10 live gate: the form exactly as a
+// user fills it — email, password, name, no URL — discovers the server
+// (SRV or the domain probe), authenticates, and saves. Read-only against
+// the live account apart from a temp config; the fake store keeps the
+// keyring untouched (AGENTS.md rules).
+func TestWizardLiveDiscovery(t *testing.T) {
+	liveUser := os.Getenv("JMAP_TUI_TEST_USER")
+	livePass := os.Getenv("JMAP_TUI_TEST_PASSWORD")
+	if liveUser == "" || livePass == "" {
+		t.Skip("live Stalwart creds not set (JMAP_TUI_TEST_USER / _PASSWORD)")
+	}
+	m, path := newTestWizard(t, nil, realFetch(20*time.Second),
+		func(string, string, string, bool) (string, error) { return "OS keyring", nil })
+	// The unit-test default (1s) is far too tight for DNS plus a probe.
+	m.opts.Timeout = 20 * time.Second
+	m.discover = realDiscover(20 * time.Second)
+
+	deliver(m, walkForm(m, liveUser, livePass, "live-discovery"))
+	if m.step != wizMailbox {
+		t.Fatalf("step = %v err = %q, want the mailbox picker", m.step, m.err)
+	}
+	if m.serverURL == "" || !m.showURL || m.inputs[0].Value() == "" {
+		t.Fatalf("serverURL = %q showURL = %v field = %q: discovery never filled the form",
+			m.serverURL, m.showURL, m.inputs[0].Value())
+	}
+	t.Logf("discovered %s (session_url %q)", m.serverURL, m.sessionURL)
+
+	runSave(m, keyEnter())
+	if m.step != wizDone || m.res == nil {
+		t.Fatalf("step = %v err = %q, want wizDone", m.step, m.err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config round trip: %v", err)
+	}
+	a, _ := cfg.Account(m.accountID)
+	if a == nil || a.URL != m.serverURL {
+		t.Fatalf("saved account = %+v, want the discovered url %q", a, m.serverURL)
+	}
+	if a.Username != liveUser {
+		t.Errorf("username = %q, want %q", a.Username, liveUser)
 	}
 }
