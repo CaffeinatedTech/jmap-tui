@@ -93,7 +93,7 @@ func runSmoke(args []string) error {
 		SessionURL: accountSessionURL(acct),
 		Username:   username,
 		Password:   secret,
-		Auth:       acct.Auth,
+		Auth:       accountAuth(acct),
 		Timeout:    *timeout,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -219,4 +219,13 @@ func accountSessionURL(a *config.Account) string {
 		return ""
 	}
 	return a.SessionURL
+}
+
+// accountAuth tolerates a nil account (flags-only mode), matching the
+// other accessors above — without this, `smoke --url/--user` panics.
+func accountAuth(a *config.Account) string {
+	if a == nil {
+		return ""
+	}
+	return a.Auth
 }
