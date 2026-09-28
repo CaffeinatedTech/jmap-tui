@@ -951,7 +951,12 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if id == "" {
 		return nil
 	}
-	if text, body, ok := e.bodies.get(id); ok {
+	// The LRU has no lock of its own: every get/put rides the engine
+	// mutex, so two overlapping loads on one engine can't collide on it.
+	e.mu.Lock()
+	text, body, ok := e.bodies.get(id)
+	e.mu.Unlock()
+	if ok {
 		e.mu.Lock()
 		e.bodyLoading = ""
 		e.setBodyLocked(id, text, body.Attachments)
@@ -973,15 +978,15 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 		return err
 	}
 
-	text := body.Text
+	text = body.Text
 	if text == "" && body.HTML != "" {
 		text = mailtext.HTMLToText(body.HTML)
 	}
 	body.Text = text
-	e.bodies.put(id, text, body)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.bodies.put(id, text, body)
 	e.bodyLoading = ""
 	e.setBodyLocked(id, text, body.Attachments)
 	return nil
