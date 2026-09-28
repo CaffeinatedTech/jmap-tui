@@ -1,11 +1,12 @@
 package jmapclient
 
-// Audit regression tests for SECURITY_AUDIT_FINDINGS.md findings F-1, F-2,
-// F-6, F-7, F-8 and F-9, plus the F-3 live probe: appendix A.1 and A.12
-// copied verbatim (minus the probes for findings whose remediations have
-// not landed yet). Every test encodes the SECURE behavior decided in
-// SECURITY_AUDIT_PLAN.md §6 (D-2, D-3, D-4, D-7); a FAIL means the finding
-// is back.
+// Audit regression tests for the client-side security fixes: credentials
+// confined to the origins the user configured (origin-gated transport,
+// refused cross-origin redirects), userinfo stripped before logging,
+// size-capped JSON responses and attachment downloads, hostile attachment
+// names kept out of the download URL — plus the live hostile-payload
+// probe. Every test encodes the secure behavior; a FAIL means the
+// regression is back.
 
 import (
 	"bytes"
@@ -153,13 +154,13 @@ func TestAuditC2CrossOriginSessionURLDropsAuth(t *testing.T) {
 		t.Fatalf("control broken: same-origin request lost Authorization")
 	}
 	if got := apiRecorder.lastAuth(); got != "" {
-		t.Errorf("FINDING C-2: apiUrl on a different origin received Authorization (%q…); per plan D-2 cross-origin session URLs must be fetched without credentials", truncateForLog(got))
+		t.Errorf("FINDING C-2: apiUrl on a different origin received Authorization (%q…); cross-origin session URLs must be fetched without credentials", truncateForLog(got))
 	}
 }
 
 // --- C-4: URL userinfo must never reach the debug log ---
-// (Shipped with F-6: logging strips userinfo; config rejects userinfo
-// outright so a credentialed URL is doubly unreachable.)
+// (Logging strips userinfo; config rejects userinfo outright so a
+// credentialed URL is doubly unreachable.)
 
 func TestAuditC4UserInfoNotLogged(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -216,8 +217,8 @@ func TestAuditS2DownloadPathStaysInTemplate(t *testing.T) {
 }
 
 // --- S-1: redirect loops must fail fast, not hang ---
-// (Shipped with F-1: refuseCrossOriginRedirects replaces http.Client's
-// default policy, so the 10-hop cap it inherits must be proven.)
+// (refuseCrossOriginRedirects replaces http.Client's default policy, so
+// the 10-hop cap it inherits must be proven.)
 
 func TestAuditS1RedirectLoopFailsFast(t *testing.T) {
 	var srv *httptest.Server
@@ -239,8 +240,7 @@ func TestAuditS1RedirectLoopFailsFast(t *testing.T) {
 	}
 }
 
-// --- S-3: JSON responses must be size-capped (plan D-4: 32 MiB) ---
-// (Shipped with F-7.)
+// --- S-3: JSON responses must be size-capped (32 MiB) ---
 
 func TestAuditS3JSONResponseSizeCap(t *testing.T) {
 	const cap32MiB = 32 << 20
@@ -257,7 +257,7 @@ func TestAuditS3JSONResponseSizeCap(t *testing.T) {
 	defer cancel()
 	err := c.Connect(ctx)
 	if err == nil {
-		t.Errorf("FINDING S-3: >32MiB JSON response accepted (no size cap on decode); want a size-limit error per plan D-4")
+		t.Errorf("FINDING S-3: >32MiB JSON response accepted (no size cap on decode); want a size-limit error (32 MiB cap)")
 	} else if !strings.Contains(strings.ToLower(err.Error()), "too large") &&
 		!strings.Contains(strings.ToLower(err.Error()), "size") &&
 		!strings.Contains(strings.ToLower(err.Error()), "limit") {
@@ -265,8 +265,8 @@ func TestAuditS3JSONResponseSizeCap(t *testing.T) {
 	}
 }
 
-// --- S-4: attachment download reads must be capped (plan D-4: 100 MiB) ---
-// (Shipped with F-8: the cap lives in DownloadBlob so both the TUI save
+// --- S-4: attachment download reads must be capped (100 MiB) ---
+// (The cap lives in DownloadBlob so both the TUI save
 // path and direct callers inherit it.)
 
 func TestAuditS4AttachmentSizeCap(t *testing.T) {
@@ -303,7 +303,7 @@ func TestAuditS4AttachmentSizeCap(t *testing.T) {
 
 	n, err := io.Copy(io.Discard, rc)
 	if err == nil && n > cap100MiB {
-		t.Errorf("FINDING S-4: read %d bytes (>%d) with no error; plan D-4 requires a 100MiB cap that fails the save", n, cap100MiB)
+		t.Errorf("FINDING S-4: read %d bytes (>%d) with no error; a 100MiB cap must fail the save", n, cap100MiB)
 	}
 }
 
@@ -328,13 +328,12 @@ func firstLine(buf *bytes.Buffer) string {
 	return s
 }
 
-// --- A.12: live probe against Stalwart (D-7, F-3 confirmation) ---
+// --- live probe against Stalwart ---
 
-// Live probe for SECURITY_AUDIT_PLAN.md §4.10 (approved, D-7). Sends ONE
-// hostile-payload message from the test account to itself, reads it back,
-// and measures where controls survive: server round-trip → HTML conversion
-// → the verbatim text path. Cleans up after itself (destroyEmails).
-// Skips without JMAP_TUI_TEST_* creds.
+// Sends ONE hostile-payload message from the test account to itself,
+// reads it back, and measures where controls survive: server round-trip →
+// HTML conversion → the verbatim text path. Cleans up after itself
+// (destroyEmails). Skips without JMAP_TUI_TEST_* creds.
 
 func TestAuditLiveHostilePayloadRoundTrip(t *testing.T) {
 	url, user, pass := liveCreds(t)
@@ -423,7 +422,8 @@ func TestAuditLiveHostilePayloadRoundTrip(t *testing.T) {
 	}
 
 	// 1) Server round-trip on the subject: does Stalwart preserve control
-	// bytes? If yes, client-side sanitization is mandatory (plan D-3).
+	// bytes? If yes, client-side sanitization before rendering is
+	// mandatory.
 	subjControls := countControls(found.Subject)
 	t.Logf("live subject: %d controls, subject=%q", subjControls, found.Subject)
 	if subjControls > 0 {

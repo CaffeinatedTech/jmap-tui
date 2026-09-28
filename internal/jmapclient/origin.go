@@ -7,7 +7,7 @@ import (
 
 // originKey normalizes raw to its origin — scheme, host, and effective
 // port (default ports omitted) — lowercased, so two keys are equal if and
-// only if the URLs are same-origin (SECURITY_AUDIT_PLAN.md D-2). ok is
+// only if the URLs are same-origin. ok is
 // false when raw is not an absolute URL with a host; callers treat that as
 // "no origin, therefore not trusted" (fail closed for credentials).
 func originKey(raw string) (string, bool) {

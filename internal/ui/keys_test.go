@@ -57,8 +57,8 @@ func TestKeyMapDefaultsResolve(t *testing.T) {
 
 // TestKeyMapUnboundActionRemappable: an action that ships without a
 // default key (sidebar.close — "[" took over, FR-C6) keeps its id
-// remappable (KEYMAP_PLAN §6), stays out of the overlay until remapped,
-// and validates like any other binding.
+// remappable, stays out of the overlay until remapped, and validates
+// like any other binding.
 func TestKeyMapUnboundActionRemappable(t *testing.T) {
 	km, err := NewKeyMap(map[Action]string{ActSidebarClose: "x"})
 	if err != nil {

@@ -692,7 +692,7 @@ func (e *Engine) markSynced() {
 }
 
 // truncateStatusErr keeps status-line errors to one bounded line:
-// 80 bytes, rune-safe and control-free (finding F-13).
+// 80 bytes, rune-safe and control-free.
 func truncateStatusErr(err error) string {
 	return mailtext.Truncate(err.Error(), 80)
 }

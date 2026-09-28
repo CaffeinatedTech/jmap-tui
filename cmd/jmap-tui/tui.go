@@ -315,8 +315,8 @@ func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool
 		return out
 	}
 	// Config URLs are validated at Load; --url is not, so the merged
-	// value gets the D-1/D-2 policy check before any credential is sent
-	// (findings F-5, F-6).
+	// value gets the URL policy check (https, no userinfo, cleartext only
+	// for loopback) before any credential is sent.
 	if err := config.ValidateServerURL(serverURL); err != nil {
 		out.Err = fmt.Errorf("server URL: %w", err)
 		return out
@@ -434,8 +434,8 @@ func setupLogger(path, level string) (*slog.Logger, func(), error) {
 		return nil, nil, fmt.Errorf("log file: %w", err)
 	}
 	// A pre-existing file keeps whatever mode it was created with —
-	// tighten it so a world-writable debug log can't survive (finding
-	// F-14; mirrors keyring.WritePasswordFile).
+	// tighten it so a world-writable debug log can't survive (mirrors
+	// keyring.WritePasswordFile).
 	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("log file: %w", err)
@@ -462,8 +462,7 @@ func setupLogger(path, level string) (*slog.Logger, func(), error) {
 // contains the panic value and stack only — never message content or
 // credentials (NFR-4, NFR-5). os.CreateTemp gives the file a random name
 // with O_EXCL at mode 0600: a symlink planted at a predictable $TMPDIR
-// name can never be opened, so the report can't clobber a victim file
-// (finding F-10).
+// name can never be opened, so the report can't clobber a victim file.
 func writeCrashReport(v any, stack []byte) (string, error) {
 	f, err := os.CreateTemp(os.TempDir(), "jmap-tui-crash-*.log")
 	if err != nil {

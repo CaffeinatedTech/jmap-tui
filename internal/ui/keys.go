@@ -137,7 +137,7 @@ func defaultBindings() []Binding {
 		{Key: "ctrl+up", Act: ActSidebarMoveUp, Help: "move account up", Pane: PaneSidebar},
 		{Key: "ctrl+down", Act: ActSidebarMoveDown, Help: "move account down", Pane: PaneSidebar},
 		// sidebar.close keeps its action id for [keys] remap stability
-		// (KEYMAP_PLAN §6) but ships unbound: "[" (pane.toggle_sidebar)
+		// but ships unbound: "[" (pane.toggle_sidebar)
 		// is now the sole show/hide key, since h folds the tree (FR-C6).
 		// An empty key matches no keystroke; Help skips it until a
 		// remap gives it one.

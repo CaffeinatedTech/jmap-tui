@@ -4,7 +4,7 @@ package jmapclient
 // hand-rolled method types plus JSContact (RFC 9553) wire structs, because
 // go-jmap ships no contacts package (PLAN §9 — extend the wrapper, not the
 // app). The wire shape stays here: above this layer everything speaks
-// internal/mail types (golden rule 3). Design record: CONTACTS_PLAN.md.
+// internal/mail types (golden rule 3).
 
 import (
 	"context"
@@ -26,7 +26,7 @@ const contactsURI = jmap.URI("urn:ietf:params:jmap:contacts")
 // contactCardProperties is the ContactCard/get subset the UI needs (FR-D4
 // analogue): the summary/list fields and everything the contact form owns.
 // uid/created/updated are deliberately absent — the live Stalwart does not
-// return them (CONTACTS_PLAN §8) and nothing sorts by them.
+// return them and nothing sorts by them.
 var contactCardProperties = []string{
 	"id", "addressBookIds", "kind", "name",
 	"emails", "phones", "organizations", "titles", "notes",
@@ -211,9 +211,8 @@ func (c *Client) AddressBooks(ctx context.Context) (mail.AddressBookList, error)
 }
 
 // Contacts implements mail.ContactProvider: one batched ContactCard/get
-// with the summary property subset. Group cards are dropped (out of scope,
-// CONTACTS_PLAN §0). No ContactCard/query — sort and filter happen client
-// side (CONTACTS_PLAN §1).
+// with the summary property subset. Group cards are dropped (out of
+// scope). No ContactCard/query — sort and filter happen client side.
 func (c *Client) Contacts(ctx context.Context) (mail.ContactList, error) {
 	registerContacts()
 	if err := c.requireContacts(); err != nil {
@@ -542,8 +541,8 @@ func convertChanges(inv *jmap.Invocation, call string) (mail.ContactChangeSet, e
 }
 
 // convertContactSetResponse maps the shared RFC 8620 §5.3 response into
-// contact terms. Created handles decode from raw: Stalwart returns only the
-// assigned id (CONTACTS_PLAN §8).
+// contact terms. Created handles decode from raw: Stalwart returns only
+// the assigned id.
 func convertContactSetResponse(sr *flexibleSetResponse) mail.ContactMutationResult {
 	out := mail.ContactMutationResult{
 		OldState:     sr.OldState,
@@ -580,8 +579,7 @@ func convertContactSetResponse(sr *flexibleSetResponse) mail.ContactMutationResu
 // --- create / patch construction ---
 
 // contactCreateObject builds the JSContact card for a create. Only
-// non-empty fields travel; the server generates id and uid (verified live,
-// CONTACTS_PLAN §8).
+// non-empty fields travel; the server generates id and uid.
 func contactCreateObject(draft mail.ContactDraft) map[string]any {
 	obj := map[string]any{
 		"addressBookIds": addressBookSet(draft.AddressBookIDs),

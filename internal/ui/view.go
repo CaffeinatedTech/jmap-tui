@@ -260,7 +260,7 @@ func previewChrome(st State) int {
 
 // Render composes one full frame, width w and height h. Every
 // server/sender-controlled string in st is stripped of control characters
-// first (D-3): this is the render-boundary choke point, so no slot can
+// first: this is the render-boundary choke point, so no slot can
 // bypass it on its way to the terminal.
 func Render(w, h int, st State) string {
 	st = sanitizeState(st)

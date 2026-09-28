@@ -72,7 +72,7 @@ type Engine struct {
 
 	// Contacts (M9, FR-L): a parallel in-memory store with its own state
 	// strings, version and latest-wins channel — the mail Snapshot path
-	// stays untouched (CONTACTS_PLAN §2.3). Lazy: populated by
+	// stays untouched. Lazy: populated by
 	// LoadContacts, then kept fresh by reconcileContacts only while warm.
 	contactsLoaded  bool
 	contactsLoading bool

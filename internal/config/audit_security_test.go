@@ -1,11 +1,10 @@
 package config
 
-// Audit regression tests for SECURITY_AUDIT_FINDINGS.md appendix A.7:
-// C-3 (cleartext non-loopback URLs must be rejected — finding F-5,
-// plan D-1), C-3b (URL userinfo must be rejected — finding F-6) and
-// W-5 (writeAtomic's temp file must not follow a planted symlink —
-// finding F-11). The URL table also pins the policy the --url/smoke
-// flag paths share through ValidateServerURL. FAIL = finding confirmed.
+// Audit regression tests: C-3 (cleartext non-loopback URLs must be
+// rejected), C-3b (URL userinfo must be rejected) and W-5 (writeAtomic's
+// temp file must not follow a planted symlink). The URL table also pins
+// the policy the --url/smoke flag paths share through ValidateServerURL.
+// FAIL = regression confirmed.
 
 import (
 	"os"
@@ -14,7 +13,7 @@ import (
 	"testing"
 )
 
-// D-1: non-loopback cleartext must be rejected; loopback stays allowed
+// Non-loopback cleartext must be rejected; loopback stays allowed
 // (mockjmap and local Stalwart experiments).
 func TestAuditC3RejectsNonLoopbackHTTP(t *testing.T) {
 	cases := []struct {
@@ -32,7 +31,7 @@ func TestAuditC3RejectsNonLoopbackHTTP(t *testing.T) {
 		body := "[accounts.main]\nurl = \"" + tc.url + "\"\nusername = \"u\"\n"
 		_, err := Load(write(t, body))
 		if tc.wantErr && err == nil {
-			t.Errorf("[%s] D-1: cleartext non-loopback URL accepted; want rejection", tc.name)
+			t.Errorf("[%s] cleartext non-loopback URL accepted; want rejection", tc.name)
 		}
 		if !tc.wantErr && err != nil {
 			t.Errorf("[%s] unexpected error: %v", tc.name, err)

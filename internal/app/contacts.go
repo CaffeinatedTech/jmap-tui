@@ -2,8 +2,8 @@ package app
 
 // Contacts (M9, FR-L): the full-screen contacts view, the contact form
 // modal, and the plumbing that keeps both fed from the per-account sync
-// stores. Design record: CONTACTS_PLAN.md. The screen and the form follow
-// the repo's pointer-field/nil-closed overlay pattern; the keyboard never
+// stores. The screen and the form follow the repo's
+// pointer-field/nil-closed overlay pattern; the keyboard never
 // reaches the keymap while either owns it.
 
 import (
@@ -741,7 +741,7 @@ func (m *Model) openContactFormFor(c mail.Contact, acct string) {
 // set stores a field value on the form.
 // set stores a field value on the form. Prefilled values come from server
 // contact data, and the form's fields render as a styled input widget the
-// render boundary cannot strip later — so the strip happens here (D-3).
+// render boundary cannot strip later — so the strip happens here.
 func (f *contactFormState) set(i int, v string) {
 	if i >= 0 && i < len(f.fields) {
 		f.fields[i].SetValue(ui.Sanitize(v))
@@ -881,8 +881,7 @@ func (m *Model) contactFormSave() tea.Cmd {
 		f.err = "need a name or an email address"
 		return nil
 	}
-	// Labels the form does not edit survive by address (CONTACTS_PLAN
-	// §8 preservation rule).
+	// Labels the form does not edit are carried over by address.
 	draft := mail.ContactDraft{
 		GivenName: given,
 		Surname:   surname,
@@ -1069,7 +1068,7 @@ func (m *Model) contactsWarmed() bool {
 
 // matchContacts ranks candidates for a typed token: whole-token prefix
 // hits first, then substring hits, each in candidate order; limit caps the
-// popup (top 5, CONTACTS_PLAN §3.4).
+// popup (top 5).
 func matchContacts(cands []suggestCandidate, token string, limit int) []suggestCandidate {
 	token = strings.ToLower(strings.TrimSpace(token))
 	if token == "" {

@@ -7,13 +7,12 @@ import (
 	"strings"
 )
 
-// ValidateServerURL enforces the URL policy of SECURITY_AUDIT_PLAN.md
-// D-1/D-2 on every server URL the app will send credentials to (findings
-// F-5, F-6): absolute http(s) URL, no userinfo, and cleartext http://
-// only for loopback hosts — mockjmap and local Stalwart experiments keep
-// working while a remote server can never receive Basic auth in the
-// clear. It runs at config validation and on the --url/smoke flag paths;
-// the wizard calls it through normalizeServerURL.
+// ValidateServerURL enforces the URL policy on every server URL the app
+// will send credentials to: absolute http(s) URL, no userinfo, and
+// cleartext http:// only for loopback hosts — mockjmap and local Stalwart
+// experiments keep working while a remote server can never receive Basic
+// auth in the clear. It runs at config validation and on the --url/smoke
+// flag paths; the wizard calls it through normalizeServerURL.
 //
 // Error messages never echo the raw URL: a URL may embed user:pass@ and
 // these errors are printed to the terminal (FR-K2).

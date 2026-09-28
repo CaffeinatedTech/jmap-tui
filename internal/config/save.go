@@ -196,7 +196,7 @@ func hasDefaultAccount(text string) bool {
 // mid-write never truncates the config. The temp file is created with
 // O_EXCL under a random name in the destination directory, so a symlink
 // planted at a predictable "<path>.tmp" can never be followed and
-// clobbered (finding F-11); the mode is applied to the file descriptor
+// clobbered; the mode is applied to the file descriptor
 // we own, never re-opened by path. Callers wrap the error with their own
 // package prefix.
 func writeAtomic(path string, data []byte, mode os.FileMode) error {

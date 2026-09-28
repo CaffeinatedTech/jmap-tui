@@ -1,11 +1,10 @@
 package main
 
-// Audit probes for SECURITY_AUDIT_FINDINGS.md appendix A.10: T-5 (smoke's
-// stdout dump must be escape-free even when the server is hostile —
-// finding F-3), W-4 (the crash report must not follow a planted symlink
-// in a shared tmp dir — finding F-10) and W-7 (a pre-existing
-// world-writable log file must be tightened to 0600 — finding F-14).
-// FAIL = finding confirmed. T-6's stderr probe is inspection-only —
+// Audit probes: T-5 (smoke's stdout dump must be escape-free even when
+// the server is hostile), W-4 (the crash report must not follow a
+// planted symlink in a shared tmp dir) and W-7 (a pre-existing
+// world-writable log file must be tightened to 0600).
+// FAIL = regression confirmed. T-6's stderr probe is inspection-only —
 // main() strips at the print site.
 
 import (
@@ -46,7 +45,7 @@ func TestAuditT5SmokeStdoutEscapeFree(t *testing.T) {
 }
 
 // W-4: crash report must not follow a planted symlink in a shared tmp
-// dir (appendix A.10). writeCrashReport now uses a random O_EXCL name,
+// dir. writeCrashReport now uses a random O_EXCL name,
 // so the planted predictable names can never be opened.
 func TestAuditW4CrashReportDoesNotFollowSymlink(t *testing.T) {
 	tmp := t.TempDir() // stands in for $TMPDIR
@@ -82,8 +81,7 @@ func TestAuditW4CrashReportDoesNotFollowSymlink(t *testing.T) {
 	}
 }
 
-// W-7: setupLogger must not leave a pre-existing world-writable log file
-// (appendix A.10).
+// W-7: setupLogger must not leave a pre-existing world-writable log file.
 func TestAuditW7LogFileTightenedTo0600(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "debug.log")

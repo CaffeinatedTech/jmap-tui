@@ -12,7 +12,7 @@ import (
 // bodies, or credentials (FR-K2, NFR-5). JMAP URLs normally carry no
 // secret material: Basic auth lives in the Authorization header, which is
 // not logged — but a hand-edited config may put user:pass@ into the
-// server URL, so userinfo is stripped before logging (finding F-6).
+// server URL, so userinfo is stripped before logging.
 type loggingTransport struct {
 	next   http.RoundTripper
 	logger *slog.Logger

@@ -12,7 +12,7 @@ import (
 // Per account the scan runs engine-side — it extends the window while it
 // looks and reports ErrNoUnread, which the app shows as the non-fatal
 // notice. The merged unified view has no engine (rows are app-side), so it
-// scans what is loaded (KEYMAP_PLAN §6).
+// scans what is loaded.
 func (m *Model) jumpUnread(dir int) (tea.Model, tea.Cmd) {
 	if len(m.snap.Rows) == 0 {
 		return m, nil

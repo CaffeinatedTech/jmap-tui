@@ -1,8 +1,7 @@
 package mailtext
 
-// Audit probes for SECURITY_AUDIT_PLAN.md §4.4 T-2/T-8: HTML→text must
-// strip control characters (finding F-3). FAIL = finding confirmed.
-// Copied verbatim from SECURITY_AUDIT_FINDINGS.md appendix A.5/A.6.
+// Audit probes for T-2/T-8: HTML→text must strip control characters.
+// FAIL = regression confirmed.
 
 import (
 	"strings"
@@ -93,11 +92,11 @@ func snippet(s string) string {
 // timeAfter is a 3s deadline for the termination probe.
 func timeAfter() <-chan time.Time { return time.After(3 * time.Second) }
 
-// --- A.6: fuzz target ---
+// --- fuzz target ---
 
 // FuzzHTMLToText: hostile HTML must never panic, never hang (enforced by
 // the fuzz engine's per-input timeout), and never emit control bytes
-// (plan D-3 / finding T-2 — fails until sanitization lands).
+// (T-2).
 func FuzzHTMLToText(f *testing.F) {
 	for _, s := range []string{
 		"<p>hello</p>",

@@ -2,8 +2,8 @@ package sync
 
 // Contacts (M9, FR-L): a per-engine in-memory contact store on its own
 // publish channel — deliberately NOT part of the mail Snapshot, so the
-// message-list path (applyView, ViewKey, windows) stays untouched
-// (CONTACTS_PLAN §2.3). Lazy: nothing here runs until the composer or the
+// message-list path (applyView, ViewKey, windows) stays untouched.
+// Lazy: nothing here runs until the composer or the
 // contacts screen asks for it, then live push/changes keeps it warm.
 // Nothing is ever written to disk (NFR-4, FR-L5).
 

@@ -1,11 +1,11 @@
 package sync
 
-// Audit probes for SECURITY_AUDIT_FINDINGS.md finding F-13 on the sync
-// side: truncateStatusErr must never split a UTF-8 rune and must strip
-// controls before a server error string reaches the status line.
-// (Appendix A.3's TestAuditT7StatusTruncationPattern was log-only — it
-// replicated the old byte-slice locally instead of calling the function;
-// this is the real assertion it stood in for.)
+// Audit probes for T-7 on the sync side: truncateStatusErr must never
+// split a UTF-8 rune and must strip controls before a server error
+// string reaches the status line.
+// (The audit's original probe was log-only — it replicated the old
+// byte-slice locally instead of calling the function; this is the real
+// assertion it stood in for.)
 
 import (
 	"errors"

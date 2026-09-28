@@ -90,8 +90,8 @@ func LoadPrefs(path string) (*Prefs, error) {
 }
 
 // SavePrefs writes the prefs document atomically (temp file + rename,
-// writeAtomic's O_EXCL random-name discipline — finding F-11) so a crash
-// mid-write never truncates it.
+// writeAtomic's O_EXCL random-name discipline) so a crash mid-write never
+// truncates it.
 func SavePrefs(path string, p *Prefs) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("prefs: %w", err)

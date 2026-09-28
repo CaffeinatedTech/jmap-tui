@@ -791,12 +791,12 @@ func (m *Model) saveAttachmentsCmd(dir string) tea.Cmd {
 
 // uniqueTries bounds the collision loop in uniquePath. The loop advances
 // on every iteration and gives up with an error, so no filename — however
-// hostile — can keep it spinning (finding F-4).
+// hostile — can keep it spinning.
 const uniqueTries = 1000
 
 // uniquePath resolves dir/name without ever overwriting and without ever
 // leaving dir. The name comes from the JMAP server and ultimately the
-// sender, so invalid names are rejected outright (finding F-4): "",
+// sender, so invalid names are rejected outright: "",
 // ".", "..", path separators (either kind — the download-URL side folds
 // Windows separators too), NUL, and anything past one filesystem's
 // 255-byte component limit. Collisions get a numeric suffix (name-1.ext,
@@ -804,7 +804,7 @@ const uniqueTries = 1000
 // errors.Is(err, fs.ErrNotExist) check: a stat failure that is not
 // "does not exist" (EINVAL from a NUL byte, ENAMETOOLONG from an
 // oversized component) returns that error instead of looping forever on a
-// predicate that can never become true (finding F-4's hang).
+// predicate that can never become true.
 func uniquePath(dir, name string) (string, error) {
 	if err := validAttachmentName(name); err != nil {
 		return "", err
@@ -831,7 +831,7 @@ func uniquePath(dir, name string) (string, error) {
 }
 
 // validAttachmentName rejects a server-supplied filename that could
-// escape the chosen directory or wedge the save (finding F-4). The upload
+// escape the chosen directory or wedge the save. The upload
 // side applies the same discipline to local names (compose.go); this is
 // its mirror for names travelling the other way.
 func validAttachmentName(name string) error {
@@ -847,7 +847,7 @@ func validAttachmentName(name string) error {
 }
 
 // writeNewFile creates path without ever overwriting or following a
-// symlink (finding F-4): O_EXCL fails if anything already sits at the
+// symlink: O_EXCL fails if anything already sits at the
 // destination — a raced collision or a pre-planted link — and the mode
 // stays 0600. os.WriteFile would have written straight through the link.
 func writeNewFile(path string, data []byte) error {

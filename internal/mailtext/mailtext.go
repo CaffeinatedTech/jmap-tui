@@ -86,7 +86,7 @@ type converter struct {
 // appended at the end. Malformed input is handled leniently by the parser;
 // conversion never fails and never touches the network. The result is run
 // through Sanitize: HTML character references decode to their control
-// characters after parsing (D-3), so the strip happens on the final text.
+// characters after parsing, so the strip happens on the final text.
 func HTMLToText(src string) string {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {

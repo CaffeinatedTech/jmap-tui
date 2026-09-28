@@ -55,13 +55,13 @@ func (c *Client) DownloadBlob(ctx context.Context, blobID mail.ID, name, mediaTy
 		_ = resp.Body.Close()
 		return nil, &ServerError{Status: resp.StatusCode}
 	}
-	// The D-4 attachment cap (finding F-8): the caller's reads fail past
+	// The attachment size cap: the caller's reads fail past
 	// 100 MiB with a clean error — never a silent truncation.
 	return newCappedReader(resp.Body, maxAttachment, errAttachmentTooLarge), nil
 }
 
 // safeURLName neutralizes a server-supplied attachment name before it is
-// spliced into the download URL template (finding F-9): url.PathEscape
+// spliced into the download URL template: url.PathEscape
 // leaves '.' unescaped, so a name like "../../admin" would put
 // dot-segments into the path of an authenticated request for a server or
 // proxy to normalize somewhere unexpected. The blob id identifies the

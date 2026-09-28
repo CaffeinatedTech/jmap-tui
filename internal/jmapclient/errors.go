@@ -54,12 +54,12 @@ func (e *MethodCallError) Error() string {
 // basicAuthTransport applies HTTP Basic credentials to every request for a
 // configured origin so that session discovery, API calls, and later
 // upload/download/EventSource all authenticate uniformly (FR-A2).
-// Credentials are never logged, and they never leave the origins the user
-// configured (SECURITY_AUDIT_PLAN.md D-2, findings F-1/F-2): session
-// resources may advertise apiUrl/downloadUrl/uploadUrl/eventSourceUrl on
-// another host, redirects may point anywhere, and a hostile server gets a
-// 401 at worst — never a credential. Off-origin requests leave with no
-// Authorization header even if another layer attached one.
+// Credentials are never logged, and they never leave the origins the
+// user configured: session resources may advertise
+// apiUrl/downloadUrl/uploadUrl/eventSourceUrl on another host, redirects
+// may point anywhere, and a hostile server gets a 401 at worst — never a
+// credential. Off-origin requests leave with no Authorization header even
+// if another layer attached one.
 type basicAuthTransport struct {
 	base     http.RoundTripper
 	username string

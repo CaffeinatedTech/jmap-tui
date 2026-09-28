@@ -2,7 +2,7 @@ package mockjmap
 
 // Contacts support (RFC 9610) for the fake server: address books and
 // contact cards with a /changes journal and push states, mirroring the live
-// Stalwart shapes verified in CONTACTS_PLAN.md §8. Cards are stored as wire
+// Stalwart shapes. Cards are stored as wire
 // objects so ContactCard/set path patches (RFC 8620 §5.3 "prop/key") apply
 // generically.
 
@@ -356,8 +356,8 @@ func (s *Server) contactSetResponse(args json.RawMessage) map[string]any {
 		out["notCreated"] = notCreated
 	}
 	if len(updated) > 0 {
-		// Map form with null values, the shape the live Stalwart answered
-		// (CONTACTS_PLAN §8); the wrapper's flexible decoder takes both.
+		// Map form with null values, the shape the live Stalwart answered;
+		// the wrapper's flexible decoder takes both.
 		um := map[string]any{}
 		for id := range updated {
 			um[id] = nil

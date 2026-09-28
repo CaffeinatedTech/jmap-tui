@@ -55,7 +55,7 @@ const wizardBoxW = 58
 
 // RenderWizard draws the wizard centered in the terminal. Server-influenced
 // fields (connection errors, mailbox picker labels) are stripped of control
-// characters first — the same render-boundary contract as Render (D-3).
+// characters first — the same render-boundary contract as Render.
 func RenderWizard(w, h int, th Theme, v WizardView) string {
 	v = sanitizeWizard(v)
 	var body strings.Builder

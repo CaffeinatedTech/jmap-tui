@@ -20,8 +20,8 @@ func keyShift(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Mod: tea.ModShift}
 }
 
-// TestKeymapV2Defaults pins the redesign's default bindings (KEYMAP_PLAN
-// §5) at the resolver level.
+// TestKeymapV2Defaults pins the redesign's default bindings
+// at the resolver level.
 func TestKeymapV2Defaults(t *testing.T) {
 	km, err := ui.NewKeyMap(nil)
 	if err != nil {

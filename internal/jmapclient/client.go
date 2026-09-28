@@ -60,13 +60,12 @@ type Client struct {
 	// streamHC is the EventSource client: no Timeout — http.Client.Timeout
 	// bounds the whole body read, which would kill a healthy SSE stream
 	// mid-flight; liveness there is the watchdog's job (sse.go). Both share
-	// the auth+logging transport and the redirect policy (findings F-1,
-	// F-2).
+	// the auth+logging transport and the redirect policy.
 	hc       *http.Client
 	streamHC *http.Client
 
 	// trusted holds the configured origins (origin.go); Connect uses it to
-	// report session URLs that fall outside them (D-2).
+	// report session URLs that fall outside them.
 	trusted   map[string]bool
 	session   *jmap.Session
 	sessionAt string
@@ -82,9 +81,9 @@ func New(opts Options) *Client {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	// The trust anchor (finding F-2): only origins the user configured
-	// receive credentials. ServerURL is the account URL; SessionURL, when
-	// set, is an explicit user-configured endpoint override.
+	// The trust anchor: only origins the user configured receive
+	// credentials. ServerURL is the account URL; SessionURL, when set,
+	// is an explicit user-configured endpoint override.
 	trusted := make(map[string]bool, 2)
 	for _, raw := range []string{opts.ServerURL, opts.SessionURL} {
 		if k, ok := originKey(raw); ok {
@@ -114,8 +113,8 @@ func New(opts Options) *Client {
 	}
 }
 
-// refuseCrossOriginRedirects is the redirect policy (finding F-1): a
-// redirect that would leave the origin it started from is refused
+// refuseCrossOriginRedirects is the redirect policy: a redirect that
+// would leave the origin it started from is refused
 // outright. The origin-gated transport would already strip Authorization
 // from an off-origin hop, but JMAP servers do not redirect across origins
 // in practice — refusing also blocks a hostile or compromised server from
@@ -170,7 +169,7 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 // warnCrossOrigin reports every session-supplied URL whose origin is not
-// one the user configured (finding F-2, decision D-2): those requests are
+// one the user configured: those requests are
 // sent without credentials — the transport enforces it — so split-host and
 // CDN deployments keep working while the Basic auth credential stays on
 // the configured origin. Only the origin is logged: the raw URL may carry

@@ -1,12 +1,12 @@
 package ui
 
-// Audit probes for SECURITY_AUDIT_PLAN.md §4.4 (terminal escape corpus).
+// Audit probes for the terminal escape corpus.
 // Strategy: render frames whose server-controlled fields carry hostile
 // control sequences, then assert the rendered frame contains NO C0/C1
 // controls other than '\n', and no OSC sequences at all. The legitimate
 // style vocabulary (verified against golden frames) is CSI SGR only:
 // ESC [ … m — so any other escape in the output is attacker-controlled.
-// A FAIL means the finding (plan F-3) is confirmed at that sink.
+// A FAIL means attacker-controlled escapes reached that sink.
 
 import (
 	"strings"
@@ -77,7 +77,7 @@ func auditCheckFrame(t *testing.T, sink, frame string) {
 			t.Errorf("[%s] C1 control %#x reached the frame at offset %d", sink, r, i)
 			return
 		}
-		// Plan D-3 also strips bidi controls and zero-width characters.
+		// Sanitize also strips bidi controls and zero-width characters.
 		if isAuditFormatControl(r) {
 			t.Errorf("[%s] format control %#x reached the frame at offset %d: %q…", sink, r, i, safeSnippet(frame, i))
 			return
@@ -105,7 +105,7 @@ func auditSGRLen(s string) (int, bool) {
 	return 0, false
 }
 
-// isAuditFormatControl reports r as a character the D-3 policy strips:
+// isAuditFormatControl reports r as a character Sanitize strips:
 // bidi embedding/override/isolate, zero-width chars, BOM, LRM/RLM.
 func isAuditFormatControl(r rune) bool {
 	switch {
@@ -246,7 +246,7 @@ func TestAuditT1ModalsStripControls(t *testing.T) {
 }
 
 // Header/status-bar error segments: server error strings flow here through
-// app.truncateErr (byte slicing — plan F-13).
+// app.truncateErr (the old byte slicing split runes).
 func TestAuditT7ErrorTruncationKeepsUTF8(t *testing.T) {
 	// 120+ byte multi-byte string forces s[:117] to split a rune if the
 	// truncation is byte-based (app.go:529). We assert the ui side: a

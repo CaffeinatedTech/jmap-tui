@@ -140,9 +140,9 @@ func TestNormalizeServerURL(t *testing.T) {
 		"   ",
 		"ftp://mail.example.com",
 		"://",
-		"http://mail.example.com",            // F-5: non-loopback cleartext
-		"http://192.168.1.10:8080",           // F-5: cleartext LAN host
-		"https://user:pass@mail.example.com", // F-6: userinfo
+		"http://mail.example.com",            // non-loopback cleartext
+		"http://192.168.1.10:8080",           // cleartext LAN host
+		"https://user:pass@mail.example.com", // userinfo
 	} {
 		if _, err := normalizeServerURL(bad); err == nil {
 			t.Errorf("normalizeServerURL(%q) accepted; want an error", bad)

@@ -9,15 +9,15 @@ import (
 )
 
 // Sanitize strips control characters from text on its way to the terminal
-// (SECURITY_AUDIT_PLAN.md D-3: strip silently, single choke point). It
-// delegates to mailtext.Sanitize — the canonical implementation lives
-// below the UI so internal/sync and HTMLToText can reach it — and exists
-// under this name as the display-layer API the render boundary, the smoke
-// dumps, and the stderr printer share.
+// (strip silently, single choke point). It delegates to mailtext.Sanitize
+// — the canonical implementation lives below the UI so internal/sync and
+// HTMLToText can reach it — and exists under this name as the
+// display-layer API the render boundary, the smoke dumps, and the stderr
+// printer share.
 func Sanitize(s string) string { return mailtext.Sanitize(s) }
 
 // sanitizeState returns a copy of st whose server- and sender-controlled
-// strings are stripped of control characters (D-3) before any of them can
+// strings are stripped of control characters before any of them can
 // reach a frame. Render calls it first, so every slot — list rows, preview
 // header, sidebar, footer errors, toasts, and every modal — is covered by
 // one contract.

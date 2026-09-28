@@ -74,7 +74,8 @@ func runSmoke(args []string) error {
 	if serverURL == "" || username == "" {
 		return errors.New("smoke: both --url and --user (or a configured account) are required")
 	}
-	// Config URLs are validated at Load; --url is not (findings F-5, F-6).
+	// Config URLs are validated at Load; --url is not, so the same
+	// ValidateServerURL policy runs here before any credential is sent.
 	if err := config.ValidateServerURL(serverURL); err != nil {
 		return fmt.Errorf("smoke: server URL: %w", err)
 	}
@@ -116,7 +117,7 @@ func runSmoke(args []string) error {
 
 // printSession dumps the connected session. Every field it prints is
 // server-controlled, so each goes through ui.Sanitize — smoke output
-// bypasses the TUI's render boundary and writes straight to stdout (D-3).
+// bypasses the TUI's render boundary and writes straight to stdout.
 func printSession(info jmapclient.SessionInfo) {
 	s := ui.Sanitize
 	fmt.Println("Session")

@@ -1,10 +1,9 @@
 package app
 
-// Audit probes for SECURITY_AUDIT_FINDINGS.md appendix A.3/A.4/A.13:
-// W-1/W-2 (attachment path traversal and the uniquePath hang — finding
-// F-4), T-7 (error truncation must never split a UTF-8 rune — finding
-// F-13) and I-6 (parsed addresses must carry no CR/LF/NUL — finding
-// F-16), plus the fuzz targets. FAIL = the finding is confirmed.
+// Audit probes: W-1/W-2 (attachment path traversal and the uniquePath
+// hang), T-7 (error truncation must never split a UTF-8 rune) and I-6
+// (parsed addresses must carry no CR/LF/NUL), plus the fuzz targets.
+// FAIL = the regression is confirmed.
 
 import (
 	"errors"
@@ -121,7 +120,7 @@ func clipInput(s string) string {
 	return s
 }
 
-// A.13: NUL-byte hang isolation (F-4).
+// W-2: NUL-byte hang isolation.
 func TestAuditW2UniquePathNulHangs(t *testing.T) {
 	dir := t.TempDir()
 	done := make(chan string, 1)
@@ -138,7 +137,7 @@ func TestAuditW2UniquePathNulHangs(t *testing.T) {
 	_ = filepath.Join
 }
 
-// T-7: truncateErr must never split a UTF-8 rune (appendix A.3).
+// T-7: truncateErr must never split a UTF-8 rune.
 func TestAuditT7TruncateErrUTF8Safe(t *testing.T) {
 	cases := []struct {
 		name string
@@ -157,7 +156,7 @@ func TestAuditT7TruncateErrUTF8Safe(t *testing.T) {
 }
 
 // I-6: parsed address fields must never carry CR/LF (header injection raw
-// material) into the JMAP payload (appendix A.3).
+// material) into the JMAP payload.
 func TestAuditI6AddressListStripsCRLF(t *testing.T) {
 	cases := []struct{ name, in string }{
 		{"lf-injection", "evil@x.test\nBcc: victim@x.test"},
@@ -179,7 +178,7 @@ func TestAuditI6AddressListStripsCRLF(t *testing.T) {
 }
 
 // FuzzTruncateErr: truncation must preserve valid UTF-8 for arbitrary
-// input (appendix A.4, finding F-13).
+// input.
 func FuzzTruncateErr(f *testing.F) {
 	f.Add("plain error")
 	f.Add(strings.Repeat("é", 200))

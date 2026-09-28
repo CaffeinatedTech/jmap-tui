@@ -1,6 +1,6 @@
 package sync
 
-// Live contacts gate (M9, CONTACTS_PLAN §5): capability, lazy load, the
+// Live contacts gate (M9): capability, lazy load, the
 // create/update/destroy round-trip through the engine, and push liveness
 // for ContactCard StateChange. Env-gated like every other live test
 // (AGENTS.md): unset creds ⇒ skip. Read + create/destroy only; every

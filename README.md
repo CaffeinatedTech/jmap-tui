@@ -104,7 +104,7 @@ origin, so none is offered. If "HTTPS from GitHub" isn't enough assurance:
 
 > **Status:** pre-release and under active development. It already does
 > everything described on this page; the Fastmail verification pass and the
-> `v0.1.0` tag are what's left before the v1.0 release.
+> `v0.1.0` tag are what's left before the v0.1 release.
 
 ## Getting started
 
@@ -367,9 +367,7 @@ delete it if you ever want those choices back to defaults.
 
 A hostile-server / hostile-mail / hostile-filesystem audit (2026-09-27 —
 17 findings, 4 High / 9 Medium / 4 Low) probed the client end to end.
-Every vector below is mitigated in code with regression tests; full
-dispositions and evidence are in
-[SECURITY_AUDIT_FINDINGS.md](SECURITY_AUDIT_FINDINGS.md).
+Every vector below is mitigated in code with regression tests.
 
 **Credentials & transport**
 
@@ -408,7 +406,7 @@ dispositions and evidence are in
 
 - [x] `install.sh` `curl | bash` trust model — documented residual;
       verification options under [Install](#verifying-your-binary)
-- [x] Dependency vulnerabilities — `govulncheck ./...` clean (F-17)
+- [x] Dependency vulnerabilities — `govulncheck ./...` clean
 
 Also probed and holding: SSE overlong-line recovery, HTML conversion
 termination, goroutine hygiene under churn, config fuzzing, and a
@@ -432,7 +430,6 @@ AI-assisted development — read the rules before contributing:
 | [REQUIREMENTS.md](REQUIREMENTS.md) | What we're building — scope & requirements |
 | [PLAN.md](PLAN.md) | How we're building it — architecture & milestones |
 | [AGENTS.md](AGENTS.md) | Contribution rules (for agents and humans) |
-| [KEYMAP_PLAN.md](KEYMAP_PLAN.md) | The reasoning behind the keymap |
 
 ## License
 

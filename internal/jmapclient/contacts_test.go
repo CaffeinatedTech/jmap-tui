@@ -113,7 +113,7 @@ func TestContactsConversion(t *testing.T) {
 		t.Fatalf("books wrong: %+v", got.AddressBookIDs)
 	}
 
-	// Group cards are out of scope and must be dropped (CONTACTS_PLAN §0).
+	// Group cards are out of scope and must be dropped.
 	if _, keep := convertContact(&jsCard{ID: "g1", Kind: "group"}); keep {
 		t.Fatal("group card must be dropped")
 	}

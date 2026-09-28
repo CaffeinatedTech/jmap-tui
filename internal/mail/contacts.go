@@ -44,9 +44,9 @@ type ContactEntry struct {
 }
 
 // Contact is the summary of one contact card (RFC 9610 §3). Cards with
-// kind=group are dropped by the provider: groups are out of scope
-// (CONTACTS_PLAN §0). Orgs/Titles/Notes hold every entry of their collection
-// in server key order; the form edits the first one.
+// kind=group are dropped by the provider: groups are out of scope.
+// Orgs/Titles/Notes hold every entry of their collection in server key
+// order; the form edits the first one.
 type Contact struct {
 	ID             ID
 	Kind           string
@@ -116,9 +116,9 @@ type ContactChangeSet struct {
 	HasMore   bool
 }
 
-// ContactDraft is the state of the contact form (CONTACTS_PLAN §3.2): the
-// fields the form owns, before any preservation rules are applied at patch
-// time. AddressBookIDs matters on create only — a card's book is not
+// ContactDraft is the state of the contact form: the fields the form
+// owns, before any preservation rules are applied at patch time.
+// AddressBookIDs matters on create only — a card's book is not
 // editable in v1.
 type ContactDraft struct {
 	GivenName string

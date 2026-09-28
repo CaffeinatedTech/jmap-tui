@@ -348,7 +348,7 @@ func (m *Model) handleComposePrep(msg composePrepMsg) (tea.Model, tea.Cmd) {
 		c.bcc.SetValue(formatAddressList(b.Bcc))
 		c.subject.SetValue(b.Subject)
 		// Draft bodies round-trip through the server; strip before the
-		// styled textarea takes them (D-3).
+		// styled textarea takes them.
 		c.body.SetValue(ui.Sanitize(b.Text))
 		c.inReplyTo = append([]string(nil), b.InReplyTo...)
 		c.references = append([]string(nil), b.References...)
@@ -395,7 +395,7 @@ func (m *Model) fillReply(c *composeState, orig mail.EmailBody, mode composeMode
 		c.subject.SetValue(prefixSubject("Fwd:", orig.Subject))
 		// The textarea renders its content with cursor styling, so the
 		// render boundary cannot strip controls from it later: quoted
-		// mail text is stripped here, at the source (D-3).
+		// mail text is stripped here, at the source.
 		c.body.SetValue(ui.Sanitize(forwardBlock(orig) + quoteBlock(orig.Text)))
 		// A forward carries no threading headers: it starts a new branch.
 		c.inReplyTo, c.references = nil, nil
@@ -437,7 +437,7 @@ func (m *Model) fillReply(c *composeState, orig mail.EmailBody, mode composeMode
 	c.bcc.SetValue("")
 	c.subject.SetValue(prefixSubject("Re:", orig.Subject))
 	// Same as the forward path: the composer body bypasses the render
-	// boundary's stripping, so the quote is stripped as it is set (D-3).
+	// boundary's stripping, so the quote is stripped as it is set.
 	c.body.SetValue(ui.Sanitize(attributionLine(orig) + quoteBlock(orig.Text)))
 
 	// Threading: inReplyTo names the replied-to Message-ID, references is
@@ -567,7 +567,7 @@ func formatAddressList(addrs []mail.Address) string {
 // "Name <email>", "email", and "Name email" all parse; anything without an
 // "@" is dropped rather than sent malformed (FR-H1). CR splits fields
 // like LF and any field carrying a NUL byte is dropped whole, so no
-// control can reach a Name or Email (finding F-16 — hygiene only; the
+// control can reach a Name or Email (hygiene only; the
 // compose payload is JSON, never client-built MIME headers).
 func parseAddressList(s string) []mail.Address {
 	fields := strings.FieldsFunc(s, func(r rune) bool {

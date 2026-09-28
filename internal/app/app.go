@@ -529,7 +529,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // truncateErr renders an operation failure for the status line: bounded
 // to 120 bytes, rune-safe and control-free via mailtext.Truncate
-// (finding F-13 — the old byte slice split multi-byte runes).
+// (the old byte slice split multi-byte runes).
 func truncateErr(op string, err error) string {
 	return op + ": " + mailtext.Truncate(err.Error(), 120)
 }
@@ -1259,7 +1259,7 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case ui.ActSearchClear:
-		// esc is the contextual back chain (KEYMAP_PLAN §4): close an
+		// esc is the contextual back chain: close an
 		// open search first (FR-F1), else leave full-screen view
 		// (FR-E5), else drop a multi-select (FR-G3); with none of those
 		// it is a no-op. Modals and the composer intercept esc before

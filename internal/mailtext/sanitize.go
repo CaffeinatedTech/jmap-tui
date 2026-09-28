@@ -6,8 +6,8 @@ import (
 )
 
 // Sanitize strips characters that must never reach a terminal from server-
-// or sender-controlled text (SECURITY_AUDIT_PLAN.md D-3: strip silently at
-// a single choke point). Removed: every C0 control except '\n' and '\t',
+// or sender-controlled text (strip silently, at a single choke point).
+// Removed: every C0 control except '\n' and '\t',
 // DEL, every C1 control (U+0080–U+009F), the bidi embedding/isolate/
 // override runes (U+202A–U+202E, U+2066–U+2069), zero-width and marking
 // characters (U+200B–U+200F, U+FEFF, U+061C), and invalid UTF-8 bytes
@@ -65,9 +65,10 @@ func dirtyAt(s string) int {
 	return -1
 }
 
-// keepRune reports whether r survives Sanitize. This is exactly the D-3
-// policy: C0/C1 controls out, '\n' and '\t' in, bidi/zero-width marking
-// characters out, ordinary text (including non-ASCII) in.
+// keepRune reports whether r survives Sanitize. This is exactly the
+// strip-silently policy: C0/C1 controls out, '\n' and '\t' in,
+// bidi/zero-width marking characters out, ordinary text (including
+// non-ASCII) in.
 func keepRune(r rune) bool {
 	switch {
 	case r == '\n' || r == '\t':
@@ -90,11 +91,11 @@ func keepRune(r rune) bool {
 
 // Truncate sanitizes s (Sanitize) and cuts it to at most max bytes of
 // output, the "…" tail included when a cut happened — so the result is
-// always valid UTF-8 and control-free whatever the input was. This is
-// the fix for finding F-13: the status/error truncators used to slice at
-// a fixed byte offset, splitting runes and shipping invalid UTF-8 into
-// the status line. Text already within the budget comes back unchanged
-// apart from sanitization; a max below the tail's own length yields "".
+// always valid UTF-8 and control-free whatever the input was, unlike the
+// old status/error truncators, which sliced at a fixed byte offset,
+// splitting runes and shipping invalid UTF-8 into the status line. Text
+// already within the budget comes back unchanged apart from
+// sanitization; a max below the tail's own length yields "".
 func Truncate(s string, max int) string {
 	s = Sanitize(s)
 	if len(s) <= max {
