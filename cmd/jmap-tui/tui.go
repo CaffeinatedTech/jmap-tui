@@ -337,6 +337,7 @@ func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool
 		SessionURL: accountSessionURL(acct),
 		Username:   username,
 		Password:   secret,
+		Auth:       acct.Auth,
 		Timeout:    opts.timeout,
 		Logger:     opts.logger,
 	})

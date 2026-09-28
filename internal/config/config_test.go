@@ -230,3 +230,41 @@ undo_delay = "10s"
 		}
 	}
 }
+
+// TestLoadAuthScheme covers the per-account `auth` key (FR-A2): bearer
+// for API-token servers (Fastmail), basic/absent for everyone else.
+func TestLoadAuthScheme(t *testing.T) {
+	path := write(t, `
+[accounts.fm]
+url = "https://api.fastmail.com"
+username = "me@example.com"
+auth = "bearer"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	a, ok := cfg.Account("fm")
+	if !ok {
+		t.Fatal("account fm missing")
+	}
+	if a.Auth != "bearer" {
+		t.Errorf("Auth = %q, want bearer", a.Auth)
+	}
+}
+
+func TestLoadRejectsBadAuthScheme(t *testing.T) {
+	path := write(t, `
+[accounts.x]
+url = "https://mail.example.com"
+username = "u"
+auth = "digest"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("auth = \"digest\" accepted; want an error")
+	}
+	if !strings.Contains(err.Error(), "auth") {
+		t.Errorf("error %q does not name the auth key", err)
+	}
+}

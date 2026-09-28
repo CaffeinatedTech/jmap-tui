@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,8 +82,8 @@ func typeText(m *wizardModel, s string) {
 // testFetch is the fake server: fixed rows (or error) for the connection
 // test.
 func testFetch(items []ui.PickerItem, err error) fetchFunc {
-	return func(_ context.Context, _, _, _ string) ([]ui.PickerItem, error) {
-		return items, err
+	return func(_ context.Context, _, _, _ string) ([]ui.PickerItem, string, error) {
+		return items, "", err
 	}
 }
 
@@ -336,9 +342,9 @@ func TestWizardSecretFallback(t *testing.T) {
 func TestWizardPasswordFromEnv(t *testing.T) {
 	var testedWith string
 	m, path := newTestWizard(t, nil,
-		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, error) {
+		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, string, error) {
 			testedWith = pass
-			return mailboxItems(), nil
+			return mailboxItems(), "", nil
 		},
 		func(string, string, string, bool) (string, error) {
 			t.Fatal("env-provided password must not be stored")
@@ -479,7 +485,7 @@ func TestWizardRealFetchAgainstMockJMAP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	items, err := fetch(ctx, srv.URL(), "tester@example.com", "correct-horse")
+	items, _, err := fetch(ctx, srv.URL(), "tester@example.com", "correct-horse")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -493,8 +499,59 @@ func TestWizardRealFetchAgainstMockJMAP(t *testing.T) {
 		t.Errorf("2026 depth = %d, want 1 (child of Archive)", items[2].Depth)
 	}
 
-	if _, err := fetch(ctx, srv.URL(), "tester@example.com", "wrong"); err == nil {
+	if _, _, err := fetch(ctx, srv.URL(), "tester@example.com", "wrong"); err == nil {
 		t.Fatal("bad credentials accepted; want an error")
+	}
+}
+
+// TestRealFetchProbesBearerRequirement is the FR-A2 probe: a server that
+// refuses Basic the way Fastmail does (401 "not bearer") is reached by
+// retrying Bearer, and realFetch reports the scheme that worked so the
+// wizard persists auth = "bearer". The gate proxies to mockjmap with
+// Basic credentials, so all JMAP logic stays mock-served.
+func TestRealFetchProbesBearerRequirement(t *testing.T) {
+	mock := mockjmap.New("tester@example.com", "correct-horse", []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0},
+	})
+	t.Cleanup(mock.Close)
+
+	const token = "tok-123"
+	target, err := url.Parse(mock.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("tester@example.com:correct-horse"))
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer "+token {
+			r.Header.Set("Authorization", basic)
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "Invalid Authorization header, not bearer")
+	}))
+	t.Cleanup(gate.Close)
+
+	fetch := realFetch(5 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	items, used, err := fetch(ctx, gate.URL, "tester@example.com", token)
+	if err != nil {
+		t.Fatalf("fetch over bearer gate: %v", err)
+	}
+	if used != "bearer" {
+		t.Errorf("scheme = %q, want bearer", used)
+	}
+	if len(items) == 0 {
+		t.Error("no mailbox rows")
+	}
+
+	// A server that wants Bearer still fails on a wrong token, with the
+	// original Basic-attempt error surfaced (the credential the user typed).
+	if _, _, err := fetch(ctx, gate.URL, "tester@example.com", "wrong"); err == nil {
+		t.Fatal("wrong token accepted; want an error")
 	}
 }
 
@@ -517,7 +574,7 @@ func TestWizardLiveStalwartFetch(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	items, err := realFetch(20*time.Second)(ctx, serverURL, liveUser, livePass)
+	items, _, err := realFetch(20*time.Second)(ctx, serverURL, liveUser, livePass)
 	if err != nil {
 		t.Fatalf("fetch against live server: %v", err)
 	}
@@ -534,6 +591,9 @@ func TestWizardLiveStalwartFetch(t *testing.T) {
 		func(string, string, string, bool) (string, error) {
 			return "OS keyring", nil // the fake store: no real keyring write
 		})
+	// The unit-test default (1s) is too tight for a live server — and for
+	// the bearer probe's extra round trip on Fastmail.
+	m.opts.Timeout = 20 * time.Second
 	deliver(m, walkForm(m, liveURL, liveUser, livePass, "live-gate"))
 	if m.step != wizMailbox {
 		t.Fatalf("step = %v err = %q", m.step, m.err)
@@ -585,9 +645,9 @@ func TestWizardPickerAddAndEdit(t *testing.T) {
 	}
 	var testedPass string
 	m, path := newTestWizard(t, cfg,
-		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, error) {
+		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, string, error) {
 			testedPass = pass
-			return mailboxItems(), nil
+			return mailboxItems(), "", nil
 		},
 		func(string, string, string, bool) (string, error) {
 			t.Fatal("empty password must not store a new secret")
@@ -692,11 +752,11 @@ func TestWizardEditRotatesSecret(t *testing.T) {
 	}}
 	var stored bool
 	m, path := newTestWizard(t, cfg,
-		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, error) {
+		func(_ context.Context, _, _, pass string) ([]ui.PickerItem, string, error) {
 			if pass != "new-secret" {
 				t.Errorf("test secret = %q, want the typed one", pass)
 			}
-			return mailboxItems(), nil
+			return mailboxItems(), "", nil
 		},
 		func(id, secret, _ string, useFile bool) (string, error) {
 			stored = true

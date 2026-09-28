@@ -36,9 +36,11 @@ const (
 	wizDone
 )
 
-// fetchFunc connects to the server and returns the mailbox picker rows.
+// fetchFunc connects to the server and returns the mailbox picker rows
+// plus the Authorization scheme that worked ("" for Basic, "bearer") so
+// the wizard can persist it as the account's `auth` key (FR-A2).
 // Tests inject a fake; production uses realFetch.
-type fetchFunc func(ctx context.Context, serverURL, username, password string) ([]ui.PickerItem, error)
+type fetchFunc func(ctx context.Context, serverURL, username, password string) ([]ui.PickerItem, string, error)
 
 // storeFunc persists the secret and reports how it was stored (FR-I8).
 // useFile selects the FR-J2 password-file fallback after the keyring is
@@ -87,6 +89,7 @@ var errWizardCancelled = errors.New("setup cancelled — no account was saved")
 type wizTestedMsg struct {
 	seq   int
 	items []ui.PickerItem
+	auth  string // scheme that worked (FR-A2); see fetchFunc
 	err   error
 }
 
@@ -145,6 +148,11 @@ type wizardModel struct {
 	editID   string
 	editAcct *config.Account
 	choices  []string // picker row → account id (row 0 is "add new")
+
+	// auth is the Authorization scheme the last successful connection
+	// test used ("" = basic, "bearer"); buildAccount persists it as the
+	// account's `auth` key (FR-A2).
+	auth string
 
 	cfg        *config.Config
 	pin        string // default_account to pin when none exists
@@ -235,6 +243,7 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = ""
+		m.auth = msg.auth
 		m.items = msg.items
 		m.step = wizMailbox
 		m.sel = inboxIndex(msg.items)
@@ -487,6 +496,7 @@ func (m *wizardModel) openPicker() {
 func (m *wizardModel) beginAdd() {
 	m.editID = ""
 	m.editAcct = nil
+	m.auth = ""
 	m.inputs = wizardInputs()
 	m.focus = 0
 }
@@ -503,6 +513,7 @@ func (m *wizardModel) beginEdit(id string) {
 	cp := *a
 	m.editID = id
 	m.editAcct = &cp
+	m.auth = a.Auth // until a successful test corrects it (FR-A2)
 	m.inputs = wizardInputs()
 	m.inputs[0].SetValue(a.URL)
 	m.inputs[1].SetValue(a.Username)
@@ -608,8 +619,8 @@ func (m *wizardModel) fetchCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		items, err := fetch(ctx, serverURL, user, pass)
-		return wizTestedMsg{seq: seq, items: items, err: err}
+		items, used, err := fetch(ctx, serverURL, user, pass)
+		return wizTestedMsg{seq: seq, items: items, auth: used, err: err}
 	}
 }
 
@@ -659,6 +670,7 @@ func (m *wizardModel) buildAccount() *config.Account {
 	a.DisplayName = m.displayName
 	a.URL = m.serverURL
 	a.Username = m.username
+	a.Auth = m.auth // probe result: "" (basic) or "bearer" (FR-A2)
 	a.InitialMailbox = string(m.mailbox)
 	switch {
 	case m.useFile:
@@ -794,16 +806,21 @@ func (m *wizardModel) summaryLines() []string {
 // --- seams (production implementations) ---
 
 // realFetch performs the connection test: session discovery + mailbox
-// list (FR-I8).
+// list (FR-I8). It probes with HTTP Basic and, when the server rejects
+// that scheme outright, retries as Bearer and reports which one worked —
+// the wizard then persists it as `auth = "bearer"` (FR-A2: Fastmail's
+// JMAP API accepts Basic never; verified live 2026-09-27). When both
+// fail, the original Basic error is what the user sees.
 func realFetch(timeout time.Duration) fetchFunc {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return func(ctx context.Context, serverURL, username, password string) ([]ui.PickerItem, error) {
+	fetchOnce := func(ctx context.Context, serverURL, username, password, scheme string) ([]ui.PickerItem, error) {
 		client := jmapclient.New(jmapclient.Options{
 			ServerURL: serverURL,
 			Username:  username,
 			Password:  password,
+			Auth:      scheme,
 			Timeout:   timeout,
 		})
 		if err := client.Connect(ctx); err != nil {
@@ -814,6 +831,19 @@ func realFetch(timeout time.Duration) fetchFunc {
 			return nil, fmt.Errorf("list mailboxes: %w", err)
 		}
 		return mailboxPickerItems(list.Mailboxes), nil
+	}
+	return func(ctx context.Context, serverURL, username, password string) ([]ui.PickerItem, string, error) {
+		items, err := fetchOnce(ctx, serverURL, username, password, "")
+		if err == nil {
+			return items, "", nil
+		}
+		if !errors.Is(err, jmapclient.ErrAuth) {
+			return nil, "", err
+		}
+		if items, berr := fetchOnce(ctx, serverURL, username, password, "bearer"); berr == nil {
+			return items, "bearer", nil
+		}
+		return nil, "", err
 	}
 }
 

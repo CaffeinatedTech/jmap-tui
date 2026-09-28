@@ -93,6 +93,7 @@ func runSmoke(args []string) error {
 		SessionURL: accountSessionURL(acct),
 		Username:   username,
 		Password:   secret,
+		Auth:       acct.Auth,
 		Timeout:    *timeout,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)

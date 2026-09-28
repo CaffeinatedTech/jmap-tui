@@ -23,10 +23,11 @@ func liveContactsClient(t *testing.T) *jmapclient.Client {
 	url := os.Getenv("JMAP_TUI_TEST_URL")
 	user := os.Getenv("JMAP_TUI_TEST_USER")
 	pass := os.Getenv("JMAP_TUI_TEST_PASSWORD")
+	auth := os.Getenv("JMAP_TUI_TEST_AUTH") // "" = basic, "bearer" (FR-A2)
 	if url == "" || user == "" || pass == "" {
 		t.Skip("live Stalwart creds not set (JMAP_TUI_TEST_URL / _USER / _PASSWORD)")
 	}
-	return jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	return jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: auth})
 }
 
 // contactByIDFor reads a card out of the engine's store for the update

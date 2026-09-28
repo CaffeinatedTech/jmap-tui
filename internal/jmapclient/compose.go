@@ -251,11 +251,11 @@ func (c *Client) Send(ctx context.Context, d mail.Draft) (mail.SendReceipt, erro
 				"keywords/$draft":                       nil,
 			},
 		}
-	} else {
-		// No role-sent mailbox to file into: retire the submitted copy
-		// rather than leave a $draft row behind (PLAN §7 degradation).
-		sub.OnSuccessDestroyEmail = []jmap.ID{"#" + submissionCreateHandle}
 	}
+	// No role-sent mailbox to file into: the submitted draft is retired
+	// with a follow-up destroy below (PLAN §7 degradation) — not via
+	// onSuccessDestroyEmail, which Fastmail rejects outright
+	// (invalidProperties, verified live 2026-09-28).
 	subCall := req.Invoke(sub)
 
 	resp, err := c.post(ctx, req)
@@ -320,6 +320,17 @@ func (c *Client) Send(ctx context.Context, d mail.Draft) (mail.SendReceipt, erro
 	}
 	if out.EmailID == "" {
 		return mail.SendReceipt{}, errors.New("jmapclient: send: draft id never resolved")
+	}
+	if d.SentMailboxID == "" {
+		// Retire the submitted draft (see the fallback note above). Best
+		// effort: the message is already sent, so a destroy failure must
+		// never surface as a send failure (the caller would retry and
+		// duplicate the message) — at worst a $draft row lingers.
+		dreq := &jmap.Request{Context: ctx}
+		dreq.Invoke(&email.Set{Account: jmap.ID(c.accountID), Destroy: []jmap.ID{jmap.ID(out.EmailID)}})
+		if _, err := c.post(ctx, dreq); err != nil && c.opts.Logger != nil {
+			c.opts.Logger.Debug("jmapclient: send: draft retire failed after submit", "error", err)
+		}
 	}
 	return out, nil
 }

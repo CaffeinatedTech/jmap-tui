@@ -29,8 +29,8 @@ jmap-tui  Inbox  1432 messages · 3 unread
 Folders on the left, messages in the middle, the message itself on the right.
 The heavy line under a column shows where your keyboard is.
 
-**Works with** any JMAP server — [Stalwart](https://stalwartlabs.xyz/) is
-verified today, [Fastmail](https://fastmail.com) is next, and Cyrus, Apache
+**Works with** any JMAP server — [Stalwart](https://stalwartlabs.xyz/) and
+[Fastmail](https://fastmail.com) are verified today, and Cyrus, Apache
 James, and friends speak the same protocol. (IMAP is on the roadmap.)
 
 **Everything you'd expect from a mail client, and then some:**
@@ -103,8 +103,8 @@ origin, so none is offered. If "HTTPS from GitHub" isn't enough assurance:
   `sha256sum jmap-tui` on the file you downloaded.
 
 > **Status:** pre-release and under active development. It already does
-> everything described on this page; the Fastmail verification pass and the
-> `v0.1.0` tag are what's left before the v0.1 release.
+> everything described on this page, verified against Stalwart and Fastmail;
+> the `v0.1.0` tag is what's left before the v0.1 release.
 
 ## Getting started
 
@@ -129,8 +129,11 @@ Account name   Work                        (defaults to your username)
 4 of 4 · save              writes the config — you're done
 ```
 
-Use an **app password** (Fastmail: *Settings → Passwords → New password*;
-Stalwart: any credential your admin gives you) — not your real login password.
+Use an **app password** (Stalwart: any credential your admin gives you; the
+usual rule) — not your real login password. **Fastmail is the exception:** its
+JMAP API only accepts an **API token** (*Settings → Privacy & Security →
+Manage API tokens*, scopes: mail, submission, contacts). The wizard probes the
+server, works it out, and records it as `auth = "bearer"` in your config.
 
 **3. Mail.** The wizard closes and your inbox appears. That's it.
 
@@ -319,8 +322,9 @@ bits for you; the parts you might edit yourself:
 
 - `default_account` — which account opens first
 - `[accounts.<id>]` — server URL, username, display name, optional
-  `initial_mailbox` (the folder that opens at startup) and `default_identity`
-  (the From address the composer defaults to)
+  `initial_mailbox` (the folder that opens at startup), `default_identity`
+  (the From address the composer defaults to), and `auth` (`"bearer"` for
+  API-token servers like Fastmail; default is HTTP Basic)
 - `[keys]` — rebind any key to an action id (see [Keys](#keys))
 - `theme` — `dark`, `light`, or `auto` (follow your terminal)
 - `[compose] undo_delay` — how long you get to cancel a send
@@ -338,6 +342,7 @@ username     = "you@work.example.com"
 display_name = "Personal"
 url          = "https://mail.example.com"
 username     = "you@example.com"
+# auth = "bearer"   # API-token servers (Fastmail); default is HTTP Basic
 
 [compose]
 undo_delay = "5s"   # how long you get to cancel a send; "0s" sends instantly
@@ -357,7 +362,7 @@ delete it if you ever want those choices back to defaults.
 
 | Symptom | Fix |
 |---|---|
-| "connection failed" in the wizard | Check the server URL (it should be the JMAP URL — `https://api.fastmail.com` for Fastmail) and that you're using an **app password**, not your login password. |
+| "connection failed" in the wizard | Check the server URL (it should be the JMAP URL — `https://api.fastmail.com` for Fastmail) and that you're using an **app password** — or on Fastmail an **API token** (the wizard probes and saves `auth = "bearer"`) — not your login password. |
 | No OS keyring (SSH session, minimal container) | The wizard offers a `password_file` fallback — a chmod-600 file holding the app password. |
 | Folders look stale | The status bar shows `live`, `polling`, or `connecting…`. `polling` means push dropped and it's falling back — it recovers on its own. |
 | A search finds nothing | Server search matches whole words; jmap-tui then falls back to a fuzzy scan with a `scanning n/N` indicator. <kbd>Esc</kbd> cancels it. |
@@ -372,8 +377,12 @@ Every vector below is mitigated in code with regression tests.
 **Credentials & transport**
 
 - [x] `Authorization` following cross-origin redirects (C-1)
-- [x] Credentials sent to session-supplied cross-origin URLs; hostile
-      blob names in the authenticated download path (C-2, S-2)
+- [x] Credentials sent to session-supplied cross-origin URLs — now
+      scoped to the authenticated session's own `https` endpoints
+      (regional API/CDN hosts); cleartext, IP-literal and unadvertised
+      origins — and every cross-origin redirect — still get nothing
+      (C-2 revised, S-2); hostile blob names in the authenticated
+      download path stay validated (S-2)
 - [x] Cleartext `http://` to non-loopback hosts (C-3)
 - [x] `user:pass@` userinfo accepted by config/flags or written to the
       debug log (C-3b, C-4)
@@ -414,7 +423,7 @@ race-free test suite.
 
 ## Roadmap
 
-- **v0.1** — release binaries, Fastmail verification pass, `v0.1.0`
+- **v0.1** — release binaries, `v0.1.0` (Fastmail verification done 2026-09-28)
 - **v0.2+** — push subscriptions, Sieve script management, vacation responder, quota display, richer theming
 - **Later** — an IMAP provider behind the same interface (will use a local cache; JMAP never does)
 

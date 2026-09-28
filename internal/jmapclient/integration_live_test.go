@@ -99,6 +99,11 @@ func asEmailSetView(inv *jmap.Invocation) (emailSetView, bool) {
 
 // liveCreds returns the env-gated Stalwart test credentials (AGENTS.md:
 // unset env ⇒ skip; never hardcode, never echo).
+// liveAuth returns the primary slot's Authorization scheme ("" = basic,
+// "bearer" = API token; unset ⇒ basic). AGENTS.md env rules apply:
+// never hardcode, never echo.
+func liveAuth() string { return os.Getenv("JMAP_TUI_TEST_AUTH") }
+
 func liveCreds(t *testing.T) (url, user, pass string) {
 	t.Helper()
 	url = os.Getenv("JMAP_TUI_TEST_URL")
@@ -114,7 +119,7 @@ func liveCreds(t *testing.T) (url, user, pass string) {
 func TestLiveSessionAndMailboxes(t *testing.T) {
 	url, user, pass := liveCreds(t)
 
-	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx := context.Background()
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -147,7 +152,7 @@ func TestLiveSessionAndMailboxes(t *testing.T) {
 func TestLiveReaderVerification(t *testing.T) {
 	url, user, pass := liveCreds(t)
 
-	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx := context.Background()
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -197,6 +202,9 @@ func TestLiveReaderVerification(t *testing.T) {
 		t.Fatalf("summaries = %d, want 3", len(sums))
 	}
 	t.Logf("collapsed query: total=%d state=%s first=%q", h.Total(), h.State(), sums[0].Subject)
+	for i, s := range sums {
+		t.Logf("  row[%d] subject=%q thread=%s", i, s.Subject, s.ThreadID)
+	}
 
 	// --- thread expansion through Thread/get (RFC 8621 §3.1) ---
 	threadID := sums[0].ThreadID
@@ -205,11 +213,24 @@ func TestLiveReaderVerification(t *testing.T) {
 			threadID = s.ThreadID
 		}
 	}
-	members, err := c.Threads(ctx, []mail.ID{threadID})
-	if err != nil {
-		t.Fatalf("Threads: %v", err)
+	t.Logf("picked thread=%s", threadID)
+	// Fastmail's thread index can lag a freshly created pair by a moment
+	// (observed live 2026-09-28: Thread/get answered 1 member right after
+	// create and 2 a beat later) — wait for the second member rather than
+	// asserting instantly.
+	var memberIDs []mail.ID
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		members, terr := c.Threads(ctx, []mail.ID{threadID})
+		if terr != nil {
+			t.Fatalf("Threads: %v", terr)
+		}
+		memberIDs = members[threadID]
+		if len(memberIDs) == 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	memberIDs := members[threadID]
 	if len(memberIDs) != 2 {
 		t.Fatalf("thread members = %d, want 2", len(memberIDs))
 	}
@@ -514,7 +535,7 @@ func seDesc(d *string) string {
 func TestLiveM2PushGate(t *testing.T) {
 	url, user, pass := liveCreds(t)
 
-	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if err := c.Connect(ctx); err != nil {
@@ -709,8 +730,9 @@ func sendToSelf(t *testing.T, c *Client, ctx context.Context, identityID mail.ID
 		Create: map[jmap.ID]*emailsubmission.EmailSubmission{
 			"sub": {IdentityID: jmap.ID(identityID), EmailID: "#draft"},
 		},
-		// Self-cleaning: the draft copy is destroyed once submitted.
-		OnSuccessDestroyEmail: []jmap.ID{"#draft"},
+		// No onSuccessDestroyEmail here: Fastmail rejects it outright
+		// (invalidProperties, verified live 2026-09-28). The subject-keyed
+		// cleanup below retires both the draft and the delivered copy.
 	})
 	resp, err := c.post(ctx, req)
 	if err != nil {
@@ -1044,7 +1066,7 @@ func assertMembership(t *testing.T, mbs []mail.ID, id mail.ID, want bool, step s
 // verified as the FR-E4 round-trip.
 func TestLiveTriageVerification(t *testing.T) {
 	url, user, pass := liveCreds(t)
-	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx := context.Background()
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -1382,12 +1404,12 @@ func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, 
 		if err != nil {
 			t.Fatalf("create fixture batch [%d,%d): %v", start, end, err)
 		}
-		resp, ok := invs[callID].Args.(*email.SetResponse)
+		v, ok := asEmailSetView(invs[callID])
 		if !ok {
 			t.Fatalf("unexpected Email/set response %T", invs[callID].Args)
 		}
-		if len(resp.NotCreated) > 0 {
-			t.Fatalf("fixture batch [%d,%d) rejected: %+v", start, end, resp.NotCreated)
+		if len(v.NotCreated) > 0 {
+			t.Fatalf("fixture batch [%d,%d) rejected: %+v", start, end, v.NotCreated)
 		}
 		t.Logf("seeded fixture batch [%d,%d)", start, end)
 	}
@@ -1402,7 +1424,7 @@ func seedSearchFixture(t *testing.T, c *Client, ctx context.Context, fixtureID, 
 func TestLiveSearchVerification(t *testing.T) {
 	url, user, pass := liveCreds(t)
 
-	c := New(Options{ServerURL: url, Username: user, Password: pass})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx := context.Background()
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("Connect: %v", err)

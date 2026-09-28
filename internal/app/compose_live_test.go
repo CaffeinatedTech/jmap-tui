@@ -48,7 +48,7 @@ func TestLiveM5Gate(t *testing.T) {
 		composeAutosaveDelay, runCursorBlink = oldAuto, oldBlink
 	})
 
-	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if err := client.Connect(ctx); err != nil {
@@ -236,6 +236,7 @@ func assertDraftSurvivesRestart(t *testing.T, id mail.ID, subject string) {
 		ServerURL: os.Getenv("JMAP_TUI_TEST_URL"),
 		Username:  os.Getenv("JMAP_TUI_TEST_USER"),
 		Password:  os.Getenv("JMAP_TUI_TEST_PASSWORD"),
+		Auth:      liveAuth(),
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -321,7 +322,7 @@ func TestLiveM5DraftKeepGate(t *testing.T) {
 	runCursorBlink = false
 	t.Cleanup(func() { composeAutosaveDelay, runCursorBlink = oldAuto, oldBlink })
 
-	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := client.Connect(ctx); err != nil {
@@ -476,7 +477,7 @@ func TestLiveDraftEditKeepsAttachment(t *testing.T) {
 		composeAutosaveDelay, runCursorBlink = oldAuto, oldBlink
 	})
 
-	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	client := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth()})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if err := client.Connect(ctx); err != nil {

@@ -582,6 +582,11 @@ func convertContactSetResponse(sr *flexibleSetResponse) mail.ContactMutationResu
 // non-empty fields travel; the server generates id and uid.
 func contactCreateObject(draft mail.ContactDraft) map[string]any {
 	obj := map[string]any{
+		// RFC 9553 §2.1.1/§2.1.2: both are mandatory on a Card. Stalwart
+		// tolerates their absence; Fastmail rejects with invalidProperties
+		// listing [@type version] (verified live 2026-09-28).
+		"@type":          "Card",
+		"version":        "1.0",
 		"addressBookIds": addressBookSet(draft.AddressBookIDs),
 		"kind":           "individual",
 	}

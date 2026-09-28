@@ -94,7 +94,10 @@ func (c *Client) Mutate(ctx context.Context, m mail.Mutation) (mail.MutationResu
 			patch["mailboxIds/"+string(mb)] = true
 		}
 		for _, mb := range p.RemoveMailboxes {
-			patch["mailboxIds/"+string(mb)] = false
+			// RFC 8620 §5.3: null removes from a set. Fastmail rejects
+			// false outright (invalidProperties, verified live 2026-09-28);
+			// Stalwart accepts both — null is the portable form.
+			patch["mailboxIds/"+string(mb)] = nil
 		}
 		set.Update[jmap.ID(id)] = patch
 	}

@@ -34,8 +34,15 @@ type Account struct {
 	// SessionURL overrides discovery with an explicit session endpoint.
 	SessionURL string `toml:"session_url,omitempty"`
 
-	// Username is the principal used for HTTP Basic auth (FR-A2).
+	// Username is the principal used for authentication (FR-A2).
 	Username string `toml:"username"`
+
+	// Auth selects the Authorization scheme: "" (or "basic") sends the
+	// secret as HTTP Basic; "bearer" sends it as `Authorization: Bearer`
+	// with an API token — Fastmail's JMAP API accepts nothing else
+	// (verified live 2026-09-27, FR-A2). The wizard sets it on a
+	// successful probe; hand-editing is fine.
+	Auth string `toml:"auth,omitempty"`
 
 	// PasswordKeyring requests keyring-backed secrets; true when nil
 	// (the default).
@@ -235,6 +242,11 @@ func validateAccount(id string, a *Account) error {
 		if err := ValidateServerURL(a.SessionURL); err != nil {
 			return fmt.Errorf("[accounts.%s] session_url: %w", id, err)
 		}
+	}
+	switch a.Auth {
+	case "", "basic", "bearer":
+	default:
+		return fmt.Errorf("[accounts.%s] auth = %q: must be \"basic\" (password) or \"bearer\" (API token)", id, a.Auth)
 	}
 	if a.PasswordFile == "" && a.PasswordKeyring != nil && !*a.PasswordKeyring {
 		return fmt.Errorf("[accounts.%s] password_keyring = false but no password_file is configured; no password source remains", id)

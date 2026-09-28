@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -35,10 +37,18 @@ type Options struct {
 	// SessionURL is an explicit session endpoint override.
 	SessionURL string
 
-	// Username and Password are used for HTTP Basic auth on every endpoint
-	// (FR-A2): API, session discovery, upload, download, and EventSource.
+	// Username and Password are the credential: sent as HTTP Basic by
+	// default, or as `Authorization: Bearer <Password>` when Auth is
+	// "bearer" (Fastmail's JMAP API accepts no other scheme — FR-A2).
+	// Either way it covers every endpoint: session discovery, API,
+	// upload, download, and EventSource.
 	Username string
 	Password string
+
+	// Auth selects the Authorization scheme: "" or "basic" (default) or
+	// "bearer". Config surfaces it as the per-account `auth` key; unknown
+	// values are rejected at config validation (FR-A2).
+	Auth string
 
 	// Timeout is the per-request HTTP timeout; 30s when zero. EventSource
 	// streams are exempt: http.Client.Timeout bounds the entire body read,
@@ -90,9 +100,10 @@ func New(opts Options) *Client {
 			trusted[k] = true
 		}
 	}
-	var transport http.RoundTripper = basicAuthTransport{
+	var transport http.RoundTripper = authTransport{
 		username: opts.Username,
 		password: opts.Password,
+		bearer:   opts.Auth == "bearer",
 		trusted:  trusted,
 	}
 	if opts.Logger != nil {
@@ -154,6 +165,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.session = s
 	c.sessionAt = sessionURL
+	c.trustSessionOrigins(s)
 	c.warnCrossOrigin(s)
 
 	if _, ok := s.RawCapabilities[jmapmail.URI]; !ok {
@@ -168,12 +180,45 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// warnCrossOrigin reports every session-supplied URL whose origin is not
-// one the user configured: those requests are
-// sent without credentials — the transport enforces it — so split-host and
-// CDN deployments keep working while the Basic auth credential stays on
-// the configured origin. Only the origin is logged: the raw URL may carry
-// userinfo (FR-K2).
+// trustSessionOrigins joins the credential trust anchor with the origins
+// of the session-advertised endpoints (apiUrl, uploadUrl, downloadUrl,
+// eventSourceUrl) — F-2 revision, interviewed 2026-09-27. A session may
+// route an authenticated client to its own regional API host or blob CDN
+// (Fastmail: ams.api.fastmail.com, ams-www.fastmailusercontent.com —
+// verified live 2026-09-27); without this the client authenticates to the
+// session and is then rejected by its own API. Eligibility: absolute
+// https, never an IP literal — the shape a hostile session could use to
+// bounce the credential at an internal address. Everything else keeps the
+// old treatment: fetched without credentials (warnCrossOrigin says so).
+// Redirects are unaffected — refuseCrossOriginRedirects still stops any
+// cross-origin hop (F-1 unchanged). A hostile session that games this
+// already received the credential when it served the session document.
+func (c *Client) trustSessionOrigins(s *jmap.Session) {
+	for _, raw := range []string{s.APIURL, s.UploadURL, s.DownloadURL, s.EventSourceURL} {
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		if strings.ToLower(u.Scheme) != "https" {
+			continue
+		}
+		if net.ParseIP(u.Hostname()) != nil {
+			continue
+		}
+		c.trusted[originKeyURL(u)] = true
+	}
+}
+
+// warnCrossOrigin reports session-supplied endpoints that did NOT join the
+// credential trust anchor (trustSessionOrigins): those requests are sent
+// without credentials — the transport enforces it — so a cleartext,
+// IP-literal, or unparseable endpoint degrades to unauthenticated instead
+// of receiving the credential. Cross-origin https endpoints are trusted
+// and intentionally not logged here. Only the origin is logged: the raw
+// URL may carry userinfo (FR-K2).
 func (c *Client) warnCrossOrigin(s *jmap.Session) {
 	if c.opts.Logger == nil {
 		return
@@ -192,7 +237,7 @@ func (c *Client) warnCrossOrigin(s *jmap.Session) {
 		case ok && c.trusted[key]:
 			continue
 		case ok:
-			c.opts.Logger.Warn("jmap: session "+u.name+" is on a different origin; requesting it without credentials",
+			c.opts.Logger.Warn("jmap: session "+u.name+" is not a trusted https origin; requesting it without credentials",
 				"origin", key)
 		default:
 			c.opts.Logger.Warn("jmap: session " + u.name + " is not an absolute URL")

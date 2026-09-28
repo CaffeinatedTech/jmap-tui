@@ -36,13 +36,20 @@ func liveCredsWith(t *testing.T, suffix string) (url, user, pass string) {
 	return url, user, pass
 }
 
+// liveAuthWith returns one account slot's Authorization scheme ("" =
+// basic, "bearer" = API token; unset ⇒ basic — AGENTS.md env rules
+// apply: never hardcode, never echo).
+func liveAuthWith(suffix string) string { return os.Getenv("JMAP_TUI_TEST_AUTH" + suffix) }
+
+func liveAuth() string { return liveAuthWith("") }
+
 // freshReads builds a brand-new client + engine for one account and reads
 // a role mailbox — the independent verification path (the gate model's
 // caches prove nothing about the server).
-func freshReads(t *testing.T, url, user, pass string, role mail.Role) map[mail.ID]mail.EmailSummary {
+func freshReads(t *testing.T, url, user, pass, auth string, role mail.Role) map[mail.ID]mail.EmailSummary {
 	t.Helper()
 	ctx := context.Background()
-	c := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	c := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: auth})
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("independent connect: %v", err)
 	}
@@ -157,8 +164,8 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 	u1, r1, p1 := liveCreds(t)
 	u2, r2, p2 := liveCredsWith(t, "_2")
 
-	connect := func(url, user, pass string) *jmapclient.Client {
-		c := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass})
+	connect := func(url, user, pass, auth string) *jmapclient.Client {
+		c := jmapclient.New(jmapclient.Options{ServerURL: url, Username: user, Password: pass, Auth: auth})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := c.Connect(ctx); err != nil {
@@ -172,8 +179,8 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 	}
 	m := New(Options{
 		Accounts: []AccountOpt{
-			{ID: "one", Name: "One", Provider: connect(u1, r1, p1), Connected: true},
-			{ID: "two", Name: "Two", Provider: connect(u2, r2, p2), Connected: true},
+			{ID: "one", Name: "One", Provider: connect(u1, r1, p1, liveAuth()), Connected: true},
+			{ID: "two", Name: "Two", Provider: connect(u2, r2, p2, liveAuthWith("_2")), Connected: true},
 		},
 		Keys:  km,
 		Theme: ui.NewTheme(ui.DarkTheme()),
@@ -299,11 +306,11 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 	if otherRow.ID == "" {
 		t.Fatalf("no row owned by %s in the merged view", other)
 	}
-	creds := map[string]struct{ url, user, pass string }{
-		"one": {u1, r1, p1}, "two": {u2, r2, p2},
+	creds := map[string]struct{ url, user, pass, auth string }{
+		"one": {u1, r1, p1, liveAuth()}, "two": {u2, r2, p2, liveAuthWith("_2")},
 	}
 	readSeen := func(acct string, id mail.ID) (bool, bool) {
-		sums := freshReads(t, creds[acct].url, creds[acct].user, creds[acct].pass, mail.RoleInbox)
+		sums := freshReads(t, creds[acct].url, creds[acct].user, creds[acct].pass, creds[acct].auth, mail.RoleInbox)
 		s, found := sums[id]
 		return s.Keywords.Has("$seen"), found
 	}
@@ -351,7 +358,7 @@ func TestLiveM6TwoAccountGate(t *testing.T) {
 	for _, acct := range []string{"one", "two"} {
 		c := creds[acct]
 		for _, role := range []mail.Role{mail.RoleInbox, mail.RoleSent} {
-			for id, s := range freshReads(t, c.url, c.user, c.pass, role) {
+			for id, s := range freshReads(t, c.url, c.user, c.pass, c.auth, role) {
 				if strings.HasPrefix(s.Subject, "jmap-tui M6 gate") {
 					t.Errorf("fixture left behind: %s/%s %s (%s)", acct, role, id, s.Subject)
 				}

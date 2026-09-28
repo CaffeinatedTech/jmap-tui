@@ -123,9 +123,18 @@ func TestAuditC1CrossOriginRedirectDropsAuth(t *testing.T) {
 	}
 }
 
-// --- C-2: session-supplied URLs on another origin must get no auth ---
+// --- C-2 (revised): which session-supplied origins get credentials ---
+//
+// F-2 revision (interviewed 2026-09-27): the authenticated session's own
+// https endpoints (regional API hosts, blob CDNs — Fastmail) join the
+// credential trust anchor, or the client authenticates to the session and
+// is then rejected by its own API. Cleartext and IP-literal endpoints do
+// NOT join: a hostile session could otherwise bounce the credential at an
+// internal address. Redirects stay refused outright (C-1).
 
-func TestAuditC2CrossOriginSessionURLDropsAuth(t *testing.T) {
+func TestAuditC2SessionOriginPolicy(t *testing.T) {
+	// (a) Cleartext IP-literal apiUrl advertised cross-origin: untrusted,
+	// so the POST leaves without credentials (the SSRF shape).
 	apiRecorder := &authRecorder{}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiRecorder.record(r)
@@ -154,7 +163,22 @@ func TestAuditC2CrossOriginSessionURLDropsAuth(t *testing.T) {
 		t.Fatalf("control broken: same-origin request lost Authorization")
 	}
 	if got := apiRecorder.lastAuth(); got != "" {
-		t.Errorf("FINDING C-2: apiUrl on a different origin received Authorization (%q…); cross-origin session URLs must be fetched without credentials", truncateForLog(got))
+		t.Errorf("cleartext IP-literal session apiUrl received Authorization (%q…); only trusted https origins may carry credentials", truncateForLog(got))
+	}
+
+	// (b) An https hostname endpoint named by the session joins the trust
+	// anchor during Connect — no request needed; the map is the contract
+	// the transport reads.
+	origin2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(sessionBody("https://ams.example.com/jmap/api"))
+	}))
+	defer origin2.Close()
+	c2 := New(Options{ServerURL: origin2.URL, Username: "tester", Password: "sup3cret"})
+	if err := c2.Connect(ctx); err != nil {
+		t.Fatalf("connect (2): %v", err)
+	}
+	if !c2.trusted["https://ams.example.com"] {
+		t.Errorf("session-advertised https origin not trusted after Connect; trust map = %v", c2.trusted)
 	}
 }
 
@@ -340,7 +364,7 @@ func TestAuditLiveHostilePayloadRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	c := New(Options{ServerURL: url, Username: user, Password: pass, Timeout: 30 * time.Second})
+	c := New(Options{ServerURL: url, Username: user, Password: pass, Auth: liveAuth(), Timeout: 30 * time.Second})
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("connect: %v", err)
 	}

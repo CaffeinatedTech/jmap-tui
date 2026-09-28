@@ -51,19 +51,24 @@ func (e *MethodCallError) Error() string {
 	return fmt.Sprintf("jmapclient: %s", e.Type)
 }
 
-// basicAuthTransport applies HTTP Basic credentials to every request for a
-// configured origin so that session discovery, API calls, and later
-// upload/download/EventSource all authenticate uniformly (FR-A2).
-// Credentials are never logged, and they never leave the origins the
-// user configured: session resources may advertise
-// apiUrl/downloadUrl/uploadUrl/eventSourceUrl on another host, redirects
-// may point anywhere, and a hostile server gets a 401 at worst — never a
-// credential. Off-origin requests leave with no Authorization header even
-// if another layer attached one.
-type basicAuthTransport struct {
+// authTransport applies credentials to every request for a configured
+// origin so that session discovery, API calls, and later
+// upload/download/EventSource all authenticate uniformly (FR-A2): HTTP
+// Basic (password) by default, or `Authorization: Bearer` with an API
+// token for servers that accept no other scheme (Fastmail's JMAP API —
+// verified live 2026-09-27).
+// Credentials are never logged. They leave the configured origins plus
+// the authenticated session's own advertised https endpoints
+// (trustSessionOrigins — F-2 revision: regional API hosts and blob CDNs
+// must work, Fastmail 2026-09-27). Everything else — redirects
+// (refuseCrossOriginRedirects, F-1), cleartext or IP-literal session
+// URLs, any unadvertised origin — gets no Authorization header, so a
+// hostile server gets a 401 at worst — never a credential.
+type authTransport struct {
 	base     http.RoundTripper
 	username string
 	password string
+	bearer   bool
 
 	// trusted holds normalized origins (scheme://host[:port]) derived from
 	// the user-configured ServerURL/SessionURL — the trust anchor. An
@@ -72,10 +77,14 @@ type basicAuthTransport struct {
 	trusted map[string]bool
 }
 
-func (t basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	if t.trusted[originKeyURL(req.URL)] {
-		clone.SetBasicAuth(t.username, t.password)
+		if t.bearer {
+			clone.Header.Set("Authorization", "Bearer "+t.password)
+		} else {
+			clone.SetBasicAuth(t.username, t.password)
+		}
 	} else {
 		clone.Header.Del("Authorization")
 	}
