@@ -39,7 +39,7 @@ gofumpt -l -w .                   # format
 go run ./cmd/jmap-tui --version   # smoke
 ```
 
-There is no CI and no local/docker Stalwart. Gates run locally before every commit: build, vet, lint, gofumpt, test (unit+mockjmap+golden). Live-server integration runs against the user's live Stalwart via `JMAP_TUI_TEST_*` env creds, locally or agent-run only; tests skip when the env is unset.
+There is no test CI and no local/docker Stalwart. Gates run locally before every commit: build, vet, lint, gofumpt, test (unit+mockjmap+golden). The only GitHub Actions workflow is the tag-triggered release (`.github/workflows/release.yml` → GoReleaser), which re-runs build/vet/test before publishing — pushing a `v*` tag is the release button; commits to master never release. Live-server integration runs against the user's live Stalwart via `JMAP_TUI_TEST_*` env creds, locally or agent-run only; tests skip when the env is unset.
 
 ## Testing rules
 

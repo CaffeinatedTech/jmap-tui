@@ -1,0 +1,47 @@
+# GoReleaser — release pipeline for jmap-tui (NFR-6).
+#
+# Local dry-run (builds every target, publishes nothing):
+#   goreleaser release --snapshot --clean
+# Real release: push a semver tag (v*); .github/workflows/release.yml runs this.
+# Everything here is in the free OSS distribution — no GoReleaser Pro.
+version: 2
+
+project_name: jmap-tui
+
+builds:
+  - main: ./cmd/jmap-tui
+    binary: jmap-tui
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  # install.sh matches assets by OS + Go arch in the file name, so the
+  # template must keep both (see install.sh header).
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+
+release:
+  # Explicit: the repo may be cloned without a git remote pointing at GitHub.
+  github:
+    owner: CaffeinatedTech
+    name: jmap-tui

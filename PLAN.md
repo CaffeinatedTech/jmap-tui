@@ -46,7 +46,8 @@ jmap-tui/
 │   ├── mockjmap/            # in-process fake JMAP server (httptest)
 │   └── golden/              # bubbletea golden files
 ├── README.md · REQUIREMENTS.md · PLAN.md · AGENTS.md · LICENSE
-└── (no CI — gates run locally before commit)
+├── .goreleaser.yml · .github/workflows/release.yml   # release on tag push
+└── (no test CI — gates run locally before commit)
 ```
 
 **Dependency rule:** `ui` and `app` may import `sync` and `mail` only. `sync` may import `jmapclient` and `mail`. Nothing above `jmapclient` imports `go-jmap` — that is the swap point if the library disappoints.
@@ -183,7 +184,7 @@ M0–M9 have all landed and were verified against the live Stalwart account. Not
 
 1. **Release v0.1** — the one remaining milestone:
    - **Fastmail verification pass** — run every REQUIREMENTS §7 gate against Fastmail and fill the `?` cells in §7 (WebSocket auth, contacts capability, `ContactCard`/`AddressBook` `/changes`); settle the Fastmail EventSource Basic-vs-Bearer auth risk (§9).
-   - **Release packaging** — goreleaser config + artifacts (NFR-6); the config does not exist yet.
+   - **Release packaging** — `.goreleaser.yml` + tag-triggered `.github/workflows/release.yml` (build/vet/test gates, then GoReleaser publishes) landed 2026-09-27; the artifacts appear when the `v0.1.0` tag is pushed (NFR-6). All free-tier GoReleaser.
    - **Final docs pass** (README, §7 matrix, keymap), then tag `v0.1.0` (§10).
 2. **Post-v0.1 scope** — REQUIREMENTS `[FUTURE]` and the README roadmap: IMAP provider behind `mail.Provider` (a cache design doc must come before any code), FR-E6 image preview / external pager, then Sieve management, vacation responder, quota display, richer theming.
 3. **Open question** — REQUIREMENTS §8.1: optional external HTML renderer (glow/w3m/pandoc pipe). Leans no for v1; revisit after.
