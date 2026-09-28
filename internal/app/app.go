@@ -87,7 +87,7 @@ type Model struct {
 	activeID    string
 	engine      *sync.Engine
 	snaps       map[string]sync.Snapshot // last snapshot per account
-	unified     bool                     // merged-inbox view (FR-A5)
+	unified     bool                     // merged-inbox view (FR-A5), seeded from prefs
 	uCursorID   mail.ID                  // unified cursor id; "" = top
 	cursorOwner string                   // account owning the unified cursor row
 	bodyReq     mail.ID                  // in-flight unified body load (row key)
@@ -236,6 +236,10 @@ func New(opts Options) *Model {
 		cancel:         cancel,
 		stacked:        opts.Prefs.Stacked(),
 		sortByID:       sortByID,
+		// The unified view is remembered (FR-A5, issue #2), but only with
+		// the two accounts it needs: with one, `i` is a no-op, so seeding
+		// it would strand the reader in a view it cannot leave.
+		unified: opts.Prefs != nil && opts.Prefs.Unified && len(infos) >= 2,
 	}
 	for _, a := range infos {
 		// Every account starts as an unloaded view: the unified merge
@@ -655,9 +659,11 @@ func truncateErr(op string, err error) string {
 // applySnapshot stores one account's snapshot and schedules follow-up
 // work: the first mailbox snapshot opens that account's starting mailbox
 // (the wizard's initial_mailbox when it still exists, else the inbox —
-// every account gets a warm window; instant switch and the unified merge
-// both need it, FR-A4/A5/FR-I8), then either the active view's pipeline
-// or the unified rebuild.
+// or the inbox alone when the unified view was restored, its starting
+// mailbox recorded as the pre-unified position — every account gets a
+// warm window; instant switch and the unified merge both need it,
+// FR-A4/A5/FR-I8), then either the active view's pipeline or the unified
+// rebuild.
 func (m *Model) applySnapshot(acct string, snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	m.snaps[acct] = snap
 
@@ -665,10 +671,22 @@ func (m *Model) applySnapshot(acct string, snap sync.Snapshot) (tea.Model, tea.C
 	// ViewKey "" means no view is open yet — mailbox or search.
 	if snap.ViewKey == "" && len(snap.Mailboxes) > 0 {
 		if node := firstMailboxNode(m.opts.Accounts, acct, snap.Mailboxes); node != nil {
-			if acct == m.activeID {
-				m.sidebarKey = sidebarRowKey(acct, node.Mailbox.ID)
+			openID := node.Mailbox.ID
+			// Restored unified view (FR-A5): the merge runs over inboxes,
+			// so the inbox opens instead — and the starting mailbox it
+			// skipped becomes the pre-unified position, recorded the way
+			// enterUnified records the one it displaces. Leaving unified
+			// then lands where a non-unified session would have started.
+			if m.unified {
+				if inbox := inboxNode(snap.Mailboxes); inbox != nil && inbox.Mailbox.ID != openID {
+					m.prevBox[acct] = openID
+					openID = inbox.Mailbox.ID
+				}
 			}
-			return m, m.openMailboxOn(acct, node.Mailbox.ID)
+			if acct == m.activeID {
+				m.sidebarKey = sidebarRowKey(acct, openID)
+			}
+			return m, m.openMailboxOn(acct, openID)
 		}
 		return m, nil
 	}

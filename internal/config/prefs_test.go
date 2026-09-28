@@ -23,6 +23,7 @@ func TestSavePrefsRoundTrip(t *testing.T) {
 	p.SetArchiveMailbox("acc1", "mb-archive")
 	p.SetArchiveMailbox("acc2", "mb-hold")
 	p.Layout = LayoutStacked
+	p.Unified = true
 	if err := SavePrefs(path, p); err != nil {
 		t.Fatalf("SavePrefs: %v", err)
 	}
@@ -45,6 +46,21 @@ func TestSavePrefsRoundTrip(t *testing.T) {
 	}
 	if !got.Stacked() || got.Layout != LayoutStacked {
 		t.Fatalf("layout round trip = %q, want %q", got.Layout, LayoutStacked)
+	}
+	if !got.Unified {
+		t.Fatal("unified round trip = false, want true")
+	}
+	// The default (unified off) is omitted: prefs stay minimal.
+	p.Unified = false
+	if err := SavePrefs(path, p); err != nil {
+		t.Fatalf("SavePrefs (unified off): %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read prefs: %v", err)
+	}
+	if strings.Contains(string(data), "unified") {
+		t.Fatalf("unified = false must be omitted from prefs:\n%s", data)
 	}
 	// The zero/unknown value falls back to the default layout.
 	if (&Prefs{}).Stacked() || (&Prefs{Layout: "sideways"}).Stacked() {

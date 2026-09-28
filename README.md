@@ -181,7 +181,7 @@ account or edit this one.
 
 1. Press <kbd>ctrl+a</kbd> (the app restarts into the wizard) or run `jmap-tui login` — choose **+ add a new account** and go through the same four steps.
 2. <kbd>A</kbd> switches accounts instantly — everything stays warm in the background, so there's no reload.
-3. <kbd>i</kbd> toggles the **unified inbox**: every account's mail, interleaved by date, each row tagged with a colour for its account. Actions always go to the account that owns the message.
+3. <kbd>i</kbd> toggles the **unified inbox**: every account's mail, interleaved by date, each row tagged with a colour for its account. Actions always go to the account that owns the message. The choice is remembered — quit while it's on and the next start opens there.
 4. Every account's folder tree sits in one sidebar under its own tinted header. With a folder selected, <kbd>ctrl+↑</kbd>/<kbd>ctrl+↓</kbd> moves that whole account block up or down — the order is remembered.
 5. One account offline? It shows a quiet error in the status bar and the others keep working.
 
@@ -363,9 +363,10 @@ not edit TOML at all,
 `jmap-tui login` edits an account through the wizard instead.
 
 **`prefs.toml` — your in-app choices, saved as you make them.** Pane layout,
-the order of account blocks in the sidebar, which folders are folded shut, and
-per-account sort order and archive destination. You shouldn't need to edit it;
-delete it if you ever want those choices back to defaults.
+whether the unified inbox was left on, the order of account blocks in the
+sidebar, which folders are folded shut, and per-account sort order and archive
+destination. You shouldn't need to edit it; delete it if you ever want those
+choices back to defaults.
 
 ## Troubleshooting
 

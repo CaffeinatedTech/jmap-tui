@@ -21,6 +21,12 @@ type Prefs struct {
 	// list beside the preview; LayoutStacked shows the list above it.
 	Layout string `toml:"layout,omitempty"`
 
+	// Unified records whether the merged-inbox view was left on (FR-A5):
+	// a fresh start reopens it when the flag is set and at least two
+	// accounts are enrolled. false is the default and is omitted from the
+	// document, so prefs stay minimal.
+	Unified bool `toml:"unified,omitempty"`
+
 	// AccountOrder is the user's display order for the sidebar's account
 	// blocks and the account switcher (FR-C5): account ids, first listed
 	// first. Ids unknown to the config are dropped at merge time;

@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
@@ -238,6 +239,7 @@ func (m *Model) enterUnified() (tea.Model, tea.Cmd) {
 	}
 	_, cmd := m.applyUnified()
 	cmds = append(cmds, cmd)
+	m.saveUnifiedPref()
 	return m, tea.Batch(cmds...)
 }
 
@@ -284,5 +286,22 @@ func (m *Model) leaveUnified() (tea.Model, tea.Cmd) {
 		_, cmd := m.applySnapshot(m.activeID, eng.Snapshot())
 		cmds = append(cmds, cmd)
 	}
+	m.saveUnifiedPref()
 	return m, tea.Batch(cmds...)
+}
+
+// saveUnifiedPref remembers the unified-view flag in prefs.toml (FR-A5,
+// issue #2) so the next start reopens the view the reader left. It runs
+// after enter/leave have repainted, which resets the status line — the
+// same write-on-toggle discipline as the pane layout (FR-I10), and the
+// same rule that a session without a prefs store stays memory-only
+// (FR-J1). A failed write is a notice, never a blocked toggle.
+func (m *Model) saveUnifiedPref() {
+	if m.opts.Prefs == nil || m.opts.PrefsPath == "" {
+		return
+	}
+	m.opts.Prefs.Unified = m.unified
+	if err := config.SavePrefs(m.opts.PrefsPath, m.opts.Prefs); err != nil {
+		m.err = "unified view not remembered: " + err.Error()
+	}
 }

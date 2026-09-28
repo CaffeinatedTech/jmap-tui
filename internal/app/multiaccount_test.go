@@ -3,10 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
@@ -44,7 +47,9 @@ func twoAccountFixture(user string, newest, oldest time.Time) []mockjmap.Email {
 // newTwoAccountModel wires the model to two independent mock servers —
 // "work" (active) and "personal" — whose inbox dates interleave
 // (work e2 10:00, personal e2 09:00, work e1 08:00, personal e1 07:00).
-func newTwoAccountModel(t *testing.T) (*Model, *mockjmap.Server, *mockjmap.Server) {
+// mods adjust the Options before the model is built (prefs, starting
+// mailboxes), the way a restart would be configured.
+func newTwoAccountModel(t *testing.T, mods ...func(*Options)) (*Model, *mockjmap.Server, *mockjmap.Server) {
 	t.Helper()
 	mailboxes := []mockjmap.Mailbox{
 		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 2, UnreadEmails: 2},
@@ -71,14 +76,18 @@ func newTwoAccountModel(t *testing.T) (*Model, *mockjmap.Server, *mockjmap.Serve
 	if err != nil {
 		t.Fatalf("KeyMap: %v", err)
 	}
-	m := New(Options{
+	opts := Options{
 		Accounts: []AccountOpt{
 			{ID: "work", Name: "Work", Provider: connect(srvWork, "work@example.com"), Connected: true},
 			{ID: "personal", Name: "Personal", Provider: connect(srvPersonal, "personal@example.com"), Connected: true},
 		},
 		Keys:  km,
 		Theme: ui.NewTheme(ui.DarkTheme()),
-	})
+	}
+	for _, mod := range mods {
+		mod(&opts)
+	}
+	m := New(opts)
 	m.width, m.height = 120, 40
 	return m, srvWork, srvPersonal
 }
@@ -379,6 +388,122 @@ func TestUnifiedEnterExitRestoresMailboxes(t *testing.T) {
 	}
 	if m.snaps["personal"].ActiveMailbox != "mb-archive" {
 		t.Fatalf("personal after leave = %q, want mb-archive restored", m.snaps["personal"].ActiveMailbox)
+	}
+}
+
+// TestUnifiedViewPersists: leaving the app in unified mode remembers the
+// choice in prefs.toml — the app-managed file only, never config.toml
+// (FR-J1) — and a fresh start reopens the merged view; leaving unified
+// clears the flag again (issue #2, FR-A5).
+func TestUnifiedViewPersists(t *testing.T) {
+	prefsPath := filepath.Join(t.TempDir(), "prefs.toml")
+	m, _, _ := newTwoAccountModel(t, func(o *Options) {
+		o.Prefs = &config.Prefs{}
+		o.PrefsPath = prefsPath
+	})
+	loadAll(t, m)
+
+	_, cmd := m.handleKey(key("i"))
+	pump(t, m, cmd)
+	if !m.unified {
+		t.Fatal("unified view did not open")
+	}
+	data, err := os.ReadFile(prefsPath)
+	if err != nil {
+		t.Fatalf("prefs file: %v", err)
+	}
+	if !strings.Contains(string(data), "unified = true") {
+		t.Fatalf("prefs file missing the unified choice:\n%s", data)
+	}
+
+	// A fresh start reopens the merged view over both inboxes.
+	got, err := config.LoadPrefs(prefsPath)
+	if err != nil {
+		t.Fatalf("LoadPrefs: %v", err)
+	}
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("KeyMap: %v", err)
+	}
+	m2 := New(Options{
+		Accounts:  m.opts.Accounts,
+		Prefs:     got,
+		PrefsPath: prefsPath,
+		Keys:      km,
+		Theme:     ui.NewTheme(ui.DarkTheme()),
+	})
+	m2.width, m2.height = 120, 40
+	if !m2.unified {
+		t.Fatal("fresh model did not restore the unified view")
+	}
+	loadAll(t, m2)
+	if owners := accountOfTags(m2); len(owners) != 4 {
+		t.Fatalf("restored unified rows = %v, want 4 interleaved rows", owners)
+	}
+
+	// Leaving unified clears the flag: a later start opens normally.
+	_, cmd = m2.handleKey(key("i"))
+	pump(t, m2, cmd)
+	if m2.unified {
+		t.Fatal("unified view did not close")
+	}
+	data, err = os.ReadFile(prefsPath)
+	if err != nil {
+		t.Fatalf("prefs file: %v", err)
+	}
+	if strings.Contains(string(data), "unified") {
+		t.Fatalf("prefs still record a unified choice:\n%s", data)
+	}
+}
+
+// TestUnifiedRestoreForcesInboxesAndKeepsStartMailbox: a restored
+// unified view opens each account's inbox for the merge (FR-A5) while
+// recording its configured starting mailbox (FR-I8 initial_mailbox) as
+// the pre-unified position, so leaving unified lands where a
+// non-unified session would have started (issue #2).
+func TestUnifiedRestoreForcesInboxesAndKeepsStartMailbox(t *testing.T) {
+	m, _, _ := newTwoAccountModel(t, func(o *Options) {
+		o.Prefs = &config.Prefs{Unified: true}
+		o.Accounts[0].InitialMailbox = "mb-archive" // work
+	})
+	if !m.unified {
+		t.Fatal("fresh model did not restore the unified view")
+	}
+	loadAll(t, m)
+
+	if box := m.snaps["work"].ActiveMailbox; box != "mb-inbox" {
+		t.Fatalf("work in restored unified = %q, want inbox", box)
+	}
+	if box := m.snaps["personal"].ActiveMailbox; box != "mb-inbox" {
+		t.Fatalf("personal in restored unified = %q, want inbox", box)
+	}
+	if prev := m.prevBox["work"]; prev != "mb-archive" {
+		t.Fatalf("work pre-unified position = %q, want mb-archive (initial_mailbox)", prev)
+	}
+	if owners := accountOfTags(m); len(owners) != 4 {
+		t.Fatalf("restored unified rows = %v, want 4 interleaved rows", owners)
+	}
+
+	_, cmd := m.handleKey(key("i"))
+	pump(t, m, cmd)
+	if m.unified {
+		t.Fatal("unified view did not close")
+	}
+	if box := m.snaps["work"].ActiveMailbox; box != "mb-archive" {
+		t.Fatalf("work after leaving unified = %q, want mb-archive", box)
+	}
+}
+
+// TestUnifiedRestoreNeedsTwoAccounts: `i` is a no-op with one account, so
+// a stale unified = true must not strand the reader in a view it cannot
+// leave (issue #2).
+func TestUnifiedRestoreNeedsTwoAccounts(t *testing.T) {
+	m := New(Options{
+		Accounts: []AccountOpt{{ID: "solo", Name: "Solo"}},
+		Prefs:    &config.Prefs{Unified: true},
+	})
+	if m.unified {
+		t.Fatal("single-account model restored the unified view")
 	}
 }
 
