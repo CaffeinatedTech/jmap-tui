@@ -36,7 +36,7 @@ A terminal email client that treats JMAP as a first-class protocol — JMAP only
 
 - Any mail protocol other than JMAP (the `mail.Provider` interface is an internal seam, not an invitation — scope is JMAP only)
 - Local full-text indexing or offline mode
-- HTML/CSS rendering, images in the preview pane, remote content loading
+- Browser-faithful HTML/CSS rendering — no layout engine and no CSS cascade; the styled markdown approximation of HTML is in scope (FR-E2). Images in the preview pane, remote content loading
 - Calendar (JMAP has it; mail + contacts for v1)
 - Address-book **sharing** and contact groups (RFC 9670 / JSContact `kind=group` are out of scope — see FR-L)
 - Multi-user/CRM features, rules/sieve *editing* (display quota/sieve later, edit later)
@@ -96,7 +96,7 @@ A terminal email client that treats JMAP as a first-class protocol — JMAP only
 ## FR-E — Reading
 
 - **[FR-E1] [M1]** Preview pane shows headers (from, to, date, subject, mailbox), body, attachments strip.
-- **[FR-E2] [M1]** Body preference: `text/plain` part. If none, convert the `text/html` part with an in-repo converter (strip script/style, unwrap links, footnote URLs). No remote fetches, ever. Exception: a degenerate `text/plain` part — placeholder-only, i.e. under 120 chars after trimming (e.g. GOG.com's "Plain text version not available") — is treated as absent when an HTML alternative exists.
+- **[FR-E2] [M1]** Body preference: `text/plain` part. If none, convert the `text/html` part with an in-repo converter that walks the DOM and emits **markdown**: headings, emphasis, lists (numbered), quotes, rules, fenced code, and pipe tables for tables that are genuinely tabular — layout tables (colspan/rowspan, nested tables, empty spacer cells) degrade to block flow — with sender text escaped so it can never become structure of its own, inline-hidden preheader/tracking spans dropped, and script/style subtrees stripped. The preview styles that markdown through the theme's palette: one accent, no margins, no borders (FR-I2). **Plain text stays plain** — a `text/plain` body renders raw, and the composer's quote is always the plain conversion, never the markdown. Links stay unwrapped with numbered footnote URLs. No remote fetches, ever. Exception: a degenerate `text/plain` part — placeholder-only, i.e. under 120 chars after trimming (e.g. GOG.com's "Plain text version not available") — is treated as absent when an HTML alternative exists.
 - **[FR-E3] [M1]** Viewport paging (j/k/d/Ctrl-f etc.) inside the preview; scroll position resets per message. `PgUp`/`PgDn` page the preview **from any pane** — focus stays where it is, and the preview's own keys are unchanged while it is focused. *(Global paging added post-M7 2026-09-25: reading a long message should not require leaving the list first.)*
 - **[FR-E4] [M3]** Attachment list with name, size, type; `s` saves via Bubbles filepicker (default `~/Downloads`); downloads use the session `downloadUrl` (blob ids). *(Moved from M2 at implementation: M2 stayed sync-focused and attachment save belongs with the M3 action set; approved 2026-09-21.)*
 - **[FR-E5] [M4]** Full-screen message view toggle (`v`) hiding sidebar/list.
@@ -198,6 +198,6 @@ A terminal email client that treats JMAP as a first-class protocol — JMAP only
 
 ## 8. Open questions
 
-1. **HTML conversion fidelity** — in-repo converter is v1; do we ever want an optional external renderer (glow/w3m/pandoc) pipe? *(lean no for v1, revisit)*
+None.
 
-All earlier open questions are resolved and recorded on their requirements: address completion / address book → FR-L (JMAP contacts capability, no local store — NFR-4); default archive behaviour → FR-G4/FR-J1; Windows terminal depth → no blockers at M1.
+All open questions are resolved and recorded on their requirements: address completion / address book → FR-L (JMAP contacts capability, no local store — NFR-4); default archive behaviour → FR-G4/FR-J1; Windows terminal depth → no blockers at M1; HTML conversion fidelity → FR-E2 (in-repo markdown conversion styled by glamour — **no** external w3m/lynx/glow pipe).

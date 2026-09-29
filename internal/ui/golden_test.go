@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
+	"github.com/CaffeinatedTech/jmap-tui/internal/mailtext"
 	"github.com/CaffeinatedTech/jmap-tui/internal/sync"
 )
 
@@ -158,27 +160,56 @@ func fixtureFoldedSidebarRows() []SidebarRow {
 	return out
 }
 
+// baseFrame is the shared three-pane state every golden frame starts
+// from, in either palette.
+func baseFrame(dark bool) State {
+	pal := DarkTheme()
+	if !dark {
+		pal = LightTheme()
+	}
+	return State{
+		Theme:          NewTheme(pal),
+		Snap:           fixtureSnapshot(),
+		Focus:          uiFocus,
+		SidebarVisible: sidebarOn,
+		Account:        "Work",
+		SidebarRows:    fixtureSidebarRows(),
+		SidebarSel:     1, // the open Inbox, under Work's header (FR-C5)
+		Now:            time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC),
+		ShowSize:       showSize,
+		VpView:         vpBody,
+	}
+}
+
+// styledFixtureHTML is an HTML email as it arrives: a preheader that must
+// not appear, a heading, emphasis, a list, a quote, and a <br> signature.
+var styledFixtureHTML = `<div style="display:none">Audit ready to download</div>` +
+	`<h2>Quarterly audit</h2>` +
+	`<p>Hi <b>Eve</b>,</p>` +
+	`<p>The <i>report</i> is attached &amp; the numbers look good.</p>` +
+	`<ul><li>Revenue up</li><li>Costs flat</li></ul>` +
+	`<blockquote><p>Ship it.</p></blockquote>` +
+	`<p>Regards,<br>Eve</p>`
+
+// styledFrame builds a frame whose preview shows a converted HTML body,
+// assembled the way the app assembles one: the converter's markdown
+// styled by RenderBody, then wrapped to this frame's preview width with
+// ansi.Wrap — the same two calls setBody and applyBody make.
+func styledFrame(dark bool, w, h int) func() State {
+	return func() State {
+		st := baseFrame(dark)
+		st.Snap.Body.Styled = true
+		st.Snap.Body.Text = mailtext.HTMLToMarkdown(styledFixtureHTML)
+		l := ComputeLayout(w, h, st)
+		styled := RenderBody(st.Snap.Body.Text, st.Theme.P)
+		st.VpView = ansi.Wrap(styled, max(l.PreviewW-1, 1), " ")
+		return st
+	}
+}
+
 func goldenFrames() []frame {
 	mk := func(dark bool) func() State {
-		pal := DarkTheme()
-		if !dark {
-			pal = LightTheme()
-		}
-		th := NewTheme(pal)
-		return func() State {
-			return State{
-				Theme:          th,
-				Snap:           fixtureSnapshot(),
-				Focus:          uiFocus,
-				SidebarVisible: sidebarOn,
-				Account:        "Work",
-				SidebarRows:    fixtureSidebarRows(),
-				SidebarSel:     1, // the open Inbox, under Work's header (FR-C5)
-				Now:            time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC),
-				ShowSize:       showSize,
-				VpView:         vpBody,
-			}
-		}
+		return func() State { return baseFrame(dark) }
 	}
 	return []frame{
 		{name: "wide-three-pane", w: 120, h: 40, st: mk(true)},
@@ -192,6 +223,15 @@ func goldenFrames() []frame {
 		}},
 		{name: "compact-single", w: 59, h: 25, st: mk(true)},
 		{name: "compact-single-light", w: 59, h: 25, st: mk(false)},
+		// The styled (HTML→markdown→glamour) body at every standard
+		// size, dark and light: the wrap, the accent, and the quote
+		// colour all depend on the pane width and the palette.
+		{name: "styled-body", w: 120, h: 40, st: styledFrame(true, 120, 40)},
+		{name: "styled-body-light", w: 120, h: 40, st: styledFrame(false, 120, 40)},
+		{name: "styled-body-medium", w: 99, h: 35, st: styledFrame(true, 99, 35)},
+		{name: "styled-body-medium-light", w: 99, h: 35, st: styledFrame(false, 99, 35)},
+		{name: "styled-body-compact", w: 59, h: 25, st: styledFrame(true, 59, 25)},
+		{name: "styled-body-compact-light", w: 59, h: 25, st: styledFrame(false, 59, 25)},
 		{name: "no-sidebar", w: 120, h: 40, st: func() State {
 			sidebarOn = false
 			defer func() { sidebarOn = true }()

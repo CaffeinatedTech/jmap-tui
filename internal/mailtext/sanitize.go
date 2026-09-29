@@ -110,3 +110,133 @@ func Truncate(s string, max int) string {
 	}
 	return s[:n] + "…"
 }
+
+// SanitizeStyled is Sanitize for output that carries renderer-generated
+// styling: it passes well-formed CSI SGR sequences (ESC [ … m — colours,
+// bold, reset) through untouched and applies the Sanitize policy to
+// everything else. Every other escape is dropped whole: no cursor move,
+// no screen clear, no OSC — title or hyperlink — survives. Only
+// appearance reaches the terminal.
+//
+// OSC is dropped rather than passed because a hyperlink's payload is a
+// URL the reader already sees as text: keeping the wrapper would add
+// nothing but a clickable target whose destination the sender chose.
+//
+// It is the frame-boundary choke point for the styled body view: the
+// content string is built from Sanitize'd source plus the renderer's own
+// SGR, and this is what verifies that claim before the frame is written.
+// Sanitize remains the policy for everything that is not styled.
+func SanitizeStyled(s string) string {
+	if !strings.ContainsRune(s, '\x1b') {
+		return Sanitize(s)
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] != '\x1b' {
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if keepRune(r) {
+				b.WriteRune(r)
+			}
+			// A malformed byte maps to RuneError, which keepRune
+			// passes and WriteRune emits as U+FFFD — same contract
+			// as Sanitize.
+			i += size
+			continue
+		}
+		if n, ok := sgrLen(s[i:]); ok {
+			b.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		if n, _, ok := csiLen(s[i:]); ok {
+			i += n // a complete non-SGR control sequence: dropped
+			continue
+		}
+		if n, ok := oscLen(s[i:]); ok {
+			i += n // OSC (hyperlink, title): dropped whole
+			continue
+		}
+		i++ // a bare ESC: dropped; its payload is ordinary text
+	}
+	return b.String()
+}
+
+// oscLen returns the byte length of the OSC sequence at the start of s
+// (ESC ] … BEL, or ESC ] … ST). An unterminated OSC runs to the end of
+// the string: a terminal would swallow the remainder too, so dropping it
+// keeps the payload from ever reaching one.
+func oscLen(s string) (int, bool) {
+	if len(s) < 2 || s[0] != '\x1b' || s[1] != ']' {
+		return 0, false
+	}
+	for i := 2; i < len(s); i++ {
+		switch s[i] {
+		case 0x07:
+			return i + 1, true
+		case '\x1b':
+			if i+1 < len(s) && s[i+1] == '\\' {
+				return i + 2, true
+			}
+			return len(s), true // a fresh escape inside: malformed
+		}
+	}
+	return len(s), true
+}
+
+// SeqLen returns the byte length of the escape sequence at the start of
+// s — a CSI, an OSC, or ESC followed by one byte — or 0 when s does not
+// begin with one. It lets a caller walk styled text and skip the
+// sequences without having to judge which of them are safe; deciding that
+// is SanitizeStyled's job.
+func SeqLen(s string) int {
+	if len(s) == 0 || s[0] != '\x1b' {
+		return 0
+	}
+	if len(s) > 1 && s[1] == '[' {
+		if n, _, ok := csiLen(s); ok {
+			return n
+		}
+		return 1
+	}
+	if len(s) > 1 && s[1] == ']' {
+		if n, ok := oscLen(s); ok {
+			return n
+		}
+		return 1
+	}
+	if len(s) == 1 {
+		return 1
+	}
+	return 2
+}
+
+// sgrLen returns the byte length of the CSI SGR sequence at the start of
+// s, which must begin with one.
+func sgrLen(s string) (int, bool) {
+	n, final, ok := csiLen(s)
+	if !ok || final != 'm' {
+		return 0, false
+	}
+	return n, true
+}
+
+// csiLen parses a CSI sequence (ESC [ params intermediates final) at the
+// start of s, returning its byte length and final byte. ok is false when
+// s does not start with a complete, well-formed CSI.
+func csiLen(s string) (n int, final byte, ok bool) {
+	if len(s) < 2 || s[0] != '\x1b' || s[1] != '[' {
+		return 0, 0, false
+	}
+	for i := 2; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 0x30 && c <= 0x3f: // parameter bytes
+		case c >= 0x20 && c <= 0x2f: // intermediate bytes
+		case c >= 0x40 && c <= 0x7e: // final byte
+			return i + 1, c, true
+		default: // malformed: not a CSI after all
+			return 0, 0, false
+		}
+	}
+	return 0, 0, false // unterminated
+}

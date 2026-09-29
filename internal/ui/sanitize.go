@@ -16,6 +16,12 @@ import (
 // printer share.
 func Sanitize(s string) string { return mailtext.Sanitize(s) }
 
+// SanitizeStyled is Sanitize for styled content: it passes well-formed
+// SGR sequences through and strips every other control. The preview
+// viewport's frame goes through it (below) because its content now
+// carries the renderer's colour codes alongside the sender's text.
+func SanitizeStyled(s string) string { return mailtext.SanitizeStyled(s) }
+
 // sanitizeState returns a copy of st whose server- and sender-controlled
 // strings are stripped of control characters before any of them can
 // reach a frame. Render calls it first, so every slot — list rows, preview
@@ -28,7 +34,9 @@ func Sanitize(s string) string { return mailtext.Sanitize(s) }
 // source instead, because blanket-stripping would also destroy the cursor
 // and key-hint styling the widgets emit.
 func sanitizeState(st State) State {
-	st.VpView = Sanitize(st.VpView)
+	// The body frame is styled: its content is the renderer's SGR plus
+	// sender text, so it goes through the SGR-preserving policy.
+	st.VpView = SanitizeStyled(st.VpView)
 	st.Err = Sanitize(st.Err)
 	st.Toast = Sanitize(st.Toast)
 	st.ToastHint = Sanitize(st.ToastHint)

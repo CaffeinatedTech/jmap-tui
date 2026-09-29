@@ -200,9 +200,15 @@ type Snapshot struct {
 
 // BodyView is the preview-ready content of one message: text already
 // converted from HTML when the source was HTML (FR-E2).
+//
+// Text is markdown when Styled is set — the UI styles it into the frame —
+// and plain text otherwise. It is never what a reply quotes: the
+// composer's quote comes from EmailBody.Text, which convertBody keeps in
+// plain text no matter how the display was rendered.
 type BodyView struct {
 	ID          mail.ID
 	Text        string
+	Styled      bool
 	Attachments []mail.Attachment
 }
 
@@ -954,7 +960,7 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	if bv, ok := e.cachedBody(id); ok {
 		e.mu.Lock()
 		e.bodyLoading = ""
-		e.setBodyLocked(id, bv.Text, bv.Attachments)
+		e.setBodyLocked(id, bv)
 		e.mu.Unlock()
 		return nil
 	}
@@ -976,7 +982,7 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.bodyLoading = ""
-	e.setBodyLocked(id, bv.Text, bv.Attachments)
+	e.setBodyLocked(id, bv)
 	return nil
 }
 
@@ -1002,39 +1008,52 @@ func (e *Engine) BodyFor(ctx context.Context, id mail.ID) (*BodyView, error) {
 func (e *Engine) cachedBody(id mail.ID) (*BodyView, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	text, body, ok := e.bodies.get(id)
+	text, styled, body, ok := e.bodies.get(id)
 	if !ok {
 		return nil, false
 	}
-	return &BodyView{ID: id, Text: text, Attachments: body.Attachments}, true
+	return &BodyView{ID: id, Text: text, Styled: styled, Attachments: body.Attachments}, true
 }
 
-// fetchBody fetches id from the server, converts HTML to text (FR-E2) and
-// caches the result (NFR-2). No lock is held across the network call.
+// convertBody renders a fetched body once for each of its two readers.
+// The preview wants markdown when the source was HTML; the composer wants
+// plain text to quote. body.Text is rewritten to the plain form, so
+// everything downstream that quotes a body gets text and never markup.
+// A body that already carries text/plain is displayed as-is (FR-E2's
+// preference) and is not styled.
+func convertBody(body *mail.EmailBody) (display string, styled bool) {
+	if body.Text != "" {
+		return body.Text, false
+	}
+	if body.HTML == "" {
+		return "", false
+	}
+	body.Text = mailtext.HTMLToText(body.HTML)
+	return mailtext.HTMLToMarkdown(body.HTML), true
+}
+
+// fetchBody fetches id from the server, converts HTML for display (FR-E2)
+// and caches the result (NFR-2). No lock is held across the network call.
 func (e *Engine) fetchBody(ctx context.Context, id mail.ID) (*BodyView, error) {
 	body, err := e.p.FetchBody(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	text := body.Text
-	if text == "" && body.HTML != "" {
-		text = mailtext.HTMLToText(body.HTML)
-	}
-	body.Text = text
+	display, styled := convertBody(&body)
 
 	e.mu.Lock()
-	e.bodies.put(id, text, body)
+	e.bodies.put(id, display, styled, body)
 	e.mu.Unlock()
-	return &BodyView{ID: id, Text: text, Attachments: body.Attachments}, nil
+	return &BodyView{ID: id, Text: display, Styled: styled, Attachments: body.Attachments}, nil
 }
 
 // setBodyLocked installs the body view when id still matches the cursor.
 // The caller must hold mu.
-func (e *Engine) setBodyLocked(id mail.ID, text string, atts []mail.Attachment) {
+func (e *Engine) setBodyLocked(id mail.ID, bv *BodyView) {
 	if e.window == nil || e.cursorIDLocked() != id {
 		return
 	}
-	e.body = &BodyView{ID: id, Text: text, Attachments: atts}
+	e.body = bv
 	e.publishLocked()
 }
 

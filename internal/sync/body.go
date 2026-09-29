@@ -20,25 +20,30 @@ func newBodyCache(capacity int) *bodyCache {
 }
 
 // bodyEntry is one cached fetch: the display text the preview renders
-// (HTML already converted, FR-E2) plus the whole EmailBody, whose
-// addressing and threading headers the composer reuses for replies
-// (FR-H2) so opening a reply on a message you just read costs nothing.
+// (markdown when styled, FR-E2) plus the whole EmailBody, whose Text
+// carries the plain text a reply quotes and whose addressing and threading
+// headers the composer reuses for replies (FR-H2) so opening a reply on a
+// message you just read costs nothing.
+//
+// The two texts are kept apart deliberately: the preview wants structure,
+// the textarea must never receive markup.
 type bodyEntry struct {
-	id   mail.ID
-	text string
-	body mail.EmailBody
+	id     mail.ID
+	text   string // display text (markdown when styled)
+	styled bool
+	body   mail.EmailBody // body.Text is the plain quote text
 }
 
 // put inserts/refreshes an entry, evicting the least recently used beyond
 // capacity. text is the display text; body carries everything else.
-func (c *bodyCache) put(id mail.ID, text string, body mail.EmailBody) {
+func (c *bodyCache) put(id mail.ID, text string, styled bool, body mail.EmailBody) {
 	if el, ok := c.ents[id]; ok {
 		c.ll.MoveToFront(el)
-		el.Value.(*bodyEntry).text = text
-		el.Value.(*bodyEntry).body = body
+		e := el.Value.(*bodyEntry)
+		e.text, e.styled, e.body = text, styled, body
 		return
 	}
-	el := c.ll.PushFront(&bodyEntry{id: id, text: text, body: body})
+	el := c.ll.PushFront(&bodyEntry{id: id, text: text, styled: styled, body: body})
 	c.ents[id] = el
 	for c.ll.Len() > c.cap {
 		back := c.ll.Back()
@@ -50,14 +55,14 @@ func (c *bodyCache) put(id mail.ID, text string, body mail.EmailBody) {
 	}
 }
 
-// get returns the cached display text and full body, marking it recently
-// used.
-func (c *bodyCache) get(id mail.ID) (text string, body mail.EmailBody, ok bool) {
+// get returns the cached display text, whether it is styled, and the full
+// body, marking it recently used.
+func (c *bodyCache) get(id mail.ID) (text string, styled bool, body mail.EmailBody, ok bool) {
 	el, ok := c.ents[id]
 	if !ok {
-		return "", mail.EmailBody{}, false
+		return "", false, mail.EmailBody{}, false
 	}
 	c.ll.MoveToFront(el)
 	e := el.Value.(*bodyEntry)
-	return e.text, e.body, true
+	return e.text, e.styled, e.body, true
 }

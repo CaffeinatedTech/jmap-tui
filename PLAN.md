@@ -166,7 +166,7 @@ Each milestone is a gate (acceptance criteria in REQUIREMENTS §7). Rough effort
 | # | Scope | Key deliverables |
 |---|---|---|
 | **M0** | Scaffold & spike | Repo, module layout, config+keyring, `jmapclient` wrapper, smoke CLI: connect to Stalwart test account, dump session/mailboxes. `mail.Provider` interface defined. mockjmap server v0. **Landed 2026-09-21: smoke verified against live Stalwart (session, 16 capabilities, mailbox tree with roles); config/keyring/jmapclient tested via mockjmap; live integration is env-gated; no CI, no docker — gates run locally pre-commit.** |
-| **M1** | Reader | Sidebar tree, rolling-window list (4.1), preview + HTML→text, threads expand, single-pane/two-pane responsive, help overlay. **This is the make-or-break milestone.** **Landed 2026-09-21:** full reader (sidebar/list/preview, help overlay, responsive 3/2/1-pane, dark+light themes, ctrl-c-twice exit, redacted `--log-file`, crash reports). Verified: 12k-message endless scroll vs mockjmap — RSS 20 MB (50 MB budget), worst local interaction 3.6 ms (16 ms budget), summaries bounded at cap+chunk; live Stalwart reader verification (collapsed queries, thread expansion, HTML→text) with full fixture cleanup; 10 golden frames (120×40 / 99×35 / 59×25 × dark/light + help/loading/no-sidebar). Thread expansion shipped as `Email/query {inThread}` — a Stalwart extension, not an RFC 8621 filter — and was reverted to FR-D2's `Thread/get` + `Email/get` on 2026-09-26 (§4.1 Threads), which removed the drift this row used to flag. |
+| **M1** | Reader | Sidebar tree, rolling-window list (4.1), preview + HTML→text, threads expand, single-pane/two-pane responsive, help overlay. **This is the make-or-break milestone.** **Landed 2026-09-21:** full reader (sidebar/list/preview, help overlay, responsive 3/2/1-pane, dark+light themes, ctrl-c-twice exit, redacted `--log-file`, crash reports). Verified: 12k-message endless scroll vs mockjmap — RSS 20 MB (50 MB budget), worst local interaction 3.6 ms (16 ms budget), summaries bounded at cap+chunk; live Stalwart reader verification (collapsed queries, thread expansion, HTML→text) with full fixture cleanup; 10 golden frames (120×40 / 99×35 / 59×25 × dark/light + help/loading/no-sidebar). Thread expansion shipped as `Email/query {inThread}` — a Stalwart extension, not an RFC 8621 filter — and was reverted to FR-D2's `Thread/get` + `Email/get` on 2026-09-26 (§4.1 Threads), which removed the drift this row used to flag. **Post-v0.1 (2026-09-29):** HTML bodies now render *styled* — the in-repo converter emits markdown and the preview pane styles it through glamour with the theme palette (FR-E2, §6.3); `text/plain` bodies and the composer's quote are untouched. |
 | **M2** | Live sync | EventSource + `/changes` engine, optimistic-overlay plumbing, status line, reconnect/poll fallback, mailbox counts live. **Landed 2026-09-21:** EventSource transport implemented in-repo (go-jmap's `push.EventSource` appends query params instead of expanding the RFC 8620 §7.3 `{types}/{closeafter}/{ping}` template, takes no context, and has no liveness watchdog — wrapper-extended per §9, `jmapclient/sse.go`). Engine loop: push → backoff (1s→30s, jitter) → poll at 60s after 3 failed attempts, auto-upgrading to push on any successful reconnect; `/changes` reconciliation for Email (destroy eviction + cursor repair, summary patch, new-mail slide-in at top for date-desc views, cannotCalculateChanges → cursor-anchored re-query) and Mailbox (tree refetch, counts, ghost-mailbox fallback to inbox); state strings tracked per type (FR-B5); optimistic-overlay plumbing with confirm/revert/re-apply (FR-B7 groundwork, no UI actions until M3/M4); footer status line (FR-I5); new-above hint; fresh-row highlight with fade. Verified: mockjmap suites (slide-in, patch, destroy, reconnect, poll fallback + upgrade, cannotCalculateChanges, overlays), window live-patch table tests, live-push soak with bounded RSS/latency, and the live Stalwart gate — send-to-self via EmailSubmission appeared in the open client in **1.05s**, flag patch **0.95s**, unread count 2→1 via Mailbox/changes, all within the ~1s target. |
 | **M3** | Triage | Flags/read/star/move/copy/delete, multi-select batched `/set`, archive, undo toasts, crash-safe terminal restore; attachment save (FR-E4, deferred from M2 — filepicker dir-pick UX decided 2026-09-21). **Landed 2026-09-21:** full triage set — read/unread (`space`/`u`), star (`*`), multi-select (`x`) rendered as a marker gutter, move (`m`) and copy (`C`) via a type-to-filter mailbox picker modal, delete (`#` → role-trash, permanent destroy inside Trash as a 5s delayed destroy cancelled with `ctrl+z`), archive (`y`) with role → prefs → one-time-picker fallback remembered in app-managed `prefs.toml` (REQUIREMENTS FR-J1 updated same PR), undo toasts (5s) backed by exact reverse-delta `TriageSpec`s (move-undo restores original memberships), attachment save (`s` in preview: bubbles filepicker dir-pick from `~/Downloads`, no-overwrite collision suffixes, bytes only touch disk at save — NFR-4). Engine: `sync.Triage` applies optimistic overlays (FR-B7) then one batched `Email/set` per action (FR-G3, FR-K4), confirms via refetch, and re-anchors the window on membership changes; dirty-window re-anchor now driven by `Prefetch` (fixes a latent M2 gap where live-destroyed windows could not extend). `mail.Mutation`/`EmailPatch`/`MutationResult` finalised; wrapper decodes both RFC 8620 §5.3 IdSet wire forms for `updated` (Stalwart sends the array form; go-jmap's typed field only accepts the map form — wrapper-extended per §9). Verified: mockjmap suites (keywords/move/copy/destroy/undo/batch-is-one-set/partial-failure/pending-overlay), engine + app key-routing tests, 14 golden frames incl. selection/picker/toast/save-attachments, and the live Stalwart gate — full triage workflow server-verified via independent `Email/get` (read batch 2–5 ms), attachment upload→download round-trip byte-exact. Crash-safe terminal restore was already satisfied in M1 (FR-K3, `cmd/jmap-tui/tui.go`). |
 | **M4** | Search | Query bar, advanced modal, scope toggle, unified search. **Landed 2026-09-22:** server-side search through the rolling window (FR-F1) — `/` opens a query bar in the header with a 300 ms debounce, `Esc` restores the parked mailbox window with cursor position preserved by id; `Tab` toggles current-mailbox ↔ all-mailboxes scope (FR-F3); `ctrl+s` (or `/` in the bar) opens the advanced fielded modal — text/from/to/subject/after/before/keyword/attachments → RFC 8621 §4.4.1 FilterCondition (FR-F2); `v` full-screen message view (FR-E5). Engine: search views are first-class `Query` windows (`SearchOpen`/`SearchClose` park/restore the mailbox view; parked-window summaries stay resident so Esc renders instantly); live patch/destroy works in search views, new-mail slide-in is suppressed there (server-side matchability is unknowable client-side) and the restored window re-anchors around the cursor on close (FR-B5). Unified-account search rides M6 (needs the Hub — REQUIREMENTS FR-F3 note). Verified: mockjmap filter suites (token-semantics server double, mirroring Stalwart), engine restore/scope/slide-in suites, 50k-message search first page in **224 ms** (< 1 s gate), search-soak RSS 20.9 MB / worst interaction 4.8 ms; live Stalwart gate passed — 3,000-message fixture search first page in **13.7–22.2 ms**, all filter fields + all-mailbox scope verified, and the fuzzy fallback verified live (partial-word scan 3000/3000, fielded subject scan 3000/3000 — §7 observations). Follow-ups landed after user feedback (2026-09-22): `ctrl+s` now opens the advanced modal directly (it previously only opened the bar), and the fuzzy fallback covers **every advanced-modal field** — fielded partial words scan with the same contains-style semantics, exact fields (keyword/attachment/dates) compose client-side, and exact-only searches never scan (§4.4). |
@@ -186,8 +186,9 @@ Sequencing rule: M1 lands before M2 (window math must exist to be sync'd), M3 ma
 M0–M10 have all landed, were verified against the live Stalwart and Fastmail accounts, and **v0.1.0 is tagged** (2026-09-28). In order:
 
 1. **Post-v0.1 scope** — REQUIREMENTS `[FUTURE]` and the README roadmap: FR-E6 image preview / external pager, then Sieve management, vacation responder, quota display, richer theming. (No second mail protocol — jmap-tui is JMAP only.)
-2. **Open question** — REQUIREMENTS §8.1: optional external HTML renderer (glow/w3m/pandoc pipe). Leans no for v1; revisit after.
-3. **Known flaky** — `TestSearchFuzzyScanIndicator` and `TestEngineSearch50kFirstPageUnder1s` fail only under `-race` (perf budgets); they pass without instrumentation.
+2. **Known flaky** — `TestSearchFuzzyScanIndicator` and `TestEngineSearch50kFirstPageUnder1s` fail only under `-race` (perf budgets); they pass without instrumentation.
+
+The former §8.1 open question (optional external HTML renderer) is **resolved**: the in-repo converter now emits markdown and the pane styles it through glamour — see §6.3. No external pipe.
 
 ### 6.2 M10 design — server auto-config (planned 2026-09-28, landed 2026-09-28)
 
@@ -256,6 +257,61 @@ Zero new dependencies (stdlib `net.Resolver` + `net/http`); own timeout (min(opt
 
 **Execution order & gates:** (1) `feat: JMAP server discovery package`, (2) `feat: wizard auto-discovers server URL`, (3) `docs: FR-A7, PLAN M10, README wizard` — each behind `go build ./... && go vet ./... && golangci-lint run && gofumpt -l -w . && go test ./...` (including `TestGoldenWizardFrames`).
 
+### 6.3 Styled HTML rendering — design record (landed 2026-09-29)
+
+Kept as the design record for FR-E2's second half: HTML bodies are no
+longer flattened to plain text.
+
+**Pipeline.** `mailtext.HTMLToMarkdown` shares the existing DOM walker
+with `HTMLToText` and differs only at the emission points: ATX headings,
+`*`/`**` emphasis, `- `/`1. ` lists (four-space nesting), `> ` quotes,
+`---` rules, fenced code, pipe tables, and text escaped so sender content
+cannot smuggle structure (`&` round-trips as `&amp;` because the renderer
+runs `html.UnescapeString` over text nodes). The output is `Sanitize`d
+before it leaves the package, so the markdown source carries no control
+bytes at all. `internal/ui.RenderBody` then styles it with
+`charm.land/glamour/v2` — Glow's engine — using a stylesheet derived from
+`Palette`: accent on headings/links/code, muted on quotes and footnotes,
+body colour for text, **no margins** (every column belongs to the pane),
+no borders, no backgrounds. `WithPreservedNewLines` keeps the `<br>` a
+hard break instead of letting a paragraph rejoin it.
+
+**Where it sits.** The engine caches the *width-independent* markdown
+(`BodyView{Text, Styled}`) and keeps `EmailBody.Text` as the plain text a
+reply quotes — the two readers want different things and must never share
+a string. The render happens **once**, in `app.setBody`; the result is
+width-independent (glamour is asked not to wrap) and every resize then
+re-wraps it with `ansi.Wrap`, exactly like a plain body, so the render
+never sits on the resize path. The frame boundary (`ui/sanitizeState`)
+moved to `SanitizeStyled`, which passes well-formed CSI SGR and drops
+every other escape whole — including OSC hyperlinks, whose payload the
+reader already sees as text.
+
+**Why glamour does not wrap.** Its wrapping pads every line to the wrap
+width with *one styled space per column*, and the padding writer
+re-parses ANSI for each: measured at ~10 ms/KB, four times the rest of
+the render put together, and it made every resize re-render. With
+`WithWordWrap(0)` the padding writer never fires, the output no longer
+depends on a width, and the whole pipeline costs ~1.6 ms/KB — paid once
+per body. The visible trade-off is that tables size to their content
+rather than the pane, so a table wider than the pane is word-wrapped by
+`ansi.Wrap` like any other long line (the pre-existing plain-text
+behaviour).
+
+**Degradation.** Glamour error or a source past `maxStyledBodyBytes`
+(64 KB ≈ a 100 ms frame) → the sanitized markdown source, readable and
+never blank; `text/plain` bodies bypass the renderer entirely.
+`trimTrailingPad` then drops whatever trailing space the renderer still
+leaves (table cell padding, an empty styled run) — invisible without a
+background colour, but the viewport carries every line in memory on
+every frame. If profiling ever shows the one-time render janking a slow
+machine, the upgrade is a stale-discarded `tea.Cmd`, the same shape the
+body fetch already uses.
+
+**Scope boundary.** This is not HTML/CSS rendering: no layout engine, no
+CSS cascade, no images, no remote content (REQUIREMENTS §4). Layout
+tables are recognised and *not* turned into grids.
+
 ## 7. Server degradation matrix (living doc)
 
 | Capability | Stalwart | Fastmail | Fallback |
@@ -271,6 +327,8 @@ Zero new dependencies (stdlib `net.Resolver` + `net/http`); own timeout (min(opt
 | Contacts capability (RFC 9610) | ✔ (`urn:ietf:params:jmap:contacts` + `contacts:parse`) | ✔ (capability + full M9 gate live 2026-09-28) | hide feature (FR-L6) |
 | `ContactCard`/`AddressBook` `/changes` + push | ✔ (StateChange type observed live) | ✔ (StateChange observed live 2026-09-28) | `cannotCalculateChanges` ⇒ full refetch; poll folds while warm |
 | Server auto-discovery (FR-A7) | ✔ `_jmap._tcp.geekify.me` → `mail.geekify.me` (2026-09-28) | ✔ `_jmap._tcp.fastmail.com` → `api.fastmail.com` (2026-09-28) | domain probe, then the Server URL field (`ctrl+u`); DNS + one GET, ≤10s, never a hang |
+
+Client-side (non-server) degradation, recorded here so §7 stays the one place degradation is listed: an HTML body that fails to render — a glamour error, or a source past the 64 KB guard — falls back to the sanitized markdown source, and a `text/plain` body never enters the renderer at all (§6.3).
 
 M0 live-Stalwart observations: `eventSourceUrl` and the `websocket` capability are both advertised — push (M2) and WS fallback paths look available. `blob`, `sieve`, `quota`, `submission`, `vacationresponse` capabilities also present.
 

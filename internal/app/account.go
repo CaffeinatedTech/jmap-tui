@@ -167,7 +167,7 @@ func (m *Model) activateAccount(id string) tea.Cmd {
 	// per-account, so the cached viewport must not leak across.
 	m.vpBodyID = ""
 	m.bodyReq = ""
-	m.setBody("")
+	m.setBody("", false)
 	m.sel = map[mail.ID]bool{}
 	m.err = ""
 

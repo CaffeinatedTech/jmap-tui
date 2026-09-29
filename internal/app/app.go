@@ -137,11 +137,14 @@ type Model struct {
 
 	vp       viewport.Model
 	vpBodyID mail.ID
-	// bodyRaw is the last body text exactly as fetched, and bodyWrapW the
-	// pane width it is currently reflowed to in vp: a resize re-wraps from
-	// the raw text instead of refetching or double-wrapping (issue #5).
-	bodyRaw   string
-	bodyWrapW int
+	// bodyRaw is the last body text exactly as fetched, already styled
+	// by the pane's renderer when bodyStyled says the source was
+	// converted from HTML — and bodyWrapW the pane width it is currently
+	// reflowed to in vp: a resize re-wraps from the raw text instead of
+	// refetching or double-wrapping (issue #5).
+	bodyRaw    string
+	bodyStyled bool
+	bodyWrapW  int
 
 	lastCtrlC  time.Time
 	err        string
@@ -467,7 +470,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.uBodyKey, m.uBody = msg.key, msg.body
 		if m.vpBodyID != msg.key {
-			m.setBody(msg.body.Text)
+			m.setBody(msg.body.Text, msg.body.Styled)
 			m.vp.GotoTop()
 			m.vpBodyID = msg.key
 		}
@@ -802,13 +805,13 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	}
 	// Fresh body arrived: install and reset scroll (FR-E3).
 	if snap.Body != nil && snap.Body.ID != m.vpBodyID {
-		m.setBody(snap.Body.Text)
+		m.setBody(snap.Body.Text, snap.Body.Styled)
 		m.vp.GotoTop()
 		m.vpBodyID = snap.Body.ID
 	}
 	// Cursor changed under an already-cached body: show it immediately.
 	if id := m.cursorID(); id != "" && id != m.vpBodyID && snap.Body != nil && snap.Body.ID == id {
-		m.setBody(snap.Body.Text)
+		m.setBody(snap.Body.Text, snap.Body.Styled)
 		m.vp.GotoTop()
 		m.vpBodyID = id
 	}
@@ -909,7 +912,7 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 		case m.uBody != nil && m.uBodyKey == key:
 			// Cached by an earlier visit: show it now and drop the
 			// in-flight request so its reply cannot reset the scroll.
-			m.setBody(m.uBody.Text)
+			m.setBody(m.uBody.Text, m.uBody.Styled)
 			m.vp.GotoTop()
 			m.vpBodyID = key
 			m.bodyReq = ""
@@ -1184,7 +1187,7 @@ func (m *Model) openMailboxOn(acct string, id mail.ID) tea.Cmd {
 		}
 		if acct == m.activeID {
 			m.vpBodyID = ""
-			m.setBody("")
+			m.setBody("", false)
 		}
 		return eng.Snapshot(), nil
 	})
@@ -1653,18 +1656,30 @@ func (m *Model) resizeViewport() {
 
 // setBody installs a fetched body into the reader viewport, keeping the
 // raw text so later resizes can re-wrap it without refetching (issue #5).
-func (m *Model) setBody(text string) {
+// styled says the text is markdown from the HTML converter: it is
+// rendered here, **once**, into width-independent output, so that every
+// later resize re-wraps it exactly as it re-wraps a plain body — the
+// render never sits on the resize path.
+func (m *Model) setBody(text string, styled bool) {
+	m.bodyStyled = styled
+	if styled {
+		text = ui.RenderBody(text, m.opts.Theme.P)
+	}
 	m.bodyRaw, m.bodyWrapW = text, -1 // -1 forces the re-wrap even at the same width
 	m.applyBody()
 }
 
 // applyBody reflows the stored body into the viewport whenever the pane
 // width changes; wrapping always runs from the raw text, so a resize
-// never double-wraps. Reflow is word-aware and line-preserving:
-// only source lines that exceed the pane split, so quoting, code blocks
-// and the sender's hard breaks survive intact. The viewport's own
-// SoftWrap stays on as the hard-break fallback for any line that slips
-// through wider than the pane.
+// never double-wraps. Reflow is word-aware and line-preserving: only
+// source lines that exceed the pane split, so quoting, code blocks and
+// the sender's hard breaks survive intact. The viewport's own SoftWrap
+// stays on as the hard-break fallback for any line that slips through
+// wider than the pane.
+//
+// Styled and plain bodies take this same path on purpose: the renderer
+// produces width-independent output (ui.RenderBody), so an escape-laden
+// body rewraps here in microseconds instead of being re-rendered.
 func (m *Model) applyBody() {
 	w := m.vp.Width()
 	if w == m.bodyWrapW {

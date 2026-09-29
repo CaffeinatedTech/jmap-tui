@@ -189,8 +189,11 @@ func TestAppEndToEndReaderFlow(t *testing.T) {
 	if cmd := m.loadBody(htmlID); cmd != nil {
 		pump(t, m, cmd)
 	}
-	if !strings.Contains(m.snap.Body.Text, "The original body.") {
+	if !strings.Contains(m.snap.Body.Text, "The **original** body.") {
 		t.Fatalf("html conversion failed: %q", m.snap.Body.Text)
+	}
+	if !m.snap.Body.Styled {
+		t.Fatal("html body not marked styled for the preview renderer")
 	}
 	if m.vpBodyID != htmlID {
 		t.Fatalf("viewport id = %q, want %q", m.vpBodyID, htmlID)
@@ -342,7 +345,7 @@ func TestBodyWrapsLongLines(t *testing.T) {
 	}
 
 	raw := strings.Repeat("word ", 60) + "unbreakablekeyword\nshort line"
-	m.setBody(raw)
+	m.setBody(raw, false)
 
 	check := func(stage string) {
 		t.Helper()
@@ -384,6 +387,77 @@ func TestBodyWrapsLongLines(t *testing.T) {
 	// the wrapped form) is what gets re-wrapped.
 	_, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	check("wide")
+}
+
+// TestBodyStyledRendersAndRerendersOnResize: a converted HTML body goes
+// through the pane's renderer once — the palette's accent on the heading,
+// the markdown consumed — and every resize then re-wraps that output the
+// same way it wraps a plain body, staying in bounds at each width
+// (FR-E2). Plain bodies take the identical path with nothing styled.
+func TestBodyStyledRendersAndRerendersOnResize(t *testing.T) {
+	m, _ := newTestModel(t)
+	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40}); cmd != nil {
+		pump(t, m, cmd)
+	}
+	if m.vp.Width() <= 0 {
+		t.Fatalf("viewport width = %d after resize", m.vp.Width())
+	}
+
+	md := "## Quarterly audit\n\nHello **world**, " + strings.Repeat("padding ", 40) + "end.\n\n> quoted line"
+	m.setBody(md, true)
+	if !m.bodyStyled {
+		t.Fatal("styled flag not recorded on the model")
+	}
+
+	check := func(stage string) {
+		t.Helper()
+		view := m.vp.View()
+		if !strings.Contains(view, "\x1b[38;2;130;170;255") {
+			t.Errorf("%s: heading accent missing from the frame", stage)
+		}
+		visible := ansi.Strip(view)
+		if strings.Contains(visible, "**") || strings.Contains(visible, "##") {
+			t.Errorf("%s: markdown markers leaked into the pane: %q", stage, visible)
+		}
+		if !strings.Contains(visible, "Quarterly audit") {
+			t.Errorf("%s: heading text missing: %q", stage, visible)
+		}
+		for i, l := range strings.Split(view, "\n") {
+			if w := lipgloss.Width(l); w > m.vp.Width() {
+				t.Errorf("%s: line %d is %d cells wide, viewport is %d", stage, i, w, m.vp.Width())
+			}
+		}
+	}
+	check("initial")
+
+	wide := m.vp.Width()
+
+	// Narrower pane: re-rendered at the new width, still styled and
+	// still in bounds.
+	if _, _ = m.Update(tea.WindowSizeMsg{Width: 110, Height: 40}); m.vp.Width() >= wide {
+		t.Fatalf("resize did not narrow the viewport: width = %d (was %d)", m.vp.Width(), wide)
+	}
+	narrow := m.vp.Width()
+	check("narrow")
+
+	// Wide again: the long line unwraps, proving the stored styled text
+	// (not the already-wrapped frame) is what re-wraps.
+	if _, _ = m.Update(tea.WindowSizeMsg{Width: 150, Height: 40}); m.vp.Width() <= narrow {
+		t.Fatalf("resize did not widen the viewport: width = %d (was %d)", m.vp.Width(), narrow)
+	}
+	check("wide")
+
+	// A plain body must not pick up styling on the way through.
+	m.setBody("plain ** body ## text", false)
+	if m.bodyStyled {
+		t.Fatal("plain body marked styled")
+	}
+	if view := m.vp.View(); strings.Contains(view, "\x1b[38;2;130;170;255") {
+		t.Errorf("plain body was styled: %q", view)
+	}
+	if view := ansi.Strip(m.vp.View()); !strings.Contains(view, "plain ** body ## text") {
+		t.Errorf("plain body not passed through: %q", view)
+	}
 }
 
 // squeeze collapses all whitespace so two renderings of the same body can

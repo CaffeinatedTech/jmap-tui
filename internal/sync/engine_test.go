@@ -134,8 +134,24 @@ func TestEngineBodyLRUAndHTMLConversion(t *testing.T) {
 	if snap.Body == nil || snap.Body.ID != id {
 		t.Fatalf("body not installed: %+v", snap.Body)
 	}
-	if snap.Body.Text != "Rich text" {
-		t.Fatalf("converted text = %q, want %q", snap.Body.Text, "Rich text")
+	if snap.Body.Text != "Rich **text**" {
+		t.Fatalf("converted text = %q, want %q", snap.Body.Text, "Rich **text**")
+	}
+	if !snap.Body.Styled {
+		t.Fatal("HTML body not marked styled")
+	}
+
+	// The composer quotes the same message through ReplyContext and must
+	// get plain text — no markdown markers in a textarea.
+	quote, err := e.ReplyContext(ctx, id)
+	if err != nil {
+		t.Fatalf("ReplyContext: %v", err)
+	}
+	if quote.Text != "Rich text" {
+		t.Fatalf("quote text = %q, want %q", quote.Text, "Rich text")
+	}
+	if snap := e.Snapshot(); snap.Body == nil || snap.Body.Text != "Rich **text**" {
+		t.Fatalf("quote fetch clobbered the display body: %+v", snap.Body)
 	}
 
 	// Moving the cursor away drops the body view; loading the other message
@@ -151,14 +167,21 @@ func TestEngineBodyLRUAndHTMLConversion(t *testing.T) {
 	if snap := e.Snapshot(); snap.Body == nil || snap.Body.ID != other {
 		t.Fatalf("body for %q missing: %+v", other, snap.Body)
 	}
+	// The text/plain message displays as-is: no conversion, no styling.
+	if snap := e.Snapshot(); snap.Body.Styled || snap.Body.Text != "The reply body.\n" {
+		t.Fatalf("plain body = %+v, want unstyled original text", snap.Body)
+	}
 
 	// Returning to the first message hits the LRU (no network).
 	e.MoveCursor(-1)
 	if err := e.LoadBody(ctx, id); err != nil {
 		t.Fatalf("LoadBody(cache): %v", err)
 	}
-	if snap := e.Snapshot(); snap.Body == nil || snap.Body.ID != id || snap.Body.Text != "Rich text" {
+	if snap := e.Snapshot(); snap.Body == nil || snap.Body.ID != id || snap.Body.Text != "Rich **text**" {
 		t.Fatalf("cached body wrong: %+v", snap.Body)
+	}
+	if snap := e.Snapshot(); !snap.Body.Styled {
+		t.Fatal("cached HTML body lost its styled flag")
 	}
 }
 

@@ -30,30 +30,48 @@ var hostileHTML = []struct{ name, html string }{
 
 func TestAuditT2HTMLToTextStripsControls(t *testing.T) {
 	for _, tc := range hostileHTML {
-		out := HTMLToText(tc.html)
-		if !utf8.ValidString(out) {
-			t.Errorf("[%s] HTMLToText output is not valid UTF-8", tc.name)
+		assertControlFree(t, "HTMLToText", tc.name, HTMLToText(tc.html))
+		assertControlFree(t, "HTMLToMarkdown", tc.name, HTMLToMarkdown(tc.html))
+	}
+}
+
+// assertControlFree applies the T-2 policy to one conversion result: no
+// C0/C1 controls (except \n and \t), no ESC, no bidi/zero-width marks,
+// valid UTF-8 throughout.
+func assertControlFree(t *testing.T, fn, name, out string) {
+	t.Helper()
+	if !utf8.ValidString(out) {
+		t.Errorf("[%s/%s] output is not valid UTF-8", fn, name)
+	}
+	for i, r := range out {
+		if r == '\n' || r == '\t' {
+			continue
 		}
-		for i, r := range out {
-			if r == '\n' || r == '\t' {
-				continue
-			}
-			if r < 0x20 || r == 0x7f {
-				t.Errorf("[%s] control %#x survived HTMLToText at offset %d: %q", tc.name, r, i, snippet(out))
-				break
-			}
-			if r == 0x1b {
-				t.Errorf("[%s] ESC survived HTMLToText at offset %d: %q", tc.name, i, snippet(out))
-				break
-			}
-			if r >= 0x80 && r <= 0x9f {
-				t.Errorf("[%s] C1 control %#x survived HTMLToText at offset %d", tc.name, r, i)
-				break
-			}
-			if r == 0x202e || r == 0x200b || r == 0xfeff {
-				t.Errorf("[%s] format control %#x survived HTMLToText at offset %d", tc.name, r, i)
-				break
-			}
+		if r < 0x20 || r == 0x7f {
+			t.Errorf("[%s/%s] control %#x survived at offset %d: %q", fn, name, r, i, snippet(out))
+			break
+		}
+		if r == 0x1b {
+			t.Errorf("[%s/%s] ESC survived at offset %d: %q", fn, name, i, snippet(out))
+			break
+		}
+		if r >= 0x80 && r <= 0x9f {
+			t.Errorf("[%s/%s] C1 control %#x survived at offset %d", fn, name, r, i)
+			break
+		}
+		if r == 0x202e || r == 0x200b || r == 0xfeff {
+			t.Errorf("[%s/%s] format control %#x survived at offset %d", fn, name, r, i)
+			break
+		}
+	}
+}
+
+// The markdown source must be ESC-free by construction: every escape a
+// terminal sees downstream is added by the renderer, never by the mail.
+func TestAuditMDSourceCarriesNoEscapes(t *testing.T) {
+	for _, tc := range hostileHTML {
+		if strings.ContainsRune(HTMLToMarkdown(tc.html), '\x1b') {
+			t.Errorf("[%s] ESC in markdown source: %q", tc.name, snippet(HTMLToMarkdown(tc.html)))
 		}
 	}
 }
@@ -66,12 +84,21 @@ func TestAuditT8HTMLToTextTerminates(t *testing.T) {
 		strings.Repeat("<!--", 500) + "unterminated",
 	}
 	for i, in := range cases {
-		done := make(chan string, 1)
-		go func() { done <- HTMLToText(in) }()
-		select {
-		case <-done:
-		case <-timeAfter():
-			t.Errorf("case %d: HTMLToText never returned", i)
+		for _, convert := range []struct {
+			name string
+			fn   func(string) string
+		}{
+			{"HTMLToText", HTMLToText},
+			{"HTMLToMarkdown", HTMLToMarkdown},
+		} {
+			done := make(chan string, 1)
+			fn := convert.fn
+			go func() { done <- fn(in) }()
+			select {
+			case <-done:
+			case <-timeAfter():
+				t.Errorf("case %d (%s): conversion never returned", i, convert.name)
+			}
 		}
 	}
 }
@@ -124,6 +151,52 @@ func FuzzHTMLToText(f *testing.F) {
 			if r == 0x202e || r == 0x200b || r == 0xfeff {
 				t.Fatalf("format control %#x in HTMLToText output: %q", r, clip(out))
 			}
+		}
+	})
+}
+
+// FuzzHTMLToMarkdown: same contract as FuzzHTMLToText for the markdown
+// rendering, plus the stronger claim the styled pipeline depends on — the
+// markdown source never carries an escape of its own, so the only control
+// bytes a terminal sees are the renderer's SGR.
+func FuzzHTMLToMarkdown(f *testing.F) {
+	for _, s := range []string{
+		"<h1>x</h1><p>* y</p>",
+		"<table><tr><th>a</th><th>b</th></tr><tr><td>c</td><td>d</td></tr></table>",
+		"<blockquote><pre>\x1b[2J</pre></blockquote>",
+		"<ol><li>1. x</li></ol>",
+		"<b>\u202ebold\u200b</b>",
+		"<code>`x`</code>",
+		"<p>&#27;[2J &#0;</p>",
+		"<td>cell</td>",
+		"",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		out := HTMLToMarkdown(in)
+		if !utf8.ValidString(out) {
+			t.Fatalf("invalid UTF-8 in HTMLToMarkdown output: %q", clip(out))
+		}
+		if strings.ContainsRune(out, '\x1b') {
+			t.Fatalf("ESC in HTMLToMarkdown output: %q", clip(out))
+		}
+		for _, r := range out {
+			if r == '\n' || r == '\t' {
+				continue
+			}
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				t.Fatalf("control %#x in HTMLToMarkdown output: %q", r, clip(out))
+			}
+			if r == 0x202e || r == 0x200b || r == 0xfeff {
+				t.Fatalf("format control %#x in HTMLToMarkdown output: %q", r, clip(out))
+			}
+		}
+		// SanitizeStyled is the frame boundary: applying it to the
+		// renderer-less source must be an identity, or the source
+		// carried something the boundary would have to strip.
+		if s := SanitizeStyled(out); s != out {
+			t.Fatalf("SanitizeStyled changed markdown source:\n in %q\nout %q", clip(out), clip(s))
 		}
 	})
 }

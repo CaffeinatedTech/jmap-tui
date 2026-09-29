@@ -6,13 +6,13 @@ import (
 	"fmt"
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
-	"github.com/CaffeinatedTech/jmap-tui/internal/mailtext"
 )
 
 // ReplyContext returns everything the composer needs to build a reply,
 // reply-all, or forward for id (FR-H1, FR-H2): addressing (including Cc,
 // Bcc and Reply-To, which the lean summary property set omits), the RFC
-// 5322 threading fields, and the display body text to quote.
+// 5322 threading fields, and the plain body text to quote — never the
+// styled markdown the preview shows.
 //
 // The body LRU already holds it once the preview has shown the message, so
 // opening a reply from a message you just read costs no round-trip.
@@ -20,20 +20,18 @@ func (e *Engine) ReplyContext(ctx context.Context, id mail.ID) (mail.EmailBody, 
 	if id == "" {
 		return mail.EmailBody{}, errors.New("sync: reply context: no message selected")
 	}
-	if _, body, ok := e.bodies.get(id); ok && len(body.MessageID) > 0 {
+	if _, _, body, ok := e.bodies.get(id); ok && len(body.MessageID) > 0 {
 		return body, nil
 	}
 	body, err := e.p.FetchBody(ctx, id)
 	if err != nil {
 		return mail.EmailBody{}, fmt.Errorf("sync: reply context: %w", err)
 	}
-	text := body.Text
-	if text == "" && body.HTML != "" {
-		text = mailtext.HTMLToText(body.HTML)
-	}
-	body.Text = text
+	// convertBody fills body.Text with the plain quote text and returns
+	// the display text; the composer only ever sees the plain form.
+	display, styled := convertBody(&body)
 	e.mu.Lock()
-	e.bodies.put(id, text, body)
+	e.bodies.put(id, display, styled, body)
 	e.mu.Unlock()
 	return body, nil
 }
