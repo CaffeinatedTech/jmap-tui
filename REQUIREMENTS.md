@@ -96,7 +96,7 @@ A terminal email client that treats JMAP as a first-class protocol — JMAP only
 ## FR-E — Reading
 
 - **[FR-E1] [M1]** Preview pane shows headers (from, to, date, subject, mailbox), body, attachments strip.
-- **[FR-E2] [M1]** Body preference: `text/plain` part. If none, convert the `text/html` part with an in-repo converter (strip script/style, unwrap links, footnote URLs). No remote fetches, ever.
+- **[FR-E2] [M1]** Body preference: `text/plain` part. If none, convert the `text/html` part with an in-repo converter (strip script/style, unwrap links, footnote URLs). No remote fetches, ever. Exception: a degenerate `text/plain` part — placeholder-only, i.e. under 120 chars after trimming (e.g. GOG.com's "Plain text version not available") — is treated as absent when an HTML alternative exists.
 - **[FR-E3] [M1]** Viewport paging (j/k/d/Ctrl-f etc.) inside the preview; scroll position resets per message. `PgUp`/`PgDn` page the preview **from any pane** — focus stays where it is, and the preview's own keys are unchanged while it is focused. *(Global paging added post-M7 2026-09-25: reading a long message should not require leaving the list first.)*
 - **[FR-E4] [M3]** Attachment list with name, size, type; `s` saves via Bubbles filepicker (default `~/Downloads`); downloads use the session `downloadUrl` (blob ids). *(Moved from M2 at implementation: M2 stayed sync-focused and attachment save belongs with the M3 action set; approved 2026-09-21.)*
 - **[FR-E5] [M4]** Full-screen message view toggle (`v`) hiding sidebar/list.

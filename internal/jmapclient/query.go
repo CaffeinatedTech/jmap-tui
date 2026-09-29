@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	jmap "git.sr.ht/~rockorager/go-jmap"
 	jmapmail "git.sr.ht/~rockorager/go-jmap/mail"
@@ -203,25 +204,14 @@ func convertBody(e *email.Email) mail.EmailBody {
 	if e.ReceivedAt != nil {
 		body.ReceivedAt = *e.ReceivedAt
 	}
-	for _, p := range e.TextBody {
-		if p.Type != "text/plain" {
-			continue
-		}
-		if bv := e.BodyValues[p.PartID]; bv != nil {
-			body.Text = bv.Value
-			break
-		}
-	}
-	if body.Text == "" {
-		for _, p := range e.HTMLBody {
-			if p.Type != "text/html" {
-				continue
-			}
-			if bv := e.BodyValues[p.PartID]; bv != nil {
-				body.HTML = bv.Value
-				break
-			}
-		}
+	text := firstBodyValue(e.TextBody, e.BodyValues, "text/plain")
+	html := firstBodyValue(e.HTMLBody, e.BodyValues, "text/html")
+	// FR-E2: text/plain wins, but a degenerate placeholder part yields to
+	// the HTML alternative.
+	if text != "" && (!isDegenerateText(text) || html == "") {
+		body.Text = text
+	} else {
+		body.HTML = html
 	}
 	for _, a := range e.Attachments {
 		body.Attachments = append(body.Attachments, mail.Attachment{
@@ -232,6 +222,32 @@ func convertBody(e *email.Email) mail.EmailBody {
 		})
 	}
 	return body
+}
+
+// firstBodyValue returns the value of the first part of the given MIME type
+// present in bodyValues, or "" when none carries a value.
+func firstBodyValue(parts []*email.BodyPart, values map[string]*email.BodyValue, mime string) string {
+	for _, p := range parts {
+		if p.Type != mime {
+			continue
+		}
+		if bv := values[p.PartID]; bv != nil {
+			return bv.Value
+		}
+	}
+	return ""
+}
+
+// maxDegenerateText is the length below which a text/plain alternative is
+// treated as a sender placeholder rather than the real body. GOG.com ships
+// "Plain text version not available" (31 chars) as its text part; such
+// senders intend the HTML alternative to be read (FR-E2).
+const maxDegenerateText = 120
+
+// isDegenerateText reports whether a text/plain part is placeholder-only
+// (very short or whitespace-only) rather than a real plain-text body.
+func isDegenerateText(s string) bool {
+	return len(strings.TrimSpace(s)) < maxDegenerateText
 }
 
 // filterFor maps a query spec onto the RFC 8621 §4.4.1 condition. Mailbox

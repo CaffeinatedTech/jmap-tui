@@ -9,6 +9,8 @@ import (
 
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
+
+	"git.sr.ht/~rockorager/go-jmap/mail/email"
 )
 
 // emailFixtures exercises query/get surfaces: a 2-member thread, an
@@ -208,5 +210,89 @@ func TestFetchSummariesTargeted(t *testing.T) {
 	}
 	if len(sums) != 2 || sums[0].ID != "e1" || sums[1].ID != "e2" {
 		t.Fatalf("summaries = %+v", sums)
+	}
+}
+
+// dualPart builds an email carrying both alternatives so convertBody's
+// selection rule can be exercised directly.
+func dualPart(text, html string) *email.Email {
+	e := &email.Email{ID: "e-x"}
+	if text != "" {
+		e.TextBody = []*email.BodyPart{{PartID: "1", Type: "text/plain"}}
+	}
+	if html != "" {
+		e.HTMLBody = []*email.BodyPart{{PartID: "2", Type: "text/html"}}
+	}
+	e.BodyValues = map[string]*email.BodyValue{}
+	if text != "" {
+		e.BodyValues["1"] = &email.BodyValue{Value: text}
+	}
+	if html != "" {
+		e.BodyValues["2"] = &email.BodyValue{Value: html}
+	}
+	return e
+}
+
+func TestConvertBodyPlaceholderTextYieldsToHTML(t *testing.T) {
+	longText := strings.Repeat("a real plain-text body ", 10) // 220 chars
+	tests := []struct {
+		name, text, html string
+		wantText         bool
+	}{
+		{"gog placeholder", "Plain text version not available", "<html><body>deal</body></html>", false},
+		{"whitespace only", "  \n\t ", "<html><body>deal</body></html>", false},
+		{"short text, no html", "kthx", "", true},
+		{"real text with html twin", longText, "<html><body>deal</body></html>", true},
+		{"boundary at limit", strings.Repeat("x", 119), "<html><body>deal</body></html>", false},
+		{"just over limit", strings.Repeat("x", 120), "<html><body>deal</body></html>", true},
+		{"html only", "", "<html><body>deal</body></html>", false},
+		{"empty both", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertBody(dualPart(tt.text, tt.html))
+			if tt.wantText {
+				if got.Text != tt.text || got.HTML != "" {
+					t.Fatalf("text %q html %q, want text kept", got.Text, got.HTML)
+				}
+				return
+			}
+			if got.Text != "" || got.HTML != tt.html {
+				t.Fatalf("text %q html %q, want html %q", got.Text, got.HTML, tt.html)
+			}
+		})
+	}
+}
+
+// TestFetchBodySkipsPlaceholderTextPart is the end-to-end shape of GOG's
+// newsletter: a multipart/alternative whose text/plain part is a placeholder
+// string while the real content lives in text/html.
+func TestFetchBodySkipsPlaceholderTextPart(t *testing.T) {
+	srv := mockjmap.New("tester@example.com", testPassword, fixtures())
+	srv.SetEmails([]mockjmap.Email{{
+		ID: "e-gog", ThreadID: "t-gog", MailboxIDs: []string{"mb-inbox"},
+		From:    []mockjmap.Address{{Name: "GOG.COM", Email: "newsletter@email3.gog.com"}},
+		To:      []mockjmap.Address{{Email: "me@example.test"}},
+		Subject: "A deal straight from Hell", ReceivedAt: time.Now(),
+		Size: 4096, Preview: "Plain text version not available",
+		TextBody: "Plain text version not available",
+		HTMLBody: "<html><body><p>All-time high discount on SINTOPIA</p></body></html>",
+	}})
+	t.Cleanup(srv.Close)
+	c := New(Options{ServerURL: srv.URL(), Username: "tester@example.com", Password: testPassword})
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	body, err := c.FetchBody(ctx, "e-gog")
+	if err != nil {
+		t.Fatalf("FetchBody: %v", err)
+	}
+	if body.Text != "" {
+		t.Fatalf("text = %q, want empty (placeholder must yield to HTML)", body.Text)
+	}
+	if !strings.Contains(body.HTML, "SINTOPIA") {
+		t.Fatalf("html = %q, want the real alternative", body.HTML)
 	}
 }
