@@ -53,6 +53,8 @@ func TestKeymapV2Defaults(t *testing.T) {
 		{ui.PaneSidebar, "left", ui.ActSidebarCollapse},
 		{ui.PaneSidebar, "l", ui.ActSidebarExpand},
 		{ui.PaneSidebar, "right", ui.ActSidebarExpand},
+		// Mark the cursor folder read (FR-C7).
+		{ui.PaneSidebar, "ctrl+r", ui.ActMarkFolderRead},
 		// "[" is the sole sidebar show/hide key (sidebar.close unbound).
 		{ui.PaneSidebar, "[", ui.ActToggleSidebar},
 		{ui.PanePreview, "ctrl+f", ui.ActPreviewPageDown},

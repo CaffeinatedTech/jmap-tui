@@ -230,27 +230,43 @@ func (s *Server) emailSetResponse(args json.RawMessage) map[string]any {
 			}
 		}
 
-		// Mailbox-count deltas from this update.
+		// Mailbox-count deltas from this update, computed per affected
+		// mailbox as before/after membership and unread presence. A
+		// keyword-only flip (e.g. $seen) changes unread without touching
+		// membership, so both must be derived from the before/after state
+		// rather than membership alone.
 		afterMbs := e.MailboxIDs
-		for _, mb := range beforeMbs {
-			if !contains(afterMbs, mb) {
-				for _, d := range deltas([]string{mb}) {
-					d.total--
-					if beforeUnread {
-						d.unread--
-					}
-				}
+		afterUnread := !e.Keywords["$seen"]
+		seenMB := map[string]bool{}
+		applyDelta := func(mb string) {
+			if seenMB[mb] {
+				return
+			}
+			seenMB[mb] = true
+			had := contains(beforeMbs, mb)
+			has := contains(afterMbs, mb)
+			wasUnread := had && beforeUnread
+			isUnread := has && afterUnread
+			if had == has && wasUnread == isUnread {
+				return
+			}
+			d := deltas([]string{mb})[0]
+			if has && !had {
+				d.total++
+			} else if had && !has {
+				d.total--
+			}
+			if isUnread && !wasUnread {
+				d.unread++
+			} else if wasUnread && !isUnread {
+				d.unread--
 			}
 		}
+		for _, mb := range beforeMbs {
+			applyDelta(mb)
+		}
 		for _, mb := range afterMbs {
-			if !contains(beforeMbs, mb) {
-				for _, d := range deltas([]string{mb}) {
-					d.total++
-					if !e.Keywords["$seen"] {
-						d.unread++
-					}
-				}
-			}
+			applyDelta(mb)
 		}
 		updated = append(updated, id)
 	}

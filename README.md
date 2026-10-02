@@ -221,6 +221,7 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>Enter</kbd> | Open the folder (focus moves to the message list) |
 | <kbd>h</kbd> / <kbd>←</kbd> | Fold a folder's subfolders — or the whole account |
 | <kbd>l</kbd> / <kbd>→</kbd> | Unfold (never opens — that's <kbd>Enter</kbd>) |
+| <kbd>ctrl+r</kbd> | Mark every unread message in the folder read |
 | <kbd>ctrl+↑</kbd> / <kbd>ctrl+↓</kbd> | Move the account's block up / down |
 
 ### Message list

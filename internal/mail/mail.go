@@ -374,6 +374,13 @@ type Provider interface {
 	// the result, not as the error: a transport-level failure is the error.
 	Mutate(ctx context.Context, mutation Mutation) (MutationResult, error)
 
+	// MarkMailboxRead adds $seen to every unread message in a mailbox
+	// (FR-C7), sweeping Email/query + Email/set in chunks sized to the
+	// server's maxObjectsInSet. It returns how many messages it marked.
+	// A server rejection is an error: the sweep stops rather than
+	// re-querying the same page forever.
+	MarkMailboxRead(ctx context.Context, mailboxID ID) (int, error)
+
 	// DownloadBlob fetches an attachment blob by id over the session
 	// download URL (FR-E4). name and mediaType fill the URL template;
 	// the caller closes the reader.

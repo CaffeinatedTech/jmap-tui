@@ -215,6 +215,7 @@ type queryFilter struct {
 	After         *time.Time `json:"after"`
 	Before        *time.Time `json:"before"`
 	HasKeyword    string     `json:"hasKeyword"`
+	NotKeyword    string     `json:"notKeyword"`
 	HasAttachment *bool      `json:"hasAttachment"`
 }
 
@@ -266,7 +267,7 @@ func emailSortLess(a, b scopedEmail, prop string) bool {
 func (f queryFilter) hasSearchFilter() bool {
 	return f.Text != "" || f.From != "" || f.To != "" || f.Subject != "" ||
 		f.After != nil || f.Before != nil || f.HasKeyword != "" ||
-		f.HasAttachment != nil
+		f.NotKeyword != "" || f.HasAttachment != nil
 }
 
 // tokenHaystack lowercases and splits content into whole tokens —
@@ -323,6 +324,9 @@ func matchesSearch(e Email, f queryFilter) bool {
 		return false
 	}
 	if f.HasKeyword != "" && !e.Keywords[f.HasKeyword] {
+		return false
+	}
+	if f.NotKeyword != "" && e.Keywords[f.NotKeyword] {
 		return false
 	}
 	if f.HasAttachment != nil && *f.HasAttachment != e.HasAttachment {

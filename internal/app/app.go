@@ -512,6 +512,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case triageDoneMsg:
 		return m.handleTriageDone(msg)
 
+	case markReadDoneMsg:
+		return m.handleMarkReadDone(msg)
+
 	case toastExpireMsg:
 		if m.toast != nil && m.toast.id == msg.id {
 			m.toast = nil
@@ -1509,6 +1512,8 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 	case ui.ActSidebarExpand:
 		m.sidebarExpand()
 		return m, nil
+	case ui.ActMarkFolderRead:
+		return m, m.markFolderRead()
 	case ui.ActSidebarClose:
 		m.sidebarVisible = false
 		m.focus = ui.PaneList

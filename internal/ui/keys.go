@@ -41,6 +41,7 @@ const (
 	ActSidebarMoveDown Action = "sidebar.move_account_down"
 	ActSidebarCollapse Action = "sidebar.collapse"
 	ActSidebarExpand   Action = "sidebar.expand"
+	ActMarkFolderRead  Action = "sidebar.mark_read"
 	ActPreviewDown     Action = "preview.down"
 	ActPreviewUp       Action = "preview.up"
 	ActPreviewHalf     Action = "preview.half_down"
@@ -132,6 +133,8 @@ func defaultBindings() []Binding {
 		{Key: "left", Act: ActSidebarCollapse, Help: "collapse tree", Pane: PaneSidebar},
 		{Key: "l", Act: ActSidebarExpand, Help: "expand tree", Pane: PaneSidebar},
 		{Key: "right", Act: ActSidebarExpand, Help: "expand tree", Pane: PaneSidebar},
+		// Mark every unread message in the cursor's folder read (FR-C7).
+		{Key: "ctrl+r", Act: ActMarkFolderRead, Help: "mark folder read", Pane: PaneSidebar},
 		// Account block reorder (FR-C5): moves the whole block of the
 		// account under the cursor; a no-op at either end.
 		{Key: "ctrl+up", Act: ActSidebarMoveUp, Help: "move account up", Pane: PaneSidebar},
