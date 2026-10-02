@@ -356,33 +356,79 @@ func (e *Engine) openView(ctx context.Context, q Query) error {
 	e.mu.Lock()
 	e.saved = nil
 	e.cancelScanLocked()
-	e.window = NewWindow(q, e.cfg.Window)
+	w := NewWindow(q, e.cfg.Window)
+	e.window = w
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
 	e.cursorID = ""
 	e.bodyLoading = ""
 	e.body = nil
 	e.fresh = map[mail.ID]time.Time{}
-	r, pos, limit := e.window.Seed(0)
+	r, pos, limit := w.Seed(0)
 	spec := e.querySpecLocked(pos, limit)
 	e.mu.Unlock()
 
-	handle, sums, err := e.p.OpenQuery(ctx, spec)
-	if err != nil {
+	if err := e.seedView(ctx, w, r, spec); err != nil {
 		return err
 	}
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
-		return err
-	}
-	if st := handle.EmailState(); st != "" {
-		e.emailState = st
-	}
-	e.absorbSummariesLocked(sums)
 	e.publishLocked()
+	e.mu.Unlock()
 	return nil
+}
+
+// maxSeedRetries bounds how many times a seed is re-issued after a live patch
+// supersedes it. A change storm (every query invalidated) gives up and lets
+// the next prefetch repair the window rather than looping on the network.
+const maxSeedRetries = 8
+
+// seedView fetches and installs the first page for a freshly opened window,
+// tolerating live patches that supersede the request while it is in flight
+// (PLAN §4.1: superseded results are discarded). A new-mail slide-in can land
+// between the window's creation and its first page; the seed handle then goes
+// stale. Rather than surface ErrStaleRequest as a spurious open error, the
+// seed is re-issued for the top of the result set and fetched again, so the
+// view ends up coherent. It absorbs summaries but leaves publishing to the
+// caller.
+func (e *Engine) seedView(ctx context.Context, w *Window, r Request, spec mail.QuerySpec) error {
+	for tries := 0; ; tries++ {
+		handle, sums, err := e.p.OpenQuery(ctx, spec)
+		if err != nil {
+			return err
+		}
+		e.mu.Lock()
+		if e.window != w {
+			e.mu.Unlock()
+			return nil // a newer open owns the view
+		}
+		err = w.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State())
+		if err == ErrStaleRequest {
+			if tries >= maxSeedRetries {
+				e.mu.Unlock()
+				return nil // change storm: the next prefetch repairs the window
+			}
+			// A seed race only ever materialises a live head row at
+			// position 0, so re-seed from the top. (Re-anchoring at that
+			// id would risk a server anchorNotFound if it moved or was
+			// destroyed in the meantime.)
+			var pos, limit int
+			r, pos, limit = w.Seed(0)
+			spec = e.querySpecLocked(pos, limit)
+			e.mu.Unlock()
+			continue
+		}
+		if err != nil {
+			e.mu.Unlock()
+			return err
+		}
+		if st := handle.EmailState(); st != "" {
+			e.emailState = st
+		}
+		e.absorbSummariesLocked(sums)
+		e.mu.Unlock()
+		return nil
+	}
 }
 
 // SearchSpec describes one search view (FR-F1..F3): content filters with
@@ -449,31 +495,24 @@ func (e *Engine) SearchOpen(ctx context.Context, s SearchSpec) error {
 		e.saved = &savedView{win: e.window, cursorRow: e.cursorRow, cursorID: e.cursorID}
 	}
 	e.cancelScanLocked()
-	e.window = NewWindow(Query{Filter: fs}, e.cfg.Window)
+	w := NewWindow(Query{Filter: fs}, e.cfg.Window)
+	e.window = w
 	e.expanded = map[mail.ID]bool{}
 	e.cursorRow = 0
 	e.cursorID = ""
 	e.bodyLoading = ""
 	e.body = nil
 	e.fresh = map[mail.ID]time.Time{}
-	r, pos, limit := e.window.Seed(0)
+	r, pos, limit := w.Seed(0)
 	spec := e.querySpecLocked(pos, limit)
 	e.mu.Unlock()
 
-	handle, sums, err := e.p.OpenQuery(ctx, spec)
-	if err != nil {
+	if err := e.seedView(ctx, w, r, spec); err != nil {
 		return err
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := e.window.Complete(r, handle.Start(), handle.IDs(), handle.Total(), handle.State()); err != nil {
-		return err
-	}
-	if st := handle.EmailState(); st != "" {
-		e.emailState = st
-	}
-	e.absorbSummariesLocked(sums)
 	// Fuzzy fallback (FR-F1): the server matched whole tokens only and
 	// found nothing — a partial word in any text-ish field — so scan the
 	// scope's headers client-side and stream matches in. Non-zero results

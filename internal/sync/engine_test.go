@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -472,6 +473,81 @@ func TestEngineToggleThreadAbandonsOnViewSwitch(t *testing.T) {
 	}
 	if len(cached) > 0 {
 		t.Error("thread cache from the old view survived the mailbox switch")
+	}
+}
+
+// gateOpenQueryProvider blocks the next OpenQuery so a test can land a live
+// change while a seed is in flight.
+type gateOpenQueryProvider struct {
+	mail.Provider
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *gateOpenQueryProvider) OpenQuery(ctx context.Context, spec mail.QuerySpec) (mail.QueryHandle, []mail.EmailSummary, error) {
+	if p.armed.CompareAndSwap(true, false) {
+		p.entered <- struct{}{}
+		<-p.release
+	}
+	return p.Provider.OpenQuery(ctx, spec)
+}
+
+// TestOpenMailboxSurvivesLiveSlideInDuringSeed pins the fix for the spurious
+// "open-mailbox: sync: stale window request result" banner: a new-mail
+// slide-in can land between a freshly-opened window's seed query and its
+// result, invalidating the seed handle. OpenMailbox must recover by
+// re-querying the patched window instead of surfacing the sentinel.
+func TestOpenMailboxSurvivesLiveSlideInDuringSeed(t *testing.T) {
+	gate := &gateOpenQueryProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	e, srv := newTestEngineWithProvider(t, nil, func(p mail.Provider) mail.Provider {
+		gate.Provider = p
+		return gate
+	})
+	ctx := context.Background()
+	_ = e.LoadMailboxes(ctx)
+	if err := e.OpenMailbox(ctx, "mb-inbox"); err != nil {
+		t.Fatalf("initial OpenMailbox: %v", err)
+	}
+
+	// The next open's seed query blocks, opening the race window.
+	gate.armed.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- e.OpenMailbox(ctx, "mb-inbox") }()
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("seed query never started")
+	}
+
+	// New mail arrives mid-seed; reconcile folds it in, which slides it onto
+	// the window and invalidates the outstanding seed.
+	srv.CreateEmails([]mockjmap.Email{{
+		ID: "e4", ThreadID: "t4", MailboxIDs: []string{"mb-inbox"},
+		From:    []mockjmap.Address{{Name: "Dave", Email: "dave@example.test"}},
+		Subject: "Fresh arrival", ReceivedAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
+		TextBody: "new\n",
+	}})
+	e.reconcileEmail(ctx)
+
+	e.mu.Lock()
+	dirty := e.window.Dirty()
+	e.mu.Unlock()
+	if !dirty {
+		t.Fatal("setup: live arrival did not invalidate the in-flight seed")
+	}
+
+	close(gate.release)
+	if err := <-done; err != nil {
+		t.Fatalf("OpenMailbox surfaced a superseded seed: %v", err)
+	}
+
+	snap := e.Snapshot()
+	if snap.Total != 3 || len(snap.Rows) != 3 {
+		t.Fatalf("recovered window: total %d rows %d, want 3/3", snap.Total, len(snap.Rows))
+	}
+	if snap.Rows[0].Summary.Subject != "Fresh arrival" {
+		t.Fatalf("live arrival not at the head: %q", snap.Rows[0].Summary.Subject)
 	}
 }
 
