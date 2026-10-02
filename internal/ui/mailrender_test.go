@@ -110,6 +110,23 @@ func TestSanitizeStateKeepsBodyStyling(t *testing.T) {
 	}
 }
 
+// The search query is the textinput's rendered view: its placeholder and
+// cursor styling must survive the frame boundary, and only that styling.
+func TestSanitizeStateKeepsSearchQueryStyling(t *testing.T) {
+	st := baseFrame(true)
+	st.Search = &SearchView{
+		Query: "\x1b[38;5;240mtype to search…\x1b[m\x1b]8;;https://evil\x07\x1b[2J",
+		Scope: "Inbox",
+	}
+	out := sanitizeState(st)
+	if !strings.Contains(out.Search.Query, "\x1b[38;5;240m") {
+		t.Errorf("frame boundary dropped the query's SGR: %q", out.Search.Query)
+	}
+	if strings.ContainsRune(out.Search.Query, 0x1b) && !onlySGR(out.Search.Query) {
+		t.Errorf("non-SGR escape survived the frame: %q", out.Search.Query)
+	}
+}
+
 // onlySGR reports whether every escape in s is a well-formed CSI SGR.
 func onlySGR(s string) bool {
 	for i := 0; i < len(s); i++ {

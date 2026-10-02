@@ -74,7 +74,10 @@ func sanitizeState(st State) State {
 
 	if st.Search != nil {
 		q := *st.Search
-		q.Query = Sanitize(q.Query)
+		// Query is the textinput's rendered view (placeholder and cursor
+		// carry SGR), so it takes the SGR-preserving policy like VpView:
+		// plain Sanitize would strip the ESC and leak the bracket text.
+		q.Query = SanitizeStyled(q.Query)
 		q.Scope = Sanitize(q.Scope)
 		q.Tokens, _ = cowMap(q.Tokens, strip)
 		st.Search = &q
