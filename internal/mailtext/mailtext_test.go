@@ -70,6 +70,15 @@ func TestListsBullets(t *testing.T) {
 	}
 }
 
+func TestOrphanListItemDoesNotPanic(t *testing.T) {
+	// A malformed body can contain <li> with no enclosing list; the
+	// nesting indent must clamp at zero rather than going negative.
+	out := HTMLToText("<div><li>orphan</li></div>")
+	if !strings.Contains(out, "- orphan") {
+		t.Fatalf("out = %q, want it to contain %q", out, "- orphan")
+	}
+}
+
 func TestPrePreserved(t *testing.T) {
 	src := "<pre>func main() {\n\treturn\n}</pre>"
 	out := HTMLToText(src)
