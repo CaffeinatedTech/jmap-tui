@@ -7,41 +7,44 @@ import (
 )
 
 // MarkMailboxRead marks every unread message in a mailbox as read
-// (FR-C7). The provider sweeps Email/query + Email/set in chunks; the
-// engine then refreshes server truth rather than guessing which ids
-// changed: the mailbox tree is refetched for unread badges, and cached
-// summaries in that mailbox get $seen so the open window repaints without
-// a cursor jump or a re-query. A later Email/changes push reconciles
-// against the server. Returns how many messages were marked.
+// (FR-C7). The provider sweeps Email/query + Email/set in chunks; on a
+// clean sweep the engine updates the open window and the sidebar badge
+// locally rather than firing another request — a bridge throttling the
+// sweep's burst would answer a follow-up Mailbox/get with 429. Server
+// truth reconciles through Mailbox/changes (and Email/changes) on the
+// next push/poll. Returns how many messages were marked.
 func (e *Engine) MarkMailboxRead(ctx context.Context, id mail.ID) (int, error) {
 	n, markErr := e.p.MarkMailboxRead(ctx, id)
-
-	// On a clean sweep every unread message in the mailbox is read, so
-	// flipping $seen on cached summaries that belong to it is server
-	// truth, not a guess — and it leaves the window and cursor untouched.
-	// A partial failure is left to the server's reconciliation instead of
-	// painting rejected messages read.
-	if markErr == nil {
-		e.mu.Lock()
-		for sid, s := range e.summaries {
-			if !inMailbox(s, id) || s.Keywords.Has("$seen") {
-				continue
-			}
-			s.Keywords = keywordsWith(s.Keywords, "$seen")
-			e.summaries[sid] = s
-		}
-		e.mu.Unlock()
-	}
-
-	// Unread badges are server truth: refetch the tree rather than
-	// derive the delta. LoadMailboxes publishes the fresh snapshot.
-	if lerr := e.LoadMailboxes(ctx); lerr != nil && markErr == nil {
-		markErr = lerr
-	}
 	if markErr != nil {
+		// A partial sweep changed some messages; leave local state to the
+		// server's reconciliation instead of painting rejected messages
+		// read. The status line carries the error.
 		e.setLastError(markErr)
+		return n, markErr
 	}
-	return n, markErr
+
+	e.mu.Lock()
+	// Every unread message in this mailbox is now read, so flipping
+	// $seen on its cached summaries is server truth, not a guess — and it
+	// leaves the window and cursor untouched. The badge is zero for the
+	// same reason; the update is optimistic until Mailbox/changes lands.
+	for sid, s := range e.summaries {
+		if !inMailbox(s, id) || s.Keywords.Has("$seen") {
+			continue
+		}
+		s.Keywords = keywordsWith(s.Keywords, "$seen")
+		e.summaries[sid] = s
+	}
+	for i := range e.mailboxes {
+		if e.mailboxes[i].ID == id {
+			e.mailboxes[i].UnreadEmails = 0
+			break
+		}
+	}
+	e.rebuildMailboxTreeLocked()
+	e.publishLocked()
+	e.mu.Unlock()
+	return n, nil
 }
 
 // keywordsWith returns a copy of kws with name present (maps are shared

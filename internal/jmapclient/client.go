@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -378,9 +379,17 @@ func (c *Client) runBatch(ctx context.Context, req *jmap.Request) (map[string]*j
 	return out, nil
 }
 
+// rateLimitRetries bounds how many times a 429 is retried before the
+// error is returned. A rate-limited request is rejected before it is
+// processed, so retrying is safe for every method — including Email/set,
+// which is why the mark-read sweep self-paces on a busy bridge.
+const rateLimitRetries = 3
+
 // post is the JMAP API transport: one HTTP round-trip carrying the request,
-// with ctx propagation and typed HTTP error mapping. This is the seam that
-// keeps go-jmap's non-ctx/non-typed client out of the call path.
+// with ctx propagation and typed HTTP error mapping. A 429 is retried with
+// the server's Retry-After when it carries one, else bounded exponential
+// backoff: bridges fronting IMAP commonly throttle bursts, and a single
+// sweep is a burst.
 func (c *Client) post(ctx context.Context, req *jmap.Request) (*jmap.Response, error) {
 	if c.session == nil {
 		return nil, errors.New("jmapclient: not connected")
@@ -389,31 +398,102 @@ func (c *Client) post(ctx context.Context, req *jmap.Request) (*jmap.Response, e
 	if err != nil {
 		return nil, fmt.Errorf("jmapclient: encode request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.session.APIURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("jmapclient: build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := c.hc.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("jmapclient: POST %s: %w", c.session.APIURL, err)
-	}
-	defer func() { _ = httpResp.Body.Close() }()
-
-	if httpResp.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
-		if httpResp.StatusCode == http.StatusUnauthorized || httpResp.StatusCode == http.StatusForbidden {
-			return nil, fmt.Errorf("jmapclient: POST %s: %w", c.session.APIURL, ErrAuth)
+	for attempt := 0; ; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.session.APIURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("jmapclient: build request: %w", err)
 		}
-		return nil, &ServerError{Status: httpResp.StatusCode, Detail: strings.TrimSpace(string(detail))}
-	}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	resp := &jmap.Response{}
-	if err := decodeJSON(httpResp.Body, resp); err != nil {
-		return nil, fmt.Errorf("jmapclient: decode response: %w", err)
+		httpResp, err := c.hc.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("jmapclient: POST %s: %w", c.session.APIURL, err)
+		}
+
+		if httpResp.StatusCode == http.StatusTooManyRequests && attempt < rateLimitRetries {
+			delay := retryDelay(httpResp, attempt)
+			_, _ = io.Copy(io.Discard, io.LimitReader(httpResp.Body, 1<<20))
+			_ = httpResp.Body.Close()
+			if !waitCtx(ctx, delay) {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+
+		if httpResp.StatusCode != http.StatusOK {
+			detail, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+			_ = httpResp.Body.Close()
+			if httpResp.StatusCode == http.StatusUnauthorized || httpResp.StatusCode == http.StatusForbidden {
+				return nil, fmt.Errorf("jmapclient: POST %s: %w", c.session.APIURL, ErrAuth)
+			}
+			return nil, &ServerError{Status: httpResp.StatusCode, Detail: strings.TrimSpace(string(detail))}
+		}
+
+		resp := &jmap.Response{}
+		err = decodeJSON(httpResp.Body, resp)
+		_ = httpResp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("jmapclient: decode response: %w", err)
+		}
+		return resp, nil
 	}
-	return resp, nil
+}
+
+// retryDelay is the pause before retrying a 429: the server's Retry-After
+// when it is a sane duration, else exponential backoff from 500ms. Both
+// are capped so neither a hostile header nor a slow window wedges a
+// request for minutes.
+func retryDelay(resp *http.Response, attempt int) time.Duration {
+	const maxWait = 30 * time.Second
+	if d, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+		if d > maxWait {
+			return maxWait
+		}
+		return d
+	}
+	if d := 500 * time.Millisecond << attempt; d < maxWait {
+		return d
+	}
+	return maxWait
+}
+
+// parseRetryAfter decodes RFC 7231 Retry-After: delay-seconds or an
+// HTTP-date. A negative or unparseable value reports false so the caller
+// falls back to backoff.
+func parseRetryAfter(v string) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// waitCtx sleeps for d unless ctx is cancelled first; it reports whether
+// the wait completed (false means cancelled).
+func waitCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func (c *Client) fetchSession(ctx context.Context, sessionURL string) (*jmap.Session, error) {
