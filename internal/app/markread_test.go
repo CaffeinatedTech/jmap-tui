@@ -42,6 +42,33 @@ func TestCtrlRMarkFolderReadRoutesToOwner(t *testing.T) {
 	}
 }
 
+// TestCtrlRMarkFolderReadKeepsSidebarCursor (FR-C7): the sweep is issued
+// from the sidebar cursor and must leave the cursor where the user put it,
+// even when that folder is not the open mailbox — adopting the refreshed
+// snapshot must not re-anchor the cursor to the open folder.
+func TestCtrlRMarkFolderReadKeepsSidebarCursor(t *testing.T) {
+	m, _, _ := newTwoAccountModel(t)
+	loadAll(t, m)
+
+	// The open mailbox is work's inbox (top folder); park the sidebar
+	// cursor on a different folder to prove the sweep doesn't move it.
+	if got := m.snap.ActiveMailbox; got != "mb-inbox" {
+		t.Fatalf("active mailbox = %q, want mb-inbox", got)
+	}
+	parked := sidebarRowKey("work", "mb-archive")
+	m.sidebarKey = parked
+	m.focus = ui.PaneSidebar
+
+	pump(t, m, press(t, m, ctrlR()))
+
+	if m.sidebarKey != parked {
+		t.Errorf("sidebar cursor = %q, want %q (parked folder)", m.sidebarKey, parked)
+	}
+	if m.toast == nil || !strings.Contains(m.toast.text, "read") {
+		t.Errorf("toast = %+v, want a marked-read notice", m.toast)
+	}
+}
+
 // TestCtrlRMarkFolderReadHeaderIsNoop: ctrl+r belongs to a folder row;
 // on an account header it does nothing rather than guessing a scope.
 func TestCtrlRMarkFolderReadHeaderIsNoop(t *testing.T) {

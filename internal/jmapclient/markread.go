@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	jmap "git.sr.ht/~rockorager/go-jmap"
 	"git.sr.ht/~rockorager/go-jmap/core"
@@ -13,9 +15,19 @@ import (
 )
 
 // markReadChunkDefault caps one Email/set in a mark-read sweep. The
-// server's advertised maxObjectsInSet lowers it further. 500 matches the
-// cap Bulwark settled on against live Stalwart/Fastmail.
-const markReadChunkDefault = 500
+// server's advertised maxObjectsInSet lowers it further. Deliberately
+// small: a bridge fronting IMAP (jmap-bridge) applies an Email/set by
+// looping one backend patch per id, so a page near the protocol max can
+// outrun the client's request timeout and abort the sweep. The cap
+// trades a few more round-trips for pages that stay well inside the
+// timeout on a slow backend.
+const markReadChunkDefault = 100
+
+// markReadRetries bounds how many times a transient sweep request is
+// re-issued before the sweep gives up. Both the page query and the
+// keyword-only $seen set are idempotent, so re-issuing cannot
+// double-apply.
+const markReadRetries = 2
 
 // markReadChunk is the default chunk size; a var so tests can shrink it
 // and exercise multi-chunk paging (the toastTTL precedent).
@@ -48,7 +60,7 @@ func (c *Client) MarkMailboxRead(ctx context.Context, mailboxID mail.ID) (int, e
 			},
 			Limit: uint64(limit),
 		}
-		inv, err := c.do(ctx, q)
+		inv, err := c.doRetry(ctx, q)
 		if err != nil {
 			return marked, fmt.Errorf("jmapclient: Email/query: %w", err)
 		}
@@ -65,7 +77,7 @@ func (c *Client) MarkMailboxRead(ctx context.Context, mailboxID mail.ID) (int, e
 		for _, id := range qr.IDs {
 			set.Update[id] = jmap.Patch{"keywords/$seen": true}
 		}
-		sinv, err := c.do(ctx, set)
+		sinv, err := c.doRetry(ctx, set)
 		if err != nil {
 			return marked, fmt.Errorf("jmapclient: Email/set: %w", err)
 		}
@@ -101,4 +113,48 @@ func (c *Client) markReadLimit() int {
 		limit = 1
 	}
 	return limit
+}
+
+// doRetry runs one method, re-issuing it on a transient failure with a
+// short linear backoff. Only the idempotent mark-read calls use it: a
+// dropped connection, client timeout, or 5xx is retried; auth failures,
+// method errors, and other 4xx are deterministic and return at once.
+func (c *Client) doRetry(ctx context.Context, m jmap.Method) (*jmap.Invocation, error) {
+	var err error
+	for attempt := 0; attempt <= markReadRetries; attempt++ {
+		if attempt > 0 && !waitCtx(ctx, time.Duration(attempt)*500*time.Millisecond) {
+			return nil, ctx.Err()
+		}
+		var inv *jmap.Invocation
+		inv, err = c.do(ctx, m)
+		if err == nil {
+			return inv, nil
+		}
+		if !transientMarkRead(err) {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
+// transientMarkRead reports whether err is worth another attempt: a
+// transport failure (dropped connection, timeout) or a server-side 5xx.
+// A 429 is already retried inside the transport, and 4xx/auth/method
+// errors are deterministic.
+func transientMarkRead(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrAuth) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var me *MethodCallError
+	if errors.As(err, &me) {
+		return false
+	}
+	var se *ServerError
+	if errors.As(err, &se) {
+		return se.Status >= http.StatusInternalServerError
+	}
+	return true
 }

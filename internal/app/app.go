@@ -120,6 +120,12 @@ type Model struct {
 	// derived from it per frame, so reorders and tree changes re-anchor
 	// instead of stranding the selection.
 	sidebarKey string
+	// sidebarFollow is the account-qualified key of the open mailbox the
+	// cursor was last auto-anchored to. A snapshot whose open mailbox is
+	// unchanged leaves the cursor put, so a background republish (live
+	// update, mark-read sweep) never yanks it off a folder the user
+	// parked on (FR-C7).
+	sidebarFollow string
 	// collapsed is the fold set (FR-C6): row keys (sidebarRowKey) whose
 	// subtree is hidden — a bare account id folds that account's whole
 	// tree, "acct\x00mailbox" folds that folder's subtree. Seeded from
@@ -768,6 +774,23 @@ func firstMailboxNode(accounts []AccountOpt, acct string, nodes []sync.MailboxNo
 	return nil
 }
 
+// followOpenMailbox re-anchors the sidebar cursor to the open mailbox,
+// but only when that mailbox changed since the last snapshot the app
+// applied. The key is account-qualified so switching between accounts
+// that happen to share a mailbox id still re-anchors. A folder the app
+// does not know (vanished, or an all-mailbox search with no active
+// mailbox) leaves both the cursor and the tracked key put.
+func (m *Model) followOpenMailbox(mailboxes []sync.MailboxNode, active mail.ID) {
+	open := ""
+	if active != "" && indexOfMailbox(mailboxes, active) >= 0 {
+		open = sidebarRowKey(m.activeID, active)
+	}
+	if open != "" && open != m.sidebarFollow {
+		m.sidebarKey = open
+	}
+	m.sidebarFollow = open
+}
+
 // applyView runs the render pipeline over the active account's snapshot:
 // selection reset, fresh-row fade, sidebar sync, lazy body load, and edge
 // prefetch (FR-B2, FR-D3, FR-D4).
@@ -795,12 +818,13 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 		m.freshArmed = false
 	}
 
-	// Keep the sidebar cursor on the open mailbox (FR-C5). Only a folder
-	// that exists re-anchors: an empty ActiveMailbox (all-mailbox search)
-	// or a vanished id leaves the cursor where the user put it.
-	if snap.ActiveMailbox != "" && indexOfMailbox(snap.Mailboxes, snap.ActiveMailbox) >= 0 {
-		m.sidebarKey = sidebarRowKey(m.activeID, snap.ActiveMailbox)
-	}
+	// Keep the sidebar cursor on the open mailbox (FR-C5), but only when
+	// the open mailbox actually changed: a live update or a mark-read
+	// sweep republishes the same open folder, and re-anchoring on it
+	// would yank the cursor off wherever the user parked it (FR-C7). An
+	// empty ActiveMailbox (all-mailbox search) or a vanished id leaves
+	// the cursor put.
+	m.followOpenMailbox(snap.Mailboxes, snap.ActiveMailbox)
 
 	// Body for the cursor message (FR-D4 lazy load).
 	if id := m.cursorID(); id != "" && id != m.vpBodyID && snap.Body == nil && !snap.BodyLoading {
@@ -893,11 +917,10 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 
 	// The sidebar follows the active account's open mailbox, same as the
 	// single-account path (the folder column itself lists every account,
-	// FR-C5 — the merge changes the list, not the tree).
+	// FR-C5 — the merge changes the list, not the tree). As there, only
+	// a change moves the cursor.
 	act := m.snaps[m.activeID]
-	if act.ActiveMailbox != "" && indexOfMailbox(act.Mailboxes, act.ActiveMailbox) >= 0 {
-		m.sidebarKey = sidebarRowKey(m.activeID, act.ActiveMailbox)
-	}
+	m.followOpenMailbox(act.Mailboxes, act.ActiveMailbox)
 
 	// Body of the cursor row loads from its owning account (FR-A5) and
 	// renders under the account-qualified key. It is fetched by key

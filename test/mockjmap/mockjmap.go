@@ -88,6 +88,7 @@ type Server struct {
 
 	// Test controls (M2 sync-engine suites).
 	failStreams       int // reject this many stream connects before accepting
+	failAPI           int // answer this many API POSTs with HTTP 500 first
 	noChanges         bool
 	streams           map[*streamConn]struct{}
 	lastMailboxNotify int
@@ -154,6 +155,14 @@ func (s *Server) FailStreams(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failStreams = n
+}
+
+// FailAPI makes the next n API POSTs answer HTTP 500 (transient-failure
+// tests: the client's retry path).
+func (s *Server) FailAPI(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failAPI = n
 }
 
 // SetCannotCalculateChanges makes /changes answer cannotCalculateChanges
@@ -412,6 +421,16 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Basic realm="jmap"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	fail := s.failAPI > 0
+	if fail {
+		s.failAPI--
+	}
+	s.mu.Unlock()
+	if fail {
+		http.Error(w, "transient backend failure", http.StatusInternalServerError)
 		return
 	}
 	var req apiRequest

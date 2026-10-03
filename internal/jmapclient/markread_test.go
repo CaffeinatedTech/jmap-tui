@@ -114,3 +114,47 @@ func TestMarkMailboxReadRefusedAborts(t *testing.T) {
 		t.Fatal("MarkMailboxRead on a refusing server returned nil error")
 	}
 }
+
+// TestMarkMailboxReadRetriesTransient: a transient 5xx on the sweep's
+// query or set is re-issued rather than aborting the whole sweep
+// (FR-C7's "aborts the read set queue" on a flaky bridge).
+func TestMarkMailboxReadRetriesTransient(t *testing.T) {
+	c, srv := newTestClient(t, testPassword)
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	base := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	srv.SetEmails([]mockjmap.Email{
+		{ID: "t1", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"}, From: []mockjmap.Address{{Name: "A", Email: "a@x.test"}}, Subject: "one", ReceivedAt: base, TextBody: "x\n"},
+		{ID: "t2", ThreadID: "t2", MailboxIDs: []string{"mb-inbox"}, From: []mockjmap.Address{{Name: "A", Email: "a@x.test"}}, Subject: "two", ReceivedAt: base.Add(time.Minute), TextBody: "x\n"},
+	})
+	srv.FailAPI(1) // the first query answers 500, then the retry succeeds
+
+	n, err := c.MarkMailboxRead(ctx, "mb-inbox")
+	if err != nil {
+		t.Fatalf("MarkMailboxRead: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("marked = %d, want 2 (retried after the transient failure)", n)
+	}
+}
+
+// TestMarkMailboxReadGivesUpAfterRetries: a persistent 5xx is bounded —
+// the sweep reports the failure instead of retrying forever.
+func TestMarkMailboxReadGivesUpAfterRetries(t *testing.T) {
+	c, srv := newTestClient(t, testPassword)
+	ctx := context.Background()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	base := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	srv.SetEmails([]mockjmap.Email{
+		{ID: "p1", ThreadID: "t1", MailboxIDs: []string{"mb-inbox"}, From: []mockjmap.Address{{Name: "A", Email: "a@x.test"}}, Subject: "one", ReceivedAt: base, TextBody: "x\n"},
+	})
+	srv.FailAPI(1 + markReadRetries + 1)
+
+	if _, err := c.MarkMailboxRead(ctx, "mb-inbox"); err == nil {
+		t.Fatal("MarkMailboxRead with a persistent 5xx returned nil error")
+	}
+}
