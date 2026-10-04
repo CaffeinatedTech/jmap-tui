@@ -519,6 +519,18 @@ func (snap *emailSnapshot) threadMembers(threadID string) []Email {
 	return out
 }
 
+// bodyGetRequested reports whether an Email/get call asks for body
+// values, which distinguishes a body hydration from a summary fetch.
+func bodyGetRequested(args json.RawMessage) bool {
+	var g struct {
+		FetchTextBodyValues bool `json:"fetchTextBodyValues"`
+		FetchHTMLBodyValues bool `json:"fetchHTMLBodyValues"`
+		FetchAllBodyValues  bool `json:"fetchAllBodyValues"`
+	}
+	_ = json.Unmarshal(args, &g)
+	return g.FetchTextBodyValues || g.FetchHTMLBodyValues || g.FetchAllBodyValues
+}
+
 func emailGetResponse(snap *emailSnapshot, args json.RawMessage, results map[string]map[string]any) map[string]any {
 	var g struct {
 		IDs                 []string   `json:"ids"`

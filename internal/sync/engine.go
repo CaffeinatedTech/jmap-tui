@@ -1025,6 +1025,15 @@ func (e *Engine) LoadBody(ctx context.Context, id mail.ID) error {
 	return nil
 }
 
+// CachedBody returns the body for id from the LRU when it is already
+// held, with no network and no publish. The app probes it before arming
+// the hydration debounce so a row revisited during a scroll paints the
+// instant the cursor lands on it, and the debounce only ever delays a
+// fetch that would actually reach the server (FR-D4, FR-K4).
+func (e *Engine) CachedBody(id mail.ID) (*BodyView, bool) {
+	return e.cachedBody(id)
+}
+
 // BodyFor returns the body for id from the LRU or the server, with no
 // cursor gate and no publish: the unified view's cursor is app-side (PLAN
 // §4.3), so the engine has no idea which row the caller wants — the

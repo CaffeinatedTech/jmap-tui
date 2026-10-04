@@ -104,6 +104,8 @@ type Model struct {
 	uCursorID      mail.ID                  // unified cursor id; "" = top
 	cursorOwner    string                   // account owning the unified cursor row
 	bodyReq        mail.ID                  // in-flight unified body load (row key)
+	bodyPending    mail.ID                  // row key of an armed hydration debounce ("" = none)
+	bodySeq        int                      // hydration debounce generation; a firing tick must match
 	uBodyKey       mail.ID                  // row key uBody was fetched for
 	uBody          *sync.BodyView           // unified cursor row's body (FR-A5)
 	prevBox        map[string]mail.ID       // unified enter/exit mailbox restore
@@ -484,6 +486,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (attachment strip, FR-E4) and stops claiming to be loading it.
 		return m.applyUnified()
 
+	case bodyDebounceMsg:
+		// The cursor rested on this row for the debounce window. Hydrate
+		// unless it moved on: a stale generation (a newer cursor move) or
+		// a cursor that no longer owns this row both drop the tick, so a
+		// scroll that never settled never issues a fetch.
+		if msg.seq != m.bodySeq {
+			return m, nil
+		}
+		m.bodyPending = ""
+		if acct, row, ok := m.cursorRef(); !ok || acct != msg.acct || row.ID != msg.id {
+			return m, nil
+		}
+		return m, m.loadBodyOn(msg.acct, msg.id)
+
 	case errMsg:
 		acct := m.resolve(msg.acct)
 		if msg.op == "load-body" && m.bodyReq == msg.key {
@@ -826,9 +842,18 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	// the cursor put.
 	m.followOpenMailbox(snap.Mailboxes, snap.ActiveMailbox)
 
-	// Body for the cursor message (FR-D4 lazy load).
+	// Body for the cursor message (FR-D4 lazy load). A body already in the
+	// LRU loads at once (no network); a fetch is debounced so a held
+	// movement key coalesces into one request instead of one per row
+	// (FR-K4). The engine's cursor gate still drops a landing that raced a
+	// later move.
 	if id := m.cursorID(); id != "" && id != m.vpBodyID && snap.Body == nil && !snap.BodyLoading {
-		cmds = append(cmds, m.loadBody(id))
+		if m.bodyCached(m.activeID, id) {
+			m.resetBodyPending()
+			cmds = append(cmds, m.loadBody(id))
+		} else {
+			cmds = append(cmds, m.armBody(m.activeID, id))
+		}
 	}
 	// Fresh body arrived: install and reset scroll (FR-E3).
 	if snap.Body != nil && snap.Body.ID != m.vpBodyID {
@@ -927,7 +952,9 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 	// (Engine.BodyFor) and kept on the model: no engine cursor moves in
 	// unified (PLAN §4.3), so an engine's own Body/BodyLoading describe
 	// its inbox rows, never the merged cursor. bodyReq is the in-flight
-	// request, so a snapshot rebuild cannot re-issue it every frame.
+	// request, so a snapshot rebuild cannot re-issue it every frame. A
+	// fetch is debounced behind a scroll (FR-K4); an LRU hit is not, so
+	// revisiting a row never blanks the preview.
 	if acct, row, ok := m.cursorRef(); ok {
 		key := m.rowKey(acct, row.ID)
 		switch {
@@ -935,6 +962,7 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 			// Already showing it. Retire a request made for another row,
 			// or its late reply would install under this cursor.
 			m.bodyReq = ""
+			m.resetBodyPending()
 		case m.uBody != nil && m.uBodyKey == key:
 			// Cached by an earlier visit: show it now and drop the
 			// in-flight request so its reply cannot reset the scroll.
@@ -942,8 +970,14 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 			m.vp.GotoTop()
 			m.vpBodyID = key
 			m.bodyReq = ""
+			m.resetBodyPending()
 		case m.bodyReq != key:
-			cmds = append(cmds, m.loadBodyOn(acct, row.ID))
+			if m.bodyCached(acct, row.ID) {
+				m.resetBodyPending()
+				cmds = append(cmds, m.loadBodyOn(acct, row.ID))
+			} else {
+				cmds = append(cmds, m.armBody(acct, row.ID))
+			}
 		}
 	}
 
@@ -1213,6 +1247,7 @@ func (m *Model) openMailboxOn(acct string, id mail.ID) tea.Cmd {
 		}
 		if acct == m.activeID {
 			m.vpBodyID = ""
+			m.resetBodyPending()
 			m.setBody("", false)
 		}
 		return eng.Snapshot(), nil

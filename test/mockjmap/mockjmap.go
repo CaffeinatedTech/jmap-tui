@@ -96,6 +96,7 @@ type Server struct {
 	lastContactNotify int
 	lastBookNotify    int
 	setCalls          int // total Email/set requests served (M3 rate tests)
+	bodyGetCalls      int // body-bearing Email/get requests (scroll debounce tests)
 	createSeq         int // mints ids for Email/set create (M5 drafts)
 }
 
@@ -105,6 +106,15 @@ func (s *Server) SetCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.setCalls
+}
+
+// BodyGetCalls reports how many body-bearing Email/get requests the
+// server has served — a summary fetch does not count. Used to prove a
+// scroll coalesces its body hydration into one request (FR-D4, FR-K4).
+func (s *Server) BodyGetCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bodyGetCalls
 }
 
 // New starts the server and returns it. Close must be called when done.
@@ -469,6 +479,11 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		case "Email/query":
 			args = emailQueryResponse(snap, call.Args)
 		case "Email/get":
+			if bodyGetRequested(call.Args) {
+				s.mu.Lock()
+				s.bodyGetCalls++
+				s.mu.Unlock()
+			}
 			args = emailGetResponse(snap, call.Args, results)
 		case "Thread/get":
 			args = threadGetResponse(snap, call.Args)

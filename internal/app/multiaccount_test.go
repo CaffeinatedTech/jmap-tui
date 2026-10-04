@@ -316,12 +316,17 @@ func TestUnifiedDropsStaleBodyReply(t *testing.T) {
 		t.Fatalf("row 0 body not installed: %q, want %q", m.vpBodyID, firstKey)
 	}
 
-	// Moving to row 1 issues its load synchronously (applyUnified runs on
-	// the UI thread), so bodyReq waits on row 1 while row 0 still shows.
-	_, cmd = m.handleKey(key("j"))
+	// Moving to row 1 arms the hydration debounce; fire the settle tick so
+	// its fetch is in flight (bodyReq waits on row 1) while row 0 still
+	// shows.
+	_, _ = m.handleKey(key("j"))
 	wantReq := m.cursorKey()
 	if wantReq == firstKey {
 		t.Fatal("cursor did not move")
+	}
+	acct, row, _ := m.cursorRef()
+	if _, cmd = m.Update(bodyDebounceMsg{seq: m.bodySeq, acct: acct, id: row.ID}); cmd == nil {
+		t.Fatal("settle tick did not issue the row 1 fetch")
 	}
 	if m.bodyReq != wantReq {
 		t.Fatalf("in-flight request = %q, want %q", m.bodyReq, wantReq)

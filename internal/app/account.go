@@ -167,6 +167,7 @@ func (m *Model) activateAccount(id string) tea.Cmd {
 	// per-account, so the cached viewport must not leak across.
 	m.vpBodyID = ""
 	m.bodyReq = ""
+	m.resetBodyPending()
 	m.setBody("", false)
 	m.sel = map[mail.ID]bool{}
 	m.err = ""
@@ -205,6 +206,7 @@ func (m *Model) enterUnified() (tea.Model, tea.Cmd) {
 	m.uCursorID = ""
 	m.cursorOwner = ""
 	m.bodyReq = ""
+	m.resetBodyPending()
 
 	var cmds []tea.Cmd
 	for _, a := range m.accounts {
@@ -255,6 +257,7 @@ func (m *Model) leaveUnified() (tea.Model, tea.Cmd) {
 	m.bodyReq = ""
 	m.uCursorID = ""
 	m.cursorOwner = ""
+	m.resetBodyPending()
 
 	var cmds []tea.Cmd
 	for _, a := range m.accounts {
