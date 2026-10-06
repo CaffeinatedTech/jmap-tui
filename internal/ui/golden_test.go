@@ -289,6 +289,21 @@ func goldenFrames() []frame {
 			}
 			return st
 		}},
+		// The open-link picker (FR-E2): the box grows past its mailbox
+		// width so a URL is readable, numbered to match the footnotes.
+		{name: "link-picker", w: 120, h: 40, st: func() State {
+			st := mk(true)()
+			st.Picker = &PickerView{
+				Title: "Open link",
+				Items: []PickerItem{
+					{ID: "https://example.com/report", Label: "[1] https://example.com/report"},
+					{ID: "mailto:eve@example.test", Label: "[2] mailto:eve@example.test"},
+					{ID: "https://example.com/unsubscribe", Label: "[3] https://example.com/unsubscribe"},
+				},
+				Sel: 0,
+			}
+			return st
+		}},
 		{name: "save-attachments", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.FilePick = &FilePickView{
@@ -302,8 +317,22 @@ func goldenFrames() []frame {
 		{name: "help", w: 120, h: 40, st: func() State {
 			st := mk(true)()
 			st.HelpOpen = true
-			st.HelpSec = testKeyMap.Help(PaneList)
+			st.HelpGroups = testKeyMap.CheatSheet()
 			st.Version = "0.1.0" // FR-I11: version line in the overlay
+			return st
+		}},
+		{name: "help-medium", w: 99, h: 35, st: func() State {
+			st := mk(true)()
+			st.HelpOpen = true
+			st.HelpGroups = testKeyMap.CheatSheet()
+			st.Version = "0.1.0"
+			return st
+		}},
+		{name: "help-compact", w: 59, h: 25, st: func() State {
+			st := mk(true)()
+			st.HelpOpen = true
+			st.HelpGroups = testKeyMap.CheatSheet()
+			st.Version = "0.1.0"
 			return st
 		}},
 		// M4 search (FR-F1..F3) and full-screen view (FR-E5).

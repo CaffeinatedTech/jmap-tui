@@ -41,6 +41,14 @@ func renderPicker(w, h int, st State) string {
 	p := st.Picker
 
 	boxW := 34
+	// Grow the box for long rows (link URLs, FR-E2 opening) up to the
+	// frame width; short mailbox names keep the historical 34 columns.
+	for _, it := range p.Items {
+		if n := lipgloss.Width(strings.Repeat("  ", it.Depth)+it.Label) + 4; n > boxW {
+			boxW = n
+		}
+	}
+	boxW = min(boxW, max(w-2, 34))
 	boxH := min(len(p.Items), 14) + 4 // title + filter + rule + items
 	boxH = min(boxH, max(h-2, 5))
 

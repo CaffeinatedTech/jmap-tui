@@ -35,6 +35,7 @@ const (
 	pickerIdentity // choose the From identity (FR-H1)
 	pickerSort     // choose the list order (FR-D8)
 	pickerContactQuick
+	pickerLink // open a message link in the browser (FR-E2)
 )
 
 // pickerState is the modal mailbox chooser (FR-G2, FR-G4). In unified
@@ -575,6 +576,8 @@ func (m *Model) pickerView() *ui.PickerView {
 		title = "Sort by"
 	case pickerContactQuick:
 		title = "Add contact"
+	case pickerLink:
+		title = "Open link"
 	}
 	return &ui.PickerView{Title: title, Filter: p.filter, Items: p.items, Sel: p.sel}
 }
@@ -646,6 +649,9 @@ func (m *Model) pickerChoose(id mail.ID) tea.Cmd {
 	if p.mode == pickerContactQuick {
 		m.picker = nil
 		return m.insertComposeAddress(label)
+	}
+	if p.mode == pickerLink {
+		return m.openURL(string(id))
 	}
 	if m.pickLabel == "" {
 		m.pickLabel = label

@@ -137,8 +137,12 @@ func newConverter(md bool) *converter {
 // conversion never fails and never touches the network. The result is run
 // through Sanitize: HTML character references decode to their control
 // characters after parsing, so the strip happens on the final text.
+//
+// The hrefs behind the footnotes are discarded; callers that need them
+// (the preview's link picker) use HTMLToTextLinks.
 func HTMLToText(src string) string {
-	return convert(src, false)
+	text, _ := convert(src, false)
+	return text
 }
 
 // HTMLToMarkdown renders an HTML document or fragment as markdown for the
@@ -152,16 +156,82 @@ func HTMLToText(src string) string {
 // The output is run through Sanitize, so it carries no control characters:
 // the only escapes a terminal ever sees downstream are the ones the
 // renderer adds itself.
+//
+// The hrefs behind the footnotes are discarded; callers that need them
+// use HTMLToMarkdownLinks.
 func HTMLToMarkdown(src string) string {
+	text, _ := convert(src, true)
+	return text
+}
+
+// HTMLToTextLinks is HTMLToText plus the ordered, de-duplicated href list
+// behind its [n] footnotes: links[i] is the URL that footnote i+1 points
+// at. The picker opens these in the reader's browser.
+func HTMLToTextLinks(src string) (string, []string) {
+	return convert(src, false)
+}
+
+// HTMLToMarkdownLinks is HTMLToMarkdown plus the ordered, de-duplicated
+// href list behind its [n] footnotes: links[i] is the URL that footnote
+// i+1 points at. The picker opens these in the reader's browser.
+func HTMLToMarkdownLinks(src string) (string, []string) {
 	return convert(src, true)
 }
 
-func convert(src string, md bool) string {
+// urlRe matches an absolute web or mailto URL in free text. The trailing
+// punctuation of prose ("see https://x.test.") is trimmed afterwards; the
+// opener's own scheme allow-list is the final gate.
+var urlRe = regexp.MustCompile(`(?i)(?:https?://|mailto:)[^\s<>"'` + "`" + `]+`)
+
+// FindURLs returns the URLs in a plain-text body, in first-seen order and
+// de-duplicated — the link picker's source when a message has no HTML <a>
+// markup (FR-E2). The body itself is returned unchanged by the caller:
+// plain text stays plain, detection never rewrites what the reader sees.
+func FindURLs(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range urlRe.FindAllString(s, -1) {
+		m = trimURLPunct(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+// trimURLPunct strips punctuation a URL picked up from the sentence around
+// it: trailing sentence marks, and closing brackets with no matching
+// opener inside the URL (a Wikipedia-style "(...)" URL keeps its own).
+func trimURLPunct(s string) string {
+	for len(s) > 0 {
+		switch s[len(s)-1] {
+		case '.', ',', ';', ':', '!', '?', '\'', '"', '>':
+			s = s[:len(s)-1]
+			continue
+		case ')':
+			if strings.Count(s, ")") > strings.Count(s, "(") {
+				s = s[:len(s)-1]
+				continue
+			}
+		case ']':
+			if strings.Count(s, "]") > strings.Count(s, "[") {
+				s = s[:len(s)-1]
+				continue
+			}
+		}
+		break
+	}
+	return s
+}
+
+func convert(src string, md bool) (string, []string) {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {
 		// The HTML5 parser is error-tolerant; treat an impossible parse
 		// failure as empty content rather than showing raw HTML.
-		return ""
+		return "", nil
 	}
 	c := newConverter(md)
 	c.walk(doc, false, 0)
@@ -195,7 +265,11 @@ func convert(src string, md bool) string {
 		}
 		out += strings.TrimRight(foot.String(), "\n")
 	}
-	return Sanitize(out)
+	links := make([]string, len(c.order))
+	for i, u := range c.order {
+		links[i] = Sanitize(u)
+	}
+	return Sanitize(out), links
 }
 
 func (c *converter) walk(n *html.Node, inPre bool, depth int) {

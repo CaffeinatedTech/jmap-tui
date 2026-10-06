@@ -74,8 +74,9 @@ type State struct {
 	// ComputeLayout).
 	VpView string
 
-	// HelpSec is the generated binding list for the overlay (FR-I4).
-	HelpSec HelpSection
+	// HelpGroups is the generated, grouped cheat sheet for the help
+	// overlay (FR-I4).
+	HelpGroups []HelpGroup
 
 	// Version is the build version rendered as the help overlay's last
 	// line (FR-I11); empty hides it.

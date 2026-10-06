@@ -205,10 +205,16 @@ type Snapshot struct {
 // and plain text otherwise. It is never what a reply quotes: the
 // composer's quote comes from EmailBody.Text, which convertBody keeps in
 // plain text no matter how the display was rendered.
+//
+// Links are the URLs the preview's open-link picker offers, in
+// first-seen order and de-duplicated: an HTML body's <a href> list (the
+// [n] footnotes), or the bare URLs found in a plain-text body. Empty when
+// the message has none.
 type BodyView struct {
 	ID          mail.ID
 	Text        string
 	Styled      bool
+	Links       []string
 	Attachments []mail.Attachment
 }
 
@@ -1060,7 +1066,7 @@ func (e *Engine) cachedBody(id mail.ID) (*BodyView, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &BodyView{ID: id, Text: text, Styled: styled, Attachments: body.Attachments}, true
+	return &BodyView{ID: id, Text: text, Styled: styled, Links: body.Links, Attachments: body.Attachments}, true
 }
 
 // convertBody renders a fetched body once for each of its two readers.
@@ -1068,16 +1074,22 @@ func (e *Engine) cachedBody(id mail.ID) (*BodyView, bool) {
 // plain text to quote. body.Text is rewritten to the plain form, so
 // everything downstream that quotes a body gets text and never markup.
 // A body that already carries text/plain is displayed as-is (FR-E2's
-// preference) and is not styled.
+// preference) and is not styled; its bare URLs are still collected for the
+// open-link picker, from the text alone (no footnote markers are added).
+//
+// body.Links is filled as a side effect so every cache write — preview
+// fetch and reply-context fetch alike — carries the same list.
 func convertBody(body *mail.EmailBody) (display string, styled bool) {
 	if body.Text != "" {
+		body.Links = mailtext.FindURLs(body.Text)
 		return body.Text, false
 	}
 	if body.HTML == "" {
 		return "", false
 	}
 	body.Text = mailtext.HTMLToText(body.HTML)
-	return mailtext.HTMLToMarkdown(body.HTML), true
+	display, body.Links = mailtext.HTMLToMarkdownLinks(body.HTML)
+	return display, true
 }
 
 // fetchBody fetches id from the server, converts HTML for display (FR-E2)
@@ -1092,7 +1104,7 @@ func (e *Engine) fetchBody(ctx context.Context, id mail.ID) (*BodyView, error) {
 	e.mu.Lock()
 	e.bodies.put(id, display, styled, body)
 	e.mu.Unlock()
-	return &BodyView{ID: id, Text: display, Styled: styled, Attachments: body.Attachments}, nil
+	return &BodyView{ID: id, Text: display, Styled: styled, Links: body.Links, Attachments: body.Attachments}, nil
 }
 
 // setBodyLocked installs the body view when id still matches the cursor.

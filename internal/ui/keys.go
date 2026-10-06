@@ -64,6 +64,7 @@ const (
 	ActFullscreen      Action = "preview.fullscreen"
 	ActPreviewPageDown Action = "preview.page_down"
 	ActPreviewPageUp   Action = "preview.page_up"
+	ActOpenLink        Action = "preview.open_link"
 	ActCyclePane       Action = "pane.cycle"
 	ActCyclePaneRev    Action = "pane.cycle_reverse"
 	ActToggleSidebar   Action = "pane.toggle_sidebar"
@@ -93,12 +94,12 @@ type Binding struct {
 // written as "shift+<letter>" the way "shift+g" already is.
 func defaultBindings() []Binding {
 	return []Binding{
-		{Key: "j", Act: ActListDown, Help: "next message", Pane: PaneList},
-		{Key: "down", Act: ActListDown, Help: "next message", Pane: PaneList},
-		{Key: "k", Act: ActListUp, Help: "previous message", Pane: PaneList},
-		{Key: "up", Act: ActListUp, Help: "previous message", Pane: PaneList},
-		{Key: "g", Act: ActListTop, Help: "first message", Pane: PaneList},
-		{Key: "shift+g", Act: ActListBottom, Help: "last message", Pane: PaneList},
+		{Key: "j", Act: ActListDown, Help: "move down", Pane: PaneList},
+		{Key: "down", Act: ActListDown, Help: "move down", Pane: PaneList},
+		{Key: "k", Act: ActListUp, Help: "move up", Pane: PaneList},
+		{Key: "up", Act: ActListUp, Help: "move up", Pane: PaneList},
+		{Key: "g", Act: ActListTop, Help: "jump to top", Pane: PaneList},
+		{Key: "shift+g", Act: ActListBottom, Help: "jump to bottom", Pane: PaneList},
 		{Key: "ctrl+f", Act: ActListPageDown, Help: "page down", Pane: PaneList},
 		{Key: "ctrl+b", Act: ActListPageUp, Help: "page up", Pane: PaneList},
 		{Key: "ctrl+d", Act: ActListHalfDown, Help: "half page down", Pane: PaneList},
@@ -118,12 +119,12 @@ func defaultBindings() []Binding {
 		{Key: "#", Act: ActDelete, Help: "delete (to trash)", Pane: PaneList},
 		{Key: "s", Act: ActSort, Help: "sort by…", Pane: PaneList},
 		{Key: "o", Act: ActSort, Help: "sort by…", Pane: PaneList},
-		{Key: "j", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
-		{Key: "down", Act: ActSidebarDown, Help: "next mailbox", Pane: PaneSidebar},
-		{Key: "k", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
-		{Key: "up", Act: ActSidebarUp, Help: "previous mailbox", Pane: PaneSidebar},
-		{Key: "g", Act: ActSidebarTop, Help: "first mailbox", Pane: PaneSidebar},
-		{Key: "shift+g", Act: ActSidebarBottom, Help: "last mailbox", Pane: PaneSidebar},
+		{Key: "j", Act: ActSidebarDown, Help: "move down", Pane: PaneSidebar},
+		{Key: "down", Act: ActSidebarDown, Help: "move down", Pane: PaneSidebar},
+		{Key: "k", Act: ActSidebarUp, Help: "move up", Pane: PaneSidebar},
+		{Key: "up", Act: ActSidebarUp, Help: "move up", Pane: PaneSidebar},
+		{Key: "g", Act: ActSidebarTop, Help: "jump to top", Pane: PaneSidebar},
+		{Key: "shift+g", Act: ActSidebarBottom, Help: "jump to bottom", Pane: PaneSidebar},
 		{Key: "enter", Act: ActOpenMailbox, Help: "open mailbox", Pane: PaneSidebar},
 		// Folding (FR-C6): h/l are the tree's left/right (ranger/lf),
 		// arrow keys alias them. l only ever expands — Enter is the
@@ -145,22 +146,26 @@ func defaultBindings() []Binding {
 		// An empty key matches no keystroke; Help skips it until a
 		// remap gives it one.
 		{Key: "", Act: ActSidebarClose, Help: "hide sidebar", Pane: PaneSidebar},
-		{Key: "j", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
-		{Key: "down", Act: ActPreviewDown, Help: "scroll down", Pane: PanePreview},
-		{Key: "k", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
-		{Key: "up", Act: ActPreviewUp, Help: "scroll up", Pane: PanePreview},
+		{Key: "j", Act: ActPreviewDown, Help: "move down", Pane: PanePreview},
+		{Key: "down", Act: ActPreviewDown, Help: "move down", Pane: PanePreview},
+		{Key: "k", Act: ActPreviewUp, Help: "move up", Pane: PanePreview},
+		{Key: "up", Act: ActPreviewUp, Help: "move up", Pane: PanePreview},
 		{Key: "d", Act: ActPreviewHalf, Help: "half page down", Pane: PanePreview},
 		{Key: "u", Act: ActPreviewHalfUp, Help: "half page up", Pane: PanePreview},
 		{Key: "ctrl+f", Act: ActPreviewPageDown, Help: "page down", Pane: PanePreview},
 		{Key: "ctrl+b", Act: ActPreviewPageUp, Help: "page up", Pane: PanePreview},
-		{Key: "g", Act: ActPreviewTop, Help: "top of message", Pane: PanePreview},
-		{Key: "shift+g", Act: ActPreviewBottom, Help: "bottom of message", Pane: PanePreview},
+		{Key: "g", Act: ActPreviewTop, Help: "jump to top", Pane: PanePreview},
+		{Key: "shift+g", Act: ActPreviewBottom, Help: "jump to bottom", Pane: PanePreview},
 		{Key: "s", Act: ActSaveAttach, Help: "save attachments…", Pane: PanePreview},
 		// Preview paging from any pane (FR-E3): the pane-scoped keys
 		// above stay as they are while the preview is focused.
 		{Key: "pgdown", Act: ActPreviewPageDown, Help: "preview page down", Pane: PaneAny},
 		{Key: "pgup", Act: ActPreviewPageUp, Help: "preview page up", Pane: PaneAny},
 		{Key: "v", Act: ActFullscreen, Help: "full-screen message", Pane: PaneAny},
+		// Open a link from the message under the cursor in the default
+		// browser (FR-E2). Global so it works from the list as well as the
+		// preview; ctrl+o is free of every pane binding (o is sort there).
+		{Key: "ctrl+o", Act: ActOpenLink, Help: "open link…", Pane: PaneAny},
 		{Key: "n", Act: ActCompose, Help: "compose a message", Pane: PaneAny},
 		{Key: "r", Act: ActReply, Help: "reply", Pane: PaneAny},
 		{Key: "a", Act: ActReplyAll, Help: "reply to all", Pane: PaneAny},
@@ -270,42 +275,100 @@ func (km *KeyMap) Match(pane Pane, keystroke string) (Action, bool) {
 // Key returns the key bound to an action.
 func (km *KeyMap) Key(act Action) string { return km.byAction[act] }
 
-// HelpSection is a pane's bindings for the overlay (FR-I4).
-type HelpSection struct {
-	Title    string
-	Bindings []Binding
+// HelpGroup is one labelled section of the help cheat sheet (FR-I4).
+type HelpGroup struct {
+	Title string
+	Rows  []HelpRow
 }
 
-// Help generates the overlay content for a pane: the pane's own bindings
-// plus the global ones, in definition order, with aliases grouped
-// ("j/down").
-func (km *KeyMap) Help(pane Pane) HelpSection {
-	sec := HelpSection{}
-	seen := map[Action]bool{}
+// HelpRow is one command on the cheat sheet: the key that runs it and what
+// it does. Keys is the resolved primary binding, so a [keys] remap shows.
+type HelpRow struct {
+	Keys string
+	Help string
+}
+
+// helpGroupOrder fixes the section order on the cheat sheet.
+var helpGroupOrder = []string{
+	"Navigate", "Triage", "Read", "Folders",
+	"Compose", "Search", "Contacts", "View", "App",
+}
+
+// actionGroup maps every action to its cheat-sheet section (FR-I4). It is
+// keyed by action, not by pane: the panel groups commands by purpose, so
+// the same verb reads the same wherever it is bound.
+var actionGroup = map[Action]string{
+	ActListDown: "Navigate", ActListUp: "Navigate",
+	ActListTop: "Navigate", ActListBottom: "Navigate",
+	ActListPageDown: "Navigate", ActListPageUp: "Navigate",
+	ActListHalfDown: "Navigate", ActListHalfUp: "Navigate",
+	ActListNextUnread: "Navigate", ActListPrevUnread: "Navigate",
+	ActSidebarDown: "Navigate", ActSidebarUp: "Navigate",
+	ActSidebarTop: "Navigate", ActSidebarBottom: "Navigate",
+	ActPreviewDown: "Navigate", ActPreviewUp: "Navigate",
+	ActPreviewHalf: "Navigate", ActPreviewHalfUp: "Navigate",
+	ActPreviewPageDown: "Navigate", ActPreviewPageUp: "Navigate",
+	ActPreviewTop: "Navigate", ActPreviewBottom: "Navigate",
+	ActCyclePane: "Navigate", ActCyclePaneRev: "Navigate",
+
+	ActToggleRead: "Triage", ActToggleStar: "Triage",
+	ActToggleSelect: "Triage", ActMove: "Triage", ActCopy: "Triage",
+	ActDelete: "Triage", ActArchive: "Triage", ActSort: "Triage",
+
+	ActToggleThread: "Read", ActToggleSize: "Read",
+	ActSaveAttach: "Read", ActOpenLink: "Read", ActFullscreen: "Read",
+
+	ActOpenMailbox: "Folders", ActSidebarCollapse: "Folders",
+	ActSidebarExpand: "Folders", ActMarkFolderRead: "Folders",
+	ActSidebarMoveUp: "Folders", ActSidebarMoveDown: "Folders",
+	ActSidebarClose: "Folders",
+
+	ActCompose: "Compose", ActReply: "Compose",
+	ActReplyAll: "Compose", ActForward: "Compose",
+
+	ActSearch: "Search", ActSearchAdv: "Search", ActSearchClear: "Search",
+	ActContacts: "Contacts", ActContactNew: "Contacts",
+
+	ActAccountSwitch: "View", ActAccountManage: "View",
+	ActUnified: "View", ActToggleSidebar: "View", ActToggleLayout: "View",
+
+	ActUndo: "App", ActHelp: "App", ActQuit: "App",
+}
+
+// CheatSheet builds the help panel (FR-I4): every action grouped by
+// purpose, each row keyed by its resolved binding so user remaps show
+// through. Actions that resolve to the same key within one section merge
+// into a single row (j moves down in the list, the tree and the reader).
+func (km *KeyMap) CheatSheet() []HelpGroup {
+	rows := map[string][]HelpRow{}
+	slot := map[string]map[string]int{} // group → primary key → row index
 	for _, b := range km.keys {
-		if b.Pane != pane && b.Pane != PaneAny {
-			continue
-		}
 		if b.Key == "" {
-			// An unbound action (kept only for remap stability) has
-			// nothing to show until the user remaps it.
 			continue
 		}
-		if seen[b.Act] {
+		g := actionGroup[b.Act]
+		if g == "" {
+			g = "Other"
+		}
+		primary := km.byAction[b.Act]
+		if slot[g] == nil {
+			slot[g] = map[string]int{}
+		}
+		if _, seen := slot[g][primary]; seen {
 			continue
 		}
-		seen[b.Act] = true
-		keys := []string{}
-		for _, cand := range km.keys {
-			if cand.Act == b.Act && cand.Pane == b.Pane {
-				keys = append(keys, cand.Key)
-			}
-		}
-		grouped := b
-		grouped.Key = strings.Join(keys, "/")
-		sec.Bindings = append(sec.Bindings, grouped)
+		slot[g][primary] = len(rows[g])
+		rows[g] = append(rows[g], HelpRow{Keys: primary, Help: b.Help})
 	}
-	return sec
+
+	var out []HelpGroup
+	for _, g := range append(append([]string{}, helpGroupOrder...), "Other") {
+		if len(rows[g]) == 0 {
+			continue
+		}
+		out = append(out, HelpGroup{Title: g, Rows: rows[g]})
+	}
+	return out
 }
 
 // Validate reports duplicate key bindings within the same pane (FR-I3).

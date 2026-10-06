@@ -103,6 +103,12 @@ type EmailBody struct {
 	HTML        string
 	Attachments []Attachment
 
+	// Links is the ordered, de-duplicated URL list the preview's
+	// open-link picker offers: an HTML body's <a href> list (its [n]
+	// footnotes), or the bare URLs detected in a text/plain body. It is
+	// derived by the sync layer's conversion, not fetched.
+	Links []string
+
 	// Addressing, for reply-all and the reply destination.
 	From    []Address
 	To      []Address

@@ -186,7 +186,7 @@ func sanitizeState(st State) State {
 		st.ContactForm = &cf
 	}
 
-	// HelpSec is generated from the keymap (app config and code), and
+	// HelpGroups is generated from the keymap (app config and code), and
 	// Theme is styles only — neither carries server text.
 	return st
 }

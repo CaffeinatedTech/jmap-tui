@@ -345,7 +345,7 @@ func TestBodyWrapsLongLines(t *testing.T) {
 	}
 
 	raw := strings.Repeat("word ", 60) + "unbreakablekeyword\nshort line"
-	m.setBody(raw, false)
+	m.setBody(raw, false, nil)
 
 	check := func(stage string) {
 		t.Helper()
@@ -404,7 +404,7 @@ func TestBodyStyledRendersAndRerendersOnResize(t *testing.T) {
 	}
 
 	md := "## Quarterly audit\n\nHello **world**, " + strings.Repeat("padding ", 40) + "end.\n\n> quoted line"
-	m.setBody(md, true)
+	m.setBody(md, true, nil)
 	if !m.bodyStyled {
 		t.Fatal("styled flag not recorded on the model")
 	}
@@ -448,7 +448,7 @@ func TestBodyStyledRendersAndRerendersOnResize(t *testing.T) {
 	check("wide")
 
 	// A plain body must not pick up styling on the way through.
-	m.setBody("plain ** body ## text", false)
+	m.setBody("plain ** body ## text", false, nil)
 	if m.bodyStyled {
 		t.Fatal("plain body marked styled")
 	}

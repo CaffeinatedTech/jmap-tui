@@ -57,6 +57,11 @@ type Options struct {
 	// Version is the build version shown as the help overlay's last
 	// line (FR-I11); empty hides the line.
 	Version string
+
+	// OpenURL launches a message link in the reader's default browser
+	// (FR-E2). Nil means the platform default (xdg-open/open/rundll32);
+	// tests inject a recorder here so no process is spawned.
+	OpenURL func(raw string) error
 }
 
 // AccountOpt is one account to enroll (M6): its identity for the
@@ -158,6 +163,10 @@ type Model struct {
 	bodyRaw    string
 	bodyStyled bool
 	bodyWrapW  int
+	// bodyLinks is the footnote href list behind the installed body's
+	// [n] markers, for the open-link picker (FR-E2). Empty for a
+	// plain-text body, which carries no footnotes.
+	bodyLinks []string
 
 	lastCtrlC  time.Time
 	err        string
@@ -483,7 +492,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.uBodyKey, m.uBody = msg.key, msg.body
 		if m.vpBodyID != msg.key {
-			m.setBody(msg.body.Text, msg.body.Styled)
+			m.setBody(msg.body.Text, msg.body.Styled, msg.body.Links)
 			m.vp.GotoTop()
 			m.vpBodyID = msg.key
 		}
@@ -564,6 +573,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.showToast(msg.text, "", nil, nil)
+
+	case linkOpenMsg:
+		if msg.err != nil {
+			m.err = truncateErr("open link", msg.err)
+		}
+		return m, nil
 
 	// --- compose (M5, FR-H1..H6) ---
 	case composePrepMsg:
@@ -862,13 +877,13 @@ func (m *Model) applyView(snap sync.Snapshot) (tea.Model, tea.Cmd) {
 	}
 	// Fresh body arrived: install and reset scroll (FR-E3).
 	if snap.Body != nil && snap.Body.ID != m.vpBodyID {
-		m.setBody(snap.Body.Text, snap.Body.Styled)
+		m.setBody(snap.Body.Text, snap.Body.Styled, snap.Body.Links)
 		m.vp.GotoTop()
 		m.vpBodyID = snap.Body.ID
 	}
 	// Cursor changed under an already-cached body: show it immediately.
 	if id := m.cursorID(); id != "" && id != m.vpBodyID && snap.Body != nil && snap.Body.ID == id {
-		m.setBody(snap.Body.Text, snap.Body.Styled)
+		m.setBody(snap.Body.Text, snap.Body.Styled, snap.Body.Links)
 		m.vp.GotoTop()
 		m.vpBodyID = id
 	}
@@ -971,7 +986,7 @@ func (m *Model) applyUnified() (tea.Model, tea.Cmd) {
 		case m.uBody != nil && m.uBodyKey == key:
 			// Cached by an earlier visit: show it now and drop the
 			// in-flight request so its reply cannot reset the scroll.
-			m.setBody(m.uBody.Text, m.uBody.Styled)
+			m.setBody(m.uBody.Text, m.uBody.Styled, m.uBody.Links)
 			m.vp.GotoTop()
 			m.vpBodyID = key
 			m.bodyReq = ""
@@ -1253,7 +1268,7 @@ func (m *Model) openMailboxOn(acct string, id mail.ID) tea.Cmd {
 		if acct == m.activeID {
 			m.vpBodyID = ""
 			m.resetBodyPending()
-			m.setBody("", false)
+			m.setBody("", false, nil)
 		}
 		return eng.Snapshot(), nil
 	})
@@ -1548,6 +1563,10 @@ func (m *Model) runAction(act ui.Action) (tea.Model, tea.Cmd) {
 		m.toggleFullscreen()
 		return m, nil
 
+	// --- open a message link in the browser (FR-E2) ---
+	case ui.ActOpenLink:
+		return m, m.openLinkPicker()
+
 	// --- sidebar pane (FR-C1, FR-C5) ---
 	case ui.ActSidebarDown:
 		m.sidebarMove(1)
@@ -1727,9 +1746,11 @@ func (m *Model) resizeViewport() {
 // styled says the text is markdown from the HTML converter: it is
 // rendered here, **once**, into width-independent output, so that every
 // later resize re-wraps it exactly as it re-wraps a plain body — the
-// render never sits on the resize path.
-func (m *Model) setBody(text string, styled bool) {
+// render never sits on the resize path. links is the footnote href list
+// behind the body's [n] markers (FR-E2), for the open-link picker.
+func (m *Model) setBody(text string, styled bool, links []string) {
 	m.bodyStyled = styled
+	m.bodyLinks = links
 	if styled {
 		text = ui.RenderBody(text, m.opts.Theme.P)
 	}
@@ -1824,7 +1845,7 @@ func (m *Model) uiState() ui.State {
 	}
 	if m.helpOpen {
 		st.HelpOpen = true
-		st.HelpSec = m.opts.Keys.Help(m.focus)
+		st.HelpGroups = m.opts.Keys.CheatSheet()
 	}
 	// Multi-account chrome (M6): identities for the footer chip, the
 	// switcher, and the unified preview's owner line (FR-A5). Single-account configs leave

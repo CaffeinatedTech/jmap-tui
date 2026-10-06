@@ -168,7 +168,7 @@ func (m *Model) activateAccount(id string) tea.Cmd {
 	m.vpBodyID = ""
 	m.bodyReq = ""
 	m.resetBodyPending()
-	m.setBody("", false)
+	m.setBody("", false, nil)
 	m.sel = map[mail.ID]bool{}
 	m.err = ""
 

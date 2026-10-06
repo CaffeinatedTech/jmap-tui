@@ -1,9 +1,62 @@
 package mailtext
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+// TestLinkListMatchesFootnotes pins the contract the open-link picker
+// relies on: the returned hrefs are numbered exactly as the [n] footnotes
+// are, in first-seen order and de-duplicated the same way.
+func TestLinkListMatchesFootnotes(t *testing.T) {
+	src := `<p><a href="https://a.test">A</a> <a href="mailto:b@test">B</a> <a href="https://a.test">A again</a></p>`
+	want := []string{"https://a.test", "mailto:b@test"}
+
+	md, links := HTMLToMarkdownLinks(src)
+	if !slices.Equal(links, want) {
+		t.Fatalf("markdown links = %q, want %q", links, want)
+	}
+	if !strings.HasSuffix(md, "[2] mailto:b@test") {
+		t.Fatalf("footnotes out of order: %q", md)
+	}
+
+	_, plainLinks := HTMLToTextLinks(src)
+	if !slices.Equal(plainLinks, want) {
+		t.Fatalf("plain links = %q, want %q", plainLinks, want)
+	}
+}
+
+// TestLinkListSanitized proves a control character smuggled into an href
+// never reaches the picker (it would be handed to the browser otherwise).
+func TestLinkListSanitized(t *testing.T) {
+	_, links := HTMLToTextLinks("<a href=\"https://x.test/\x01path\">x</a>")
+	if len(links) != 1 {
+		t.Fatalf("links = %q, want one", links)
+	}
+	if strings.ContainsRune(links[0], '\x01') {
+		t.Fatalf("control character survived: %q", links[0])
+	}
+}
+
+// TestFindURLs: bare URLs in a plain-text body are collected in order,
+// de-duplicated, and stripped of the punctuation prose leaves on them.
+func TestFindURLs(t *testing.T) {
+	text := "Reset it at https://dashboard.test/reset?token=abc, then see\n" +
+		"(https://wiki.test/Page_(disambiguation)) or mailto:help@test.\n" +
+		"Again: https://dashboard.test/reset?token=abc"
+	want := []string{
+		"https://dashboard.test/reset?token=abc",
+		"https://wiki.test/Page_(disambiguation)",
+		"mailto:help@test",
+	}
+	if got := FindURLs(text); !slices.Equal(got, want) {
+		t.Fatalf("FindURLs = %q, want %q", got, want)
+	}
+	if got := FindURLs("no links here"); len(got) != 0 {
+		t.Fatalf("FindURLs = %q, want none", got)
+	}
+}
 
 func TestParagraphsBecomeLines(t *testing.T) {
 	out := HTMLToText("<p>First paragraph.</p><p>Second paragraph.</p>")

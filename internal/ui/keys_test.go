@@ -70,14 +70,16 @@ func TestKeyMapUnboundActionRemappable(t *testing.T) {
 	if act, ok := km.Match(PaneSidebar, "x"); !ok || act != ActSidebarClose {
 		t.Fatalf("remapped sidebar.close = %v %v", act, ok)
 	}
-	sec := km.Help(PaneSidebar)
+	sec := km.CheatSheet()
 	found := false
-	for _, b := range sec.Bindings {
-		if b.Key == "" {
-			t.Fatal("help lists a binding with no key")
-		}
-		if b.Act == ActSidebarClose {
-			found = true
+	for _, g := range sec {
+		for _, r := range g.Rows {
+			if r.Help == "hide sidebar" {
+				found = true
+				if r.Keys != "x" {
+					t.Fatalf("remapped sidebar.close key = %q, want x", r.Keys)
+				}
+			}
 		}
 	}
 	if !found {
@@ -89,9 +91,11 @@ func TestKeyMapUnboundActionRemappable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKeyMap: %v", err)
 	}
-	for _, b := range def.Help(PaneSidebar).Bindings {
-		if b.Act == ActSidebarClose {
-			t.Fatal("unbound sidebar.close appears in help")
+	for _, g := range def.CheatSheet() {
+		for _, r := range g.Rows {
+			if r.Help == "hide sidebar" {
+				t.Fatal("unbound sidebar.close appears in help")
+			}
 		}
 	}
 }
@@ -122,17 +126,49 @@ func TestKeyMapUnknownActionRejected(t *testing.T) {
 	}
 }
 
-func TestKeyMapHelpGroupsAliases(t *testing.T) {
+// TestCheatSheetGroupsPrimaryKeys: the panel groups by purpose, shows each
+// action's primary key once per section (j collapses from the list, tree
+// and reader into one Navigate row), and reflects a remap.
+func TestCheatSheetGroupsPrimaryKeys(t *testing.T) {
 	km, _ := NewKeyMap(nil)
-	sec := km.Help(PaneList)
-	var found string
-	for _, b := range sec.Bindings {
-		if b.Act == ActListDown {
-			found = b.Key
+
+	group := map[string]map[string]string{} // title → key → help
+	for _, g := range km.CheatSheet() {
+		if group[g.Title] == nil {
+			group[g.Title] = map[string]string{}
+		}
+		for _, r := range g.Rows {
+			if _, dup := group[g.Title][r.Keys]; dup {
+				t.Fatalf("%s lists key %q twice", g.Title, r.Keys)
+			}
+			group[g.Title][r.Keys] = r.Help
 		}
 	}
-	if found != "j/down" {
-		t.Fatalf("alias group = %q, want j/down", found)
+	if group["Navigate"]["j"] != "move down" {
+		t.Fatalf("Navigate j = %q, want %q", group["Navigate"]["j"], "move down")
+	}
+	if group["Triage"]["d"] != "delete (to trash)" {
+		t.Fatalf("Triage d = %q, want the delete help", group["Triage"]["d"])
+	}
+	if _, ok := group["Read"]["ctrl+o"]; !ok {
+		t.Fatal("Read section missing the open-link key")
+	}
+
+	// A remap moves the shown key, not the action.
+	remapped, _ := NewKeyMap(map[Action]string{ActListDown: "n"})
+	found := false
+	for _, g := range remapped.CheatSheet() {
+		if g.Title != "Navigate" {
+			continue
+		}
+		for _, r := range g.Rows {
+			if r.Help == "move down" && r.Keys == "n" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("remapped move-down key missing from Navigate")
 	}
 }
 

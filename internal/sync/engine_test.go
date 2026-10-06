@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,40 @@ import (
 	"github.com/CaffeinatedTech/jmap-tui/internal/mail"
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
 )
+
+// TestConvertBodyCollectsLinks pins that the preview's BodyView carries the
+// same footnote hrefs the reader sees, in order, while the composer's quote
+// stays plain text with no markup (FR-E2).
+func TestConvertBodyCollectsLinks(t *testing.T) {
+	body := mail.EmailBody{HTML: `<p>See <a href="https://a.test">A</a> and <a href="https://b.test">B</a>.</p>`}
+	display, styled := convertBody(&body)
+	if !styled {
+		t.Fatal("HTML body not styled")
+	}
+	if want := []string{"https://a.test", "https://b.test"}; !slices.Equal(body.Links, want) {
+		t.Fatalf("links = %q, want %q", body.Links, want)
+	}
+	if !strings.Contains(display, "A [1]") || !strings.Contains(display, "[2] https://b.test") {
+		t.Fatalf("display lost footnotes: %q", display)
+	}
+	if !strings.Contains(body.Text, "See A [1] and B [2].") || !strings.Contains(body.Text, "[1] https://a.test") {
+		t.Fatalf("plain quote lost link text/footnotes: %q", body.Text)
+	}
+
+	// A text/plain body is not converted and not styled, but its bare
+	// URLs are still collected for the picker — and the text is left
+	// exactly as the reader sees it (no footnote markers added).
+	plain := mail.EmailBody{Text: "visit https://x.test for more"}
+	if _, styled := convertBody(&plain); styled {
+		t.Fatal("plain body marked styled")
+	}
+	if want := []string{"https://x.test"}; !slices.Equal(plain.Links, want) {
+		t.Fatalf("plain links = %q, want %q", plain.Links, want)
+	}
+	if plain.Text != "visit https://x.test for more" {
+		t.Fatalf("plain text rewritten: %q", plain.Text)
+	}
+}
 
 // emailFixtures: a 2-member thread, an HTML-only message, an attachment.
 func emailFixtures() []mockjmap.Email {

@@ -160,6 +160,7 @@ account or edit this one.
 3. <kbd>Tab</kbd> moves focus into the preview to scroll it, or press <kbd>v</kbd> to read full-screen.
 4. Threads show a `▸` in front of the subject — <kbd>Enter</kbd> expands the replies, <kbd>Enter</kbd> again collapses them.
 5. <kbd>PgUp</kbd>/<kbd>PgDn</kbd> pages the message from *anywhere* — focus never moves.
+6. Links in a message collect as numbered footnotes (`[1]`, `[2]`…) — or, in a plain-text message, are detected from the text as-is. Press <kbd>ctrl+o</kbd> to list them and open one in your default browser — <kbd>http</kbd>, <kbd>https</kbd> and <kbd>mailto</kbd> links are opened; anything else is refused.
 
 ### Triage your inbox
 
@@ -209,8 +210,8 @@ account or edit this one.
 
 ## Keys
 
-Everything is keyboard-driven. Keys are grouped by **where your focus is** —
-press <kbd>?</kbd> at any time for the same list inside the app.
+Everything is keyboard-driven. press <kbd>?</kbd> at any time for a full-screen
+cheat sheet — every command grouped by purpose in columns.
 
 ### Sidebar (folders)
 
@@ -254,6 +255,7 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>g</kbd> / <kbd>G</kbd> | Top / bottom of the message |
 | <kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Page the message — works from *any* pane |
 | <kbd>s</kbd> | Save attachments… |
+| <kbd>ctrl+o</kbd> | Open a link from the message in your browser (numbered like the footnotes) |
 | <kbd>v</kbd> | Full-screen message (press <kbd>Esc</kbd> to leave) |
 
 ### Composer
@@ -309,6 +311,7 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>ctrl+a</kbd> | Add or edit an account |
 | <kbd>ctrl+z</kbd> | Undo the last action (while its toast shows) |
 | <kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Page the reading pane |
+| <kbd>ctrl+o</kbd> | Open a link from the message under the cursor |
 | <kbd>?</kbd> | Key help |
 | <kbd>q</kbd> | Quit (<kbd>ctrl+c</kbd> twice cancels in-flight work first) |
 
