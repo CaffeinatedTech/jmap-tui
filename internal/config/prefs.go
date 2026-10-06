@@ -13,8 +13,8 @@ import (
 // default_account key in the user-authored config.toml (SetDefaultAccount,
 // FR-J1 amended for issue #3) — nothing else in config.toml is ever
 // rewritten by the app. Choices the user makes in-app (remembered archive
-// destination, per account; pane layout; later: style settings) persist
-// here.
+// destination and composer From, per account; pane layout; later: style
+// settings) persist here.
 type Prefs struct {
 	// Accounts maps a config account id to its remembered choices.
 	Accounts map[string]AccountPrefs `toml:"accounts"`
@@ -68,6 +68,13 @@ type AccountPrefs struct {
 	// Sort is the list order id (FR-D8: "newest", "oldest", "sender",
 	// "subject", "size"); empty means the default, newest first.
 	Sort string `toml:"sort,omitempty"`
+
+	// Identity is the From address the composer last used for this
+	// account (FR-H1), stored by identity email so a re-minted server id
+	// cannot orphan it; empty means the default applies (configured
+	// default_identity, then the account's own address, then the first
+	// identity).
+	Identity string `toml:"identity,omitempty"`
 }
 
 // DefaultPrefsPath returns the prefs file location: prefs.toml in the same
@@ -149,6 +156,25 @@ func (p *Prefs) SetSort(accountID, order string) {
 	}
 	a := p.Accounts[accountID]
 	a.Sort = order
+	p.Accounts[accountID] = a
+}
+
+// Identity returns the account's remembered composer From (FR-H1): the
+// email of the identity last picked for it, empty when the default applies.
+func (p *Prefs) Identity(accountID string) string {
+	if p == nil || p.Accounts == nil {
+		return ""
+	}
+	return p.Accounts[accountID].Identity
+}
+
+// SetIdentity remembers the composer From chosen for the account.
+func (p *Prefs) SetIdentity(accountID, identity string) {
+	if p.Accounts == nil {
+		p.Accounts = map[string]AccountPrefs{}
+	}
+	a := p.Accounts[accountID]
+	a.Identity = identity
 	p.Accounts[accountID] = a
 }
 

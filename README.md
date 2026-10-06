@@ -180,7 +180,7 @@ account or edit this one.
 
 1. Press <kbd>n</kbd> for a new message, <kbd>r</kbd> to reply, <kbd>a</kbd> reply-all, <kbd>f</kbd> forward. Replies quote the original for you.
 2. <kbd>Tab</kbd> moves between To / Cc / Bcc / Subject / body. In an address field, contacts are suggested as you type — <kbd>Enter</kbd> accepts one. <kbd>ctrl+g</kbd> opens a full contact search.
-3. <kbd>ctrl+a</kbd> attaches a file (a directory browser: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>Enter</kbd> attaches), <kbd>ctrl+i</kbd> picks the From address — every identity on every connected account, so you can change which account sends mid-draft.
+3. <kbd>ctrl+a</kbd> attaches a file (a directory browser: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>Enter</kbd> attaches), <kbd>ctrl+i</kbd> picks the From address — every identity on every connected account, so you can change which account sends mid-draft. New, reply and forward open on the account's own address by default, and a pick is remembered for that account next time.
 4. <kbd>ctrl+s</kbd> sends — and then you have **five seconds to change your mind**: <kbd>ctrl+z</kbd> cancels the send and puts you back in the composer with everything intact.
 5. Drafts save themselves to the *server* every couple of seconds, so you can quit and pick the draft up later (it's in your Drafts folder).
 
@@ -264,7 +264,7 @@ press <kbd>?</kbd> at any time for the same list inside the app.
 | <kbd>Enter</kbd> | Next field (in the body: new line) |
 | type | Contact suggestions pop up under address fields — <kbd>↑</kbd>/<kbd>↓</kbd> choose, <kbd>Enter</kbd> inserts |
 | <kbd>ctrl+g</kbd> | Full contact search inside an address field |
-| <kbd>ctrl+i</kbd> | Choose the From address — one row per identity on every connected account (named for its account); picking another account's moves the draft, and its attachments, there |
+| <kbd>ctrl+i</kbd> | Choose the From address — one row per identity on every connected account (named for its account); picking another account's moves the draft, and its attachments, there. The choice is remembered for that account |
 | <kbd>ctrl+a</kbd> | Attach a file — <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>l</kbd> open, <kbd>h</kbd> back, <kbd>Enter</kbd> attach, <kbd>Esc</kbd> cancel |
 | <kbd>ctrl+x</kbd> | Remove the highlighted attachment |
 | <kbd>ctrl+s</kbd> | Send — then <kbd>ctrl+z</kbd> within 5s to cancel |
@@ -341,8 +341,10 @@ bits for you; the parts you might edit yourself:
   account at the top of your sidebar order)
 - `[accounts.<id>]` — server URL, username, display name, optional
   `initial_mailbox` (the folder that opens at startup), `default_identity`
-  (the From address the composer defaults to), and `auth` (`"bearer"` for
-  API-token servers like Fastmail; default is HTTP Basic)
+  (the From address the composer defaults to — with none set the account's
+  own address is used, and a From you pick in-app is remembered for that
+  account), and `auth` (`"bearer"` for API-token servers like Fastmail;
+  default is HTTP Basic)
 - `[keys]` — rebind any key to an action id (see [Keys](#keys))
 - `theme` — `dark`, `light`, or `auto` (follow your terminal)
 - `[compose] undo_delay` — how long you get to cancel a send

@@ -57,7 +57,9 @@ type Account struct {
 
 	// DefaultIdentity optionally pins the composer's From for this
 	// account (FR-A1): matched against the server's Identity/get results
-	// by email, then by id. Empty means the account's first identity.
+	// by email, then by id. Empty means the account's own address (its
+	// username) when the server offers it, else its first identity; a
+	// From picked in-app is remembered in prefs.toml and wins over this.
 	DefaultIdentity string `toml:"default_identity,omitempty"`
 
 	// InitialMailbox is the mailbox the app opens first for this account,

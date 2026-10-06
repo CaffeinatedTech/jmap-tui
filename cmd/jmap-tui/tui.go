@@ -321,6 +321,7 @@ func connectOne(opts connectOpts, id string, acct *config.Account, isActive bool
 		username = first(opts.user, username)
 		pwFile = first(opts.passwordFile, pwFile)
 	}
+	out.Username = username
 	if serverURL == "" || username == "" {
 		out.Err = errors.New("both --url and --user (or a configured account) are required")
 		return out

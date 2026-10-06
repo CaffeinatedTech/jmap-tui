@@ -254,7 +254,7 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 		focus:      ui.ZoneTo,
 	}
 	if len(c.identities) > 0 {
-		c.identity = pickIdentity(c.identities, m.defaultIdentity(acct))
+		c.identity = pickIdentity(c.identities, m.identityWants(acct)...)
 	} else {
 		c.status = "no sending identity on this account"
 	}
@@ -280,24 +280,35 @@ func (m *Model) openCompose(mode composeMode) (tea.Model, tea.Cmd) {
 	}
 }
 
-// defaultIdentity is the account's configured default_identity (FR-A1),
-// empty when unset.
-func (m *Model) defaultIdentity(acct string) string {
+// identityWants is the ordered From preference list for a freshly opened
+// composer on acct (FR-A1/FR-H1): the identity remembered from an earlier
+// pick in this account, then the account's configured default_identity,
+// then the account's own address (its login). pickIdentity tries each in
+// turn and falls back to the server's first identity.
+func (m *Model) identityWants(acct string) []string {
+	var wants []string
+	if m.opts.Prefs != nil {
+		wants = append(wants, m.opts.Prefs.Identity(acct))
+	}
 	for _, a := range m.opts.Accounts {
 		if a.ID == acct {
-			return a.DefaultIdentity
+			wants = append(wants, a.DefaultIdentity, a.Username)
+			break
 		}
 	}
-	return ""
+	return wants
 }
 
-// pickIdentity honours the account's default_identity (FR-A1): matched
-// against the server's identities by email, then by id; the first
-// identity wins when unset or unmatched.
-func pickIdentity(idents []mail.Identity, want string) mail.Identity {
-	if want != "" {
+// pickIdentity honours the account's From preferences (FR-A1): each want
+// is matched against the server's identities by email (case-insensitively),
+// then by id; the first identity wins when none match.
+func pickIdentity(idents []mail.Identity, wants ...string) mail.Identity {
+	for _, want := range wants {
+		if want == "" {
+			continue
+		}
 		for _, id := range idents {
-			if id.Email == want || string(id.ID) == want {
+			if strings.EqualFold(id.Email, want) || string(id.ID) == want {
 				return id
 			}
 		}
@@ -1658,12 +1669,29 @@ func (m *Model) chooseIdentity(key mail.ID) tea.Cmd {
 	if !found {
 		return nil
 	}
+	// Remember the pick against the sending account (FR-H1): the next
+	// composer on it opens with this From. A cross-account pick belongs
+	// to the account it moves the composer onto, not the one left.
+	m.rememberIdentity(acct, ident)
 	if acct == c.acct {
 		c.identity = ident
 		c.status = "sending as " + ident.Email
 		return m.markDirty()
 	}
 	return m.repointCompose(acct, ident)
+}
+
+// rememberIdentity persists the From picked for the sending account
+// (FR-H1): stored by email so a re-minted server id cannot orphan it.
+// Sessions without a prefs path keep it in memory only.
+func (m *Model) rememberIdentity(acct string, ident mail.Identity) {
+	if m.opts.Prefs == nil || ident.Email == "" {
+		return
+	}
+	m.opts.Prefs.SetIdentity(acct, ident.Email)
+	if err := savePrefs(m.opts, acct); err != nil {
+		m.err = truncateErr("prefs", err)
+	}
 }
 
 // repointCompose moves an open composer onto another account without

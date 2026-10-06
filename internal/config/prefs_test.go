@@ -104,6 +104,39 @@ func TestDefaultPrefsPathSitsNextToConfig(t *testing.T) {
 	}
 }
 
+// TestIdentityRoundTrip: the composer's remembered From (FR-H1) is stored
+// per account, keyed by identity email, and omitted when unset.
+func TestIdentityRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prefs.toml")
+	p := &Prefs{}
+	p.SetIdentity("acc1", "work@example.test")
+	if err := SavePrefs(path, p); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+	got, err := LoadPrefs(path)
+	if err != nil {
+		t.Fatalf("LoadPrefs: %v", err)
+	}
+	if got.Identity("acc1") != "work@example.test" {
+		t.Fatalf("identity round trip = %q", got.Identity("acc1"))
+	}
+	if got.Identity("acc2") != "" {
+		t.Fatalf("unknown account identity = %q, want empty", got.Identity("acc2"))
+	}
+	// The default (no choice) is omitted: prefs stay minimal.
+	p.SetIdentity("acc1", "")
+	if err := SavePrefs(path, p); err != nil {
+		t.Fatalf("SavePrefs (cleared): %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read prefs: %v", err)
+	}
+	if strings.Contains(string(data), "identity") {
+		t.Fatalf("empty identity must be omitted from prefs:\n%s", data)
+	}
+}
+
 func TestAccountOrderRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "prefs.toml")
 	p := &Prefs{}

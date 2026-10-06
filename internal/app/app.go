@@ -71,6 +71,11 @@ type AccountOpt struct {
 	// DefaultIdentity optionally pins the composer's From for this
 	// account (FR-A1): matched by email, then by id.
 	DefaultIdentity string
+	// Username is the account's login (FR-A2). When no default_identity
+	// and no remembered pick exist, the composer prefers the identity
+	// whose email matches it — the account's own address — over the
+	// server's first identity.
+	Username string
 	// InitialMailbox is the mailbox this account opens on first load,
 	// chosen in the wizard (FR-I8); empty (or an id no longer in the
 	// tree) falls back to the inbox.

@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/CaffeinatedTech/jmap-tui/internal/config"
 	"github.com/CaffeinatedTech/jmap-tui/internal/jmapclient"
 	"github.com/CaffeinatedTech/jmap-tui/internal/ui"
 	"github.com/CaffeinatedTech/jmap-tui/test/mockjmap"
@@ -289,4 +291,101 @@ func twoIdentityModel(t *testing.T) *Model {
 	m.width, m.height = 120, 40
 	loadAll(t, m)
 	return m
+}
+
+// identityModel is one enrolled account (id "a") with the given login and
+// server identities, so the composer's account-address default can be
+// exercised (FR-H1).
+func identityModel(t *testing.T, login string, ids []mockjmap.Identity) *Model {
+	t.Helper()
+	shrinkComposeTimers(t)
+	srv := mockjmap.New(login, "pw", []mockjmap.Mailbox{
+		{ID: "mb-inbox", Name: "Inbox", Role: "inbox", SortOrder: 0, TotalEmails: 1, UnreadEmails: 1},
+		{ID: "mb-drafts", Name: "Drafts", Role: "drafts", SortOrder: 5},
+	})
+	srv.SetIdentities(ids)
+	t.Cleanup(srv.Close)
+	c := jmapclient.New(jmapclient.Options{ServerURL: srv.URL(), Username: login, Password: "pw"})
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	km, err := ui.NewKeyMap(nil)
+	if err != nil {
+		t.Fatalf("KeyMap: %v", err)
+	}
+	m := New(Options{
+		Accounts: []AccountOpt{{ID: "a", Name: "A", Provider: c, Connected: true, Username: login}},
+		Keys:     km,
+		Theme:    ui.NewTheme(ui.DarkTheme()),
+	})
+	m.width, m.height = 120, 40
+	loadAll(t, m)
+	return m
+}
+
+// TestComposeDefaultsToAccountAddress: with several identities and no
+// remembered or configured default, the composer opens on the identity
+// whose email is the account's own login — not merely the server's first
+// (FR-H1).
+func TestComposeDefaultsToAccountAddress(t *testing.T) {
+	m := identityModel(t, "me@example.test", []mockjmap.Identity{
+		{ID: "id-alias", Name: "Alias", Email: "alias@example.test"},
+		{ID: "id-main", Name: "Me", Email: "me@example.test"},
+	})
+	_, _ = m.openCompose(composeNew)
+	if m.compose == nil || m.compose.identity.Email != "me@example.test" {
+		t.Fatalf("opening From = %+v, want the account address", m.compose)
+	}
+}
+
+// TestComposeRemembersPickedIdentity: a From picked in the composer is
+// remembered per account in prefs.toml (FR-H1, FR-J1) and the next
+// composer — new, reply or forward — opens with it.
+func TestComposeRemembersPickedIdentity(t *testing.T) {
+	ids := []mockjmap.Identity{
+		{ID: "id-main", Name: "Me", Email: "me@example.test"},
+		{ID: "id-work", Name: "Work", Email: "work@example.test"},
+	}
+	m := identityModel(t, "me@example.test", ids)
+	prefsPath := filepath.Join(t.TempDir(), "prefs.toml")
+	m.opts.Prefs = &config.Prefs{}
+	m.opts.PrefsPath = prefsPath
+
+	_, _ = m.openCompose(composeNew)
+	if m.compose.identity.Email != "me@example.test" {
+		t.Fatalf("opening From = %q, want me@example.test", m.compose.identity.Email)
+	}
+	m.openIdentityPicker()
+	pump(t, m, m.chooseIdentity(sendAsKey("a", "id-work")))
+	if m.compose.identity.Email != "work@example.test" {
+		t.Fatalf("picked From = %q, want work@example.test", m.compose.identity.Email)
+	}
+
+	// The pick reached disk, keyed by the sending account.
+	got, err := config.LoadPrefs(prefsPath)
+	if err != nil {
+		t.Fatalf("LoadPrefs: %v", err)
+	}
+	if got.Identity("a") != "work@example.test" {
+		t.Fatalf("persisted identity = %q, want work@example.test", got.Identity("a"))
+	}
+
+	// Every compose mode that follows opens on the remembered From,
+	// even though the account address would otherwise win.
+	for _, mode := range []composeMode{composeNew, composeReply, composeForward} {
+		m.compose = nil
+		_, cmd := m.openCompose(mode)
+		if m.compose == nil || m.compose.identity.Email != "work@example.test" {
+			t.Fatalf("mode %v From = %+v, want remembered work@example.test", mode, m.compose)
+		}
+		pump(t, m, cmd)
+	}
+
+	// A fresh model booted from the saved prefs opens on it too.
+	m2 := identityModel(t, "me@example.test", ids)
+	m2.opts.Prefs = got
+	_, _ = m2.openCompose(composeNew)
+	if m2.compose.identity.Email != "work@example.test" {
+		t.Fatalf("fresh model From = %q, want the remembered work@example.test", m2.compose.identity.Email)
+	}
 }
