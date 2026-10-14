@@ -197,6 +197,44 @@ func TestLiveFlagChangePatchesSummary(t *testing.T) {
 	})
 }
 
+// TestLiveExternalMoveLeavesInbox (FR-B2, FR-B5): another client moving a
+// message out of the open mailbox changes its mailboxIds, so /changes
+// reports it as updated rather than destroyed. The row must leave the
+// window — without this the list keeps rendering a message the mailbox no
+// longer contains until the view is re-seeded (mailbox reopen/restart).
+func TestLiveExternalMoveLeavesInbox(t *testing.T) {
+	e, srv := newLiveEngine(t)
+
+	if id := e.CursorID(); id != "e3" {
+		t.Fatalf("setup cursor = %q, want e3", id)
+	}
+	if got := len(e.Snapshot().Rows); got != 2 {
+		t.Fatalf("setup rows = %d, want 2", got)
+	}
+
+	// The move arrives as an `updated` id (mailboxIds changed).
+	srv.UpdateEmails([]string{"e3"}, func(em *mockjmap.Email) {
+		em.MailboxIDs = []string{"mb-archive"}
+	})
+	srv.Notify()
+
+	waitFor(t, 2*time.Second, func() bool {
+		for _, r := range e.Snapshot().Rows {
+			if r.ID == "e3" {
+				return false
+			}
+		}
+		return true
+	})
+	snap := e.Snapshot()
+	if snap.Total != 1 {
+		t.Errorf("total = %d, want 1 after the move", snap.Total)
+	}
+	if id := e.CursorID(); id != "e2" {
+		t.Errorf("cursor = %q, want e2 after its row left", id)
+	}
+}
+
 func TestLiveDestroyEvictsAndRepairsCursor(t *testing.T) {
 	e, srv := newLiveEngine(t)
 

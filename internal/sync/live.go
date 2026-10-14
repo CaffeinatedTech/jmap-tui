@@ -328,7 +328,21 @@ func (e *Engine) absorbUpdatedSummaryLocked(w *Window, s mail.EmailSummary) {
 	if known {
 		// Patch in place (flags changed, subject edit, …). Overlay re-applies
 		// on top so an unconfirmed local op survives server noise (FR-B7).
-		e.summaries[s.ID] = e.reapplyOverlayLocked(s)
+		applied := e.reapplyOverlayLocked(s)
+		e.summaries[s.ID] = applied
+		// An external move changes mailboxIds without destroying the
+		// message, so /changes reports it as updated, not destroyed (RFC
+		// 8621 §4.1.2). When the patched summary no longer lives in the open
+		// mailbox the row must leave the window now — the same membership
+		// rule the local overlay path applies (overlay.go). Search views are
+		// exempt: whether a message still matches is only knowable
+		// server-side, so they wait for the next re-anchor (PLAN §4.1 case 3).
+		if w.query.Filter.Search == nil && w.query.Filter.MailboxID != "" &&
+			!inMailbox(applied, w.query.Filter.MailboxID) {
+			w.RemoveIDs([]mail.ID{s.ID})
+			delete(e.fresh, s.ID)
+			return
+		}
 		if _, cached := e.threads[s.ThreadID]; !cached {
 			return
 		}
